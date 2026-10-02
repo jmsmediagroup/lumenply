@@ -577,7 +577,7 @@ impl Tier {
         match self {
             Tier::Wide => 110.0,
             Tier::Compact => 84.0,
-            Tier::Tight => 56.0,
+            Tier::Tight => 48.0,
         }
     }
 }
@@ -712,7 +712,8 @@ mod tests {
         assert!(Tier::for_width(1024.0) == Tier::Tight);
         assert_eq!(Tier::Wide.slider_w(), 110.0);
         assert_eq!(Tier::Compact.slider_w(), 84.0);
-        assert_eq!(Tier::Tight.slider_w(), 56.0);
+        // 48 leaves Clone Stamp's four sliders room at 1024 px.
+        assert_eq!(Tier::Tight.slider_w(), 48.0);
     }
 
     #[test]

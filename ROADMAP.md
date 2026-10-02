@@ -239,7 +239,8 @@ None of these could be tested in the container.
 - [~] Accessibility: every icon-only button and tool has an accessible name
       (`widget_info`), visible keyboard focus rings, sensible Tab order. Still
       open: eframe's `accesskit` feature is off, so names don't yet reach
-      screen readers; translations
+      screen readers (enabling it failed to resolve `futures-sink >= 0.3.34`
+      from the crates.io index here; retry with network access); translations
 
 ## 6b. Quality pass (2026-10-02)
 
@@ -263,6 +264,15 @@ None of these could be tested in the container.
 - [x] Headless verification: `--screenshot-do` debug tokens per UI area,
       `--window-size`, screenshot windows open without taking focus;
       before/after images in docs/screenshots/quality/
+- [x] Second pass, from a scripted audit of all 16 tool bars (1600/1024 px),
+      every menu, dialog and Properties layer kind, and the 900×600 minimum:
+      Preferences fits short windows (scrolling shortcut list); two-column
+      quick-add menu; tight-tier bars fit at 1024 px; square checkboxes;
+      0–1 values in human units (%, ±100, 0–255) without float drift;
+      draggable Properties/Layers divider; smart objects get a Properties
+      section and lossless flips everywhere; View ▸ Zoom in/out (Cmd+= / Cmd+−)
+      and History toggle; egui's keyboard UI zoom disabled so Cmd+=/−/0 act
+      on the canvas; Esc cancels "New text"; Untitled-N never skips
 
 ## 7. Ecosystem and release
 
