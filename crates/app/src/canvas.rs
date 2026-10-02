@@ -1131,46 +1131,7 @@ impl App {
                     }
                 }
             }
-            Tool::Gradient => {
-                if resp.hovered() {
-                    ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
-                }
-                if resp.drag_started_by(primary) {
-                    if self.active_is_pixel() {
-                        self.drag = Some(DragKind::Gradient);
-                        self.drag_start = ctx.input(|i| i.pointer.press_origin());
-                    } else {
-                        self.status = "Select a pixel layer for the gradient".into();
-                    }
-                }
-                if self.drag == Some(DragKind::Gradient) && resp.dragged_by(primary) {
-                    if let (Some(a), Some(b), Some(layer)) =
-                        (self.drag_start, resp.interact_pointer_pos(), self.active)
-                    {
-                        let cmd = self.gradient_command(layer, to_doc(a), to_doc(b));
-                        let mut preview = self.editor.doc().clone();
-                        if cmd.apply(&mut preview).is_ok() {
-                            let area = cmd.affected(self.editor.doc());
-                            self.preview(ctx, &preview, area);
-                        }
-                    }
-                }
-                if resp.drag_stopped() && self.drag == Some(DragKind::Gradient) {
-                    self.drag = None;
-                    let start = self.drag_start.take();
-                    let end = resp
-                        .interact_pointer_pos()
-                        .or_else(|| ctx.input(|i| i.pointer.latest_pos()));
-                    if let (Some(a), Some(b), Some(layer)) = (start, end, self.active) {
-                        if a.distance(b) >= 2.0 {
-                            let cmd = self.gradient_command(layer, to_doc(a), to_doc(b));
-                            self.run(&cmd);
-                        } else {
-                            self.mark(None);
-                        }
-                    }
-                }
-            }
+            Tool::Gradient => self.gradient_input(ctx, resp, to_doc),
             Tool::Text => {
                 if resp.hovered() {
                     ctx.set_cursor_icon(egui::CursorIcon::Text);
@@ -1596,16 +1557,7 @@ impl App {
                     }
                 }
             }
-            Tool::Gradient => {
-                if self.drag == Some(DragKind::Gradient) {
-                    if let (Some(a), Some(b)) = (self.drag_start, ctx.input(|i| i.pointer.latest_pos())) {
-                        painter.line_segment([a, b], Stroke::new(3.0, Color32::from_black_alpha(140)));
-                        painter.line_segment([a, b], Stroke::new(1.0, Color32::WHITE));
-                        painter.circle_filled(a, 4.0, Color32::WHITE);
-                        painter.circle_stroke(b, 4.0, Stroke::new(1.5, Color32::WHITE));
-                    }
-                }
-            }
+            Tool::Gradient => self.paint_gradient_overlay(painter, resp),
             Tool::Pen => {
                 let origin = resp.rect.min + self.pan;
                 let zoom = self.zoom;
