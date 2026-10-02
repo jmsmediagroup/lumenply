@@ -42,7 +42,7 @@ impl App {
                     radius: 2.0,
                 });
             }
-            egui::menu::menu_custom_button(
+            menu_custom_button(
                 ui,
                 egui::Button::new(RichText::new("More...").size(12.0).color(MUTED))
                     .fill(RAISED)
@@ -167,6 +167,7 @@ impl App {
             egui::ComboBox::from_id_salt("blend-mode")
                 .selected_text(sel.map_or("Pass Through".into(), title))
                 .show_ui(ui, |ui| {
+                    popup_style(ui);
                     if is_group {
                         ui.selectable_value(&mut sel, None, "Pass Through");
                     }

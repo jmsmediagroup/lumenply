@@ -236,435 +236,31 @@ impl App {
                         self.dialog = Some(Dialog::About);
                     }
                     ui.add_space(2.0);
-                    ui.menu_button("File", |ui| {
-                        if ui.button("New...").clicked() {
-                            self.dialog = Some(Dialog::New(1200, 800));
-                            ui.close_menu();
-                        }
-                        if ui
-                            .button("Open...   Ctrl+O")
-                            .on_hover_text(".lumen project, .psd, .ora, images")
-                            .clicked()
-                        {
-                            self.pick_open();
-                            ui.close_menu();
-                        }
-                        ui.menu_button("Open recent", |ui| {
-                            if self.recent.is_empty() {
-                                ui.label(RichText::new("Nothing yet").weak());
-                            }
-                            let mut open: Option<String> = None;
-                            for p in &self.recent {
-                                if ui.button(file_name(p)).on_hover_text(p).clicked() {
-                                    open = Some(p.clone());
-                                    ui.close_menu();
-                                }
-                            }
-                            if let Some(p) = open {
-                                self.open_path(&p);
-                            }
-                        });
-                        if ui.button("Open image (PNG/JPEG)...").clicked() {
-                            self.pick_open_image();
-                            ui.close_menu();
-                        }
-                        if ui.button("Place image as layer...").clicked() {
-                            self.pick_place();
-                            ui.close_menu();
-                        }
-                        if ui.button("Open demo document").clicked() {
-                            match lumenply_core::demo::build(1200, 800) {
-                                Ok(ed) => self.open_in_new_tab(ed, None),
-                                Err(e) => self.status = e.to_string(),
-                            }
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("Save   Ctrl+S").clicked() {
-                            match self.path.clone() {
-                                Some(p) => self.save_path(&p.to_string_lossy()),
-                                None => self.pick_save(),
-                            }
-                            ui.close_menu();
-                        }
-                        if ui.button("Save as...").clicked() {
-                            self.pick_save();
-                            ui.close_menu();
-                        }
-                        if ui.button("Export PNG...").clicked() {
-                            self.pick_export_png();
-                            ui.close_menu();
-                        }
-                        if ui.button("Export JPEG...").clicked() {
-                            self.pick_export_jpeg();
-                            ui.close_menu();
-                        }
-                        if ui.button("Export OpenEXR...").clicked() {
-                            self.pick_export_exr();
-                            ui.close_menu();
-                        }
-                        if ui.button("Export 16-bit PNG/TIFF...").clicked() {
-                            self.pick_export_16bit();
-                            ui.close_menu();
-                        }
-                        if ui.button("Export OpenRaster...").clicked() {
-                            self.pick_export_ora();
-                            ui.close_menu();
-                        }
-                        if ui.button("Export Photoshop PSD (16-bit)...").clicked() {
-                            self.pick_export_psd16();
-                            ui.close_menu();
-                        }
-                        if ui.button("Export Photoshop PSD...").clicked() {
-                            self.pick_export_psd();
-                            ui.close_menu();
-                        }
-                    });
-                    ui.menu_button("Edit", |ui| {
-                        if ui
-                            .add_enabled(self.editor.can_undo(), egui::Button::new("Undo   Ctrl+Z"))
-                            .clicked()
-                        {
-                            self.undo();
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(self.editor.can_redo(), egui::Button::new("Redo   Ctrl+Shift+Z"))
-                            .clicked()
-                        {
-                            self.redo();
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        let pixel = self.active_is_pixel();
-                        let smart = self.active_layer().is_some_and(|l| l.smart_layer().is_some());
-                        if ui
-                            .add_enabled(pixel || smart, egui::Button::new("Free transform   Ctrl+T"))
-                            .clicked()
-                        {
-                            self.begin_free_transform();
-                            ui.close_menu();
-                        }
-                        if ui.add_enabled(pixel, egui::Button::new("Perspective")).clicked() {
-                            self.begin_perspective();
-                            ui.close_menu();
-                        }
-                        if ui.add_enabled(pixel, egui::Button::new("Warp")).clicked() {
-                            self.begin_warp();
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(pixel, egui::Button::new("Fill with brush colour   Shift+F5"))
-                            .clicked()
-                        {
-                            self.fill_active();
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(pixel, egui::Button::new("Clear   Delete"))
-                            .clicked()
-                        {
-                            self.clear_active();
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("Preferences...").clicked() {
-                            self.dialog = Some(Dialog::Preferences(self.prefs.clone(), None));
-                            ui.close_menu();
-                        }
-                    });
-                    ui.menu_button("Image", |ui| {
-                        let doc = self.editor.doc();
-                        let (w, h) = (doc.width, doc.height);
-                        let crop_rect = doc.selection.as_ref().map(|s| s.tight_bounds(doc.canvas()));
-                        if ui
-                            .add_enabled(
-                                crop_rect.is_some_and(|r| !r.is_empty()),
-                                egui::Button::new("Crop to selection"),
-                            )
-                            .clicked()
-                        {
-                            if let Some(rect) = crop_rect {
-                                self.run(&CropDocument { rect });
-                            }
-                            ui.close_menu();
-                        }
-                        if ui.button("Auto contrast").clicked() {
-                            self.auto_contrast();
-                            ui.close_menu();
-                        }
-                        if ui.button("Auto color").clicked() {
-                            self.auto_color();
-                            ui.close_menu();
-                        }
-                        let mut float_mode = self.editor.doc().float_mode;
-                        if ui
-                            .checkbox(&mut float_mode, "32-bit float (HDR)")
-                            .on_hover_text(
-                                "Keep values outside 0–1 through every edit (HDR). Off, tiles \
-                                 return to 16-bit as they are next edited, clamping the range",
-                            )
-                            .changed()
-                        {
-                            self.run(&SetFloatMode { on: float_mode });
-                            ui.close_menu();
-                        }
-                        if ui.button("Canvas size...").clicked() {
-                            self.dialog = Some(Dialog::CanvasSize(w, h, (0.5, 0.5)));
-                            ui.close_menu();
-                        }
-                        if ui.button("Image size...").clicked() {
-                            self.dialog = Some(Dialog::ImageSize(w, h, true));
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("Rotate 90° clockwise").clicked() {
-                            self.run(&RotateImage { quarter_turns: 1 });
-                            self.view_cmd = Some(ViewCmd::Fit);
-                            ui.close_menu();
-                        }
-                        if ui.button("Rotate 90° counter-clockwise").clicked() {
-                            self.run(&RotateImage { quarter_turns: -1 });
-                            self.view_cmd = Some(ViewCmd::Fit);
-                            ui.close_menu();
-                        }
-                        if ui.button("Rotate 180°").clicked() {
-                            self.run(&RotateImage { quarter_turns: 2 });
-                            ui.close_menu();
-                        }
-                        if ui.button("Flip image horizontal").clicked() {
-                            self.run(&FlipImage { horizontal: true });
-                            ui.close_menu();
-                        }
-                        if ui.button("Flip image vertical").clicked() {
-                            self.run(&FlipImage { horizontal: false });
-                            ui.close_menu();
-                        }
-                    });
-                    ui.menu_button("Select", |ui| {
-                        if ui
-                            .selectable_label(self.quick_mask, "Quick mask   Q")
-                            .on_hover_text("Paint the selection: white selects, black deselects")
-                            .clicked()
-                        {
-                            self.toggle_quick_mask();
-                            ui.close_menu();
-                        }
-                        if ui
-                            .button("Colour range...")
-                            .on_hover_text("Select everything close to the brush colour")
-                            .clicked()
-                        {
-                            self.dialog = Some(Dialog::ColorRange(25.0, false));
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("All   Ctrl+A").clicked() {
-                            self.run(&SetSelection {
-                                selection: Some(Selection::all()),
-                            });
-                            ui.close_menu();
-                        }
-                        if ui.button("None   Ctrl+D").clicked() {
-                            self.run(&SetSelection { selection: None });
-                            ui.close_menu();
-                        }
-                        if ui.button("Invert   Ctrl+Shift+I").clicked() {
-                            self.run(&InvertSelection);
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        let has_sel = self.editor.doc().selection.is_some();
-                        if ui.add_enabled(has_sel, egui::Button::new("Feather")).clicked() {
-                            self.run(&FeatherSelection { radius: self.feather });
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(
-                                has_sel && self.active.is_some(),
-                                egui::Button::new("Mask active layer"),
-                            )
-                            .clicked()
-                        {
-                            if let Some(l) = self.active {
-                                self.run(&MaskFromSelection { layer: l });
-                            }
-                            ui.close_menu();
-                        }
-                    });
-                    ui.menu_button("Layer", |ui| {
-                        if ui.button("New pixel layer").clicked() {
-                            self.add_pixel_layer();
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(self.active_is_pixel(), egui::Button::new("Layer via copy"))
-                            .on_hover_text("Copy the selection (or the whole layer) onto a new layer")
-                            .clicked()
-                        {
-                            self.run_menu_action("layer-via-copy");
-                            ui.close_menu();
-                        }
-                        ui.menu_button("New adjustment layer", |ui| {
-                            for (name, adj) in adjustment_presets() {
-                                if ui.button(name).clicked() {
-                                    self.add_adjustment(adj);
-                                    ui.close_menu();
-                                }
-                            }
-                        });
-                        ui.menu_button("New live filter layer", |ui| {
-                            for (name, f) in filter_presets() {
-                                if ui.button(name).clicked() {
-                                    self.add_filter_layer(f);
-                                    ui.close_menu();
-                                }
-                            }
-                        });
-                        if ui.button("Delete layer").clicked() {
-                            self.delete_active();
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("Group   Ctrl+G").clicked() {
-                            self.group_selected();
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(self.active_is_group(), egui::Button::new("Ungroup"))
-                            .clicked()
-                        {
-                            self.ungroup_active();
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("Move up").clicked() {
-                            self.reorder_active(1);
-                            ui.close_menu();
-                        }
-                        if ui.button("Move down").clicked() {
-                            self.reorder_active(-1);
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        let has_layer = self.active.is_some();
-                        let has_mask = self.active_has_mask();
-                        if ui
-                            .add_enabled(has_layer && !has_mask, egui::Button::new("Add mask"))
-                            .clicked()
-                        {
-                            if let Some(l) = self.active {
-                                self.run(&AddMask { layer: l });
-                            }
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(has_mask, egui::Button::new("Remove mask"))
-                            .clicked()
-                        {
-                            if let Some(l) = self.active {
-                                self.run(&RemoveMask { layer: l });
-                                self.editing_mask = false;
-                            }
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        let pixel = self.active_is_pixel();
-                        if ui
-                            .add_enabled(pixel, egui::Button::new("Flip horizontal"))
-                            .clicked()
-                        {
-                            self.flip_active(true);
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(pixel, egui::Button::new("Flip vertical"))
-                            .clicked()
-                        {
-                            self.flip_active(false);
-                            ui.close_menu();
-                        }
-                    });
-                    ui.menu_button("Filter", |ui| {
-                        let pixel = self.active_is_pixel();
-                        if ui
-                            .add_enabled(pixel, egui::Button::new("Gaussian blur..."))
-                            .clicked()
-                        {
-                            self.dialog = Some(Dialog::Filter(Filter::GaussianBlur { radius: 8.0 }));
-                            ui.close_menu();
-                        }
-                        if ui.add_enabled(pixel, egui::Button::new("Box blur...")).clicked() {
-                            self.dialog = Some(Dialog::Filter(Filter::BoxBlur { radius: 5.0 }));
-                            ui.close_menu();
-                        }
-                        if ui.add_enabled(pixel, egui::Button::new("Sharpen...")).clicked() {
-                            self.dialog = Some(Dialog::Filter(Filter::Sharpen {
-                                amount: 1.0,
-                                radius: 2.0,
-                            }));
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        ui.label(
-                            RichText::new("Live (non-destructive) filter layers")
-                                .weak()
-                                .small(),
-                        );
-                        for (name, f) in filter_presets() {
-                            if ui.button(format!("{name} layer")).clicked() {
-                                self.add_filter_layer(f);
-                                ui.close_menu();
-                            }
-                        }
-                    });
-                    ui.menu_button("View", |ui| {
-                        if ui.button("Fit on screen   0").clicked() {
-                            self.view_cmd = Some(ViewCmd::Fit);
-                            ui.close_menu();
-                        }
-                        if ui.button("Actual pixels   1").clicked() {
-                            self.view_cmd = Some(ViewCmd::Actual);
-                            ui.close_menu();
-                        }
-                    });
+                    menu(ui, "File", |ui| self.file_menu(ui));
+                    menu(ui, "Edit", |ui| self.edit_menu(ui));
+                    menu(ui, "Image", |ui| self.image_menu(ui));
+                    menu(ui, "Select", |ui| self.select_menu(ui));
+                    menu(ui, "Layer", |ui| self.layer_menu(ui));
+                    menu(ui, "Filter", |ui| self.filter_menu(ui));
+                    menu(ui, "View", |ui| self.view_menu(ui));
+                    menu(ui, "Help", |ui| self.help_menu(ui));
 
                     ui.add_space(10.0);
                     self.document_tab(ui);
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let export = egui::Button::new(RichText::new("Export").color(ACCENT_INK).strong())
-                            .fill(ACCENT);
-                        egui::menu::menu_custom_button(ui, export, |ui| {
-                            if ui.button("PNG...").clicked() {
-                                self.pick_export_png();
-                                ui.close_menu();
-                            }
-                            if ui.button("JPEG...").clicked() {
-                                self.pick_export_jpeg();
-                                ui.close_menu();
-                            }
-                            if ui.button("PSD...").clicked() {
-                                self.pick_export_psd();
-                                ui.close_menu();
-                            }
-                            if ui.button("OpenRaster...").clicked() {
-                                self.pick_export_ora();
-                                ui.close_menu();
-                            }
-                            if ui.button("16-bit PNG/TIFF...").clicked() {
-                                self.pick_export_16bit();
-                                ui.close_menu();
-                            }
-                            if ui.button("OpenEXR...").clicked() {
-                                self.pick_export_exr();
-                                ui.close_menu();
-                            }
-                        });
+                        let export = ui.add(
+                            egui::Button::new(RichText::new("Export").color(ACCENT_INK).strong())
+                                .fill(ACCENT),
+                        );
+                        note_target(ui.ctx(), "export-button", export.rect);
+                        // The same list as File ▸ Export.
+                        button_menu(&export, |ui| self.export_items(ui));
+                        let keys = self.action_keys(ui.ctx(), "palette");
                         if ui
                             .add(
                                 egui::Button::new(
-                                    RichText::new("Search tools, filters...   Ctrl K").color(MUTED),
+                                    RichText::new(format!("Search tools, filters...   {keys}")).color(MUTED),
                                 )
                                 .fill(GROUND)
                                 .stroke(Stroke::new(1.0, LINE))
@@ -677,6 +273,262 @@ impl App {
                     });
                 });
             });
+    }
+
+    /// A menu item bound to a shared action (see palette.rs): enabled only
+    /// when the action can run, with the real key and, when greyed out, a
+    /// tooltip saying why.
+    fn act(&mut self, ui: &mut egui::Ui, label: &str, id: &str) {
+        let ctx = ui.ctx().clone();
+        let block = self.action_block(id);
+        let keys = self.action_keys(&ctx, id);
+        let r = menu_item_response(ui, block.is_none(), label, &keys);
+        let r = match block {
+            Some(why) => r.on_disabled_hover_text(why),
+            None => r,
+        };
+        if r.clicked() {
+            self.run_action(&ctx, id);
+        }
+    }
+
+    /// [`App::act`] for an on/off setting, checked while on.
+    fn act_check(&mut self, ui: &mut egui::Ui, label: &str, id: &str, on: bool) -> egui::Response {
+        let ctx = ui.ctx().clone();
+        let keys = self.action_keys(&ctx, id);
+        let r = menu_check(ui, on, label, &keys);
+        if r.clicked() {
+            self.run_action(&ctx, id);
+        }
+        r
+    }
+
+    fn file_menu(&mut self, ui: &mut egui::Ui) {
+        self.act(ui, "New...", "new");
+        self.act(ui, "Open...", "open");
+        menu(ui, "Open recent", |ui| {
+            if self.recent.is_empty() {
+                menu_note(ui, "Nothing yet");
+            }
+            let mut open: Option<String> = None;
+            for p in &self.recent {
+                if menu_item_response(ui, true, &file_name(p), "")
+                    .on_hover_text(p)
+                    .clicked()
+                {
+                    open = Some(p.clone());
+                }
+            }
+            if let Some(p) = open {
+                self.open_path(&p);
+            }
+        });
+        self.act(ui, "Open demo document", "demo");
+        menu_separator(ui);
+        self.act(ui, "Place image as layer...", "place");
+        menu_separator(ui);
+        self.act(ui, "Save", "save");
+        self.act(ui, "Save as...", "saveas");
+        menu(ui, "Export", |ui| self.export_items(ui));
+        menu_separator(ui);
+        self.act(ui, "Close document", "close");
+        self.act(ui, "Quit Lumenply", "quit");
+    }
+
+    /// Every export format, grouped by what survives: File ▸ Export and
+    /// the Export button both show this list.
+    fn export_items(&mut self, ui: &mut egui::Ui) {
+        menu_heading(ui, "FLATTENED IMAGE");
+        self.act(ui, "PNG...", "export-png");
+        self.act(ui, "JPEG...", "export-jpeg");
+        menu_heading(ui, "WITH LAYERS");
+        self.act(ui, "Photoshop PSD...", "export-psd");
+        self.act(ui, "Photoshop PSD (16-bit)...", "export-psd16");
+        self.act(ui, "OpenRaster (.ora)...", "export-ora");
+        menu_heading(ui, "HIGH BIT DEPTH");
+        self.act(ui, "16-bit PNG / TIFF...", "export-16bit");
+        self.act(ui, "OpenEXR (linear float)...", "export-exr");
+    }
+
+    fn edit_menu(&mut self, ui: &mut egui::Ui) {
+        // Name the step, as the history strip does.
+        let undo = match self.editor.history().last() {
+            Some(l) => format!("Undo {l}"),
+            None => "Undo".into(),
+        };
+        let redo = match self.editor.redo_history().first() {
+            Some(l) => format!("Redo {l}"),
+            None => "Redo".into(),
+        };
+        self.act(ui, &undo, "undo");
+        self.act(ui, &redo, "redo");
+        menu_separator(ui);
+        self.act(ui, "Free transform", "xform");
+        self.act(ui, "Perspective", "perspective");
+        self.act(ui, "Warp", "warp");
+        menu_separator(ui);
+        self.act(ui, "Fill with brush colour", "fill");
+        self.act(ui, "Clear", "clear");
+        menu_separator(ui);
+        self.act(ui, "Preferences...", "prefs");
+    }
+
+    fn image_menu(&mut self, ui: &mut egui::Ui) {
+        self.act(ui, "Image size...", "image-size");
+        self.act(ui, "Canvas size...", "canvas-size");
+        self.act(ui, "Crop to selection", "crop");
+        menu_separator(ui);
+        self.act(ui, "Rotate 90° clockwise", "rot-cw");
+        self.act(ui, "Rotate 90° counter-clockwise", "rot-ccw");
+        self.act(ui, "Rotate 180°", "rot-180");
+        self.act(ui, "Flip image horizontal", "img-flip-h");
+        self.act(ui, "Flip image vertical", "img-flip-v");
+        menu_separator(ui);
+        self.act(ui, "Auto contrast", "auto-contrast");
+        self.act(ui, "Auto color", "auto-color");
+        menu_separator(ui);
+        let float = self.editor.doc().float_mode;
+        self.act_check(ui, "32-bit float (HDR)", "float-mode", float)
+            .on_hover_text(
+                "Keep values outside 0–1 through every edit (HDR). Off, tiles \
+                 return to 16-bit as they are next edited, clamping the range",
+            );
+    }
+
+    fn select_menu(&mut self, ui: &mut egui::Ui) {
+        self.act(ui, "All", "select-all");
+        self.act(ui, "Deselect", "deselect");
+        self.act(ui, "Invert", "invert-sel");
+        menu_separator(ui);
+        self.act(ui, "Colour range...", "color-range");
+        let quick = self.quick_mask;
+        self.act_check(ui, "Quick mask", "quick-mask", quick)
+            .on_hover_text("Paint the selection: white selects, black deselects");
+        menu_separator(ui);
+        let feather = format!("Feather {:.0} px", self.feather);
+        self.act(ui, &feather, "feather");
+        self.act(ui, "Layer mask from selection", "mask-from-sel");
+    }
+
+    fn layer_menu(&mut self, ui: &mut egui::Ui) {
+        self.act(ui, "New pixel layer", "new-layer");
+        self.act(ui, "Layer via copy", "layer-via-copy");
+        menu(ui, "New adjustment layer", |ui| {
+            for (name, adj) in adjustment_presets() {
+                if menu_item(ui, name, "") {
+                    self.add_adjustment(adj);
+                }
+            }
+        });
+        menu(ui, "New live filter layer", |ui| {
+            for (name, f) in filter_presets() {
+                if menu_item(ui, name, "") {
+                    self.add_filter_layer(f);
+                }
+            }
+        });
+        menu_separator(ui);
+        self.act(ui, "Rename", "rename");
+        self.act(ui, "Delete layer", "delete-layer");
+        menu_separator(ui);
+        self.act(ui, "Group", "group");
+        self.act(ui, "Ungroup", "ungroup");
+        menu_separator(ui);
+        self.act(ui, "Move up", "layer-up");
+        self.act(ui, "Move down", "layer-down");
+        menu_separator(ui);
+        let mask = self
+            .active_layer()
+            .and_then(|l| l.mask.as_ref())
+            .map(|m| m.enabled);
+        if mask.is_some() {
+            self.act(ui, "Remove mask", "rm-mask");
+            let label = if mask == Some(true) {
+                "Disable mask"
+            } else {
+                "Enable mask"
+            };
+            self.act(ui, label, "mask-toggle");
+        } else {
+            self.act(ui, "Add mask", "add-mask");
+        }
+        if self.active_layer().is_some_and(|l| l.clip) {
+            self.act(ui, "Release clip", "unclip");
+        } else {
+            self.act(ui, "Clip to layer below", "clip");
+        }
+        menu_separator(ui);
+        self.act(ui, "Convert to smart object", "smart-object");
+        self.act(ui, "Rasterize", "rasterize");
+        menu_separator(ui);
+        self.act(ui, "Flip layer horizontal", "flip-h");
+        self.act(ui, "Flip layer vertical", "flip-v");
+    }
+
+    /// The layers panel's "More" menu: the active layer's actions, in the
+    /// order of its right-click menu (move and delete have their own
+    /// buttons beside it).
+    pub(crate) fn layer_more_menu(&mut self, ui: &mut egui::Ui) {
+        let Some(l) = self.active_layer() else {
+            menu_note(ui, "Select a layer first");
+            return;
+        };
+        let group = l.children().is_some();
+        let pixel = l.pixels().is_some();
+        let rasterizable = l.smart_layer().is_some() || l.text_layer().is_some();
+        let clip = l.clip;
+        let mask = l.mask.as_ref().map(|m| m.enabled);
+        self.act(ui, "Rename", "rename");
+        menu_separator(ui);
+        if clip {
+            self.act(ui, "Release clip", "unclip");
+        } else {
+            self.act(ui, "Clip to layer below", "clip");
+        }
+        match mask {
+            Some(on) => {
+                self.act(ui, "Remove mask", "rm-mask");
+                self.act(ui, if on { "Disable mask" } else { "Enable mask" }, "mask-toggle");
+            }
+            None => self.act(ui, "Add mask", "add-mask"),
+        }
+        menu_separator(ui);
+        if group {
+            self.act(ui, "Ungroup", "ungroup");
+        }
+        if rasterizable {
+            self.act(ui, "Rasterize", "rasterize");
+        }
+        if pixel {
+            self.act(ui, "Convert to smart object", "smart-object");
+        }
+        self.act(ui, "Flip horizontal", "flip-h");
+        self.act(ui, "Flip vertical", "flip-v");
+    }
+
+    fn filter_menu(&mut self, ui: &mut egui::Ui) {
+        for (name, f) in filter_presets() {
+            self.act(ui, &format!("{name}..."), palette::filter_id(&f));
+        }
+        menu_separator(ui);
+        menu(ui, "Live filter layer", |ui| {
+            for (name, f) in filter_presets() {
+                if menu_item(ui, name, "") {
+                    self.add_filter_layer(f);
+                }
+            }
+        });
+    }
+
+    fn view_menu(&mut self, ui: &mut egui::Ui) {
+        self.act(ui, "Fit on screen", "fit");
+        self.act(ui, "Actual pixels", "actual");
+    }
+
+    fn help_menu(&mut self, ui: &mut egui::Ui) {
+        self.act(ui, "Search commands...", "palette");
+        menu_separator(ui);
+        self.act(ui, "About Lumenply", "about");
     }
 }
 

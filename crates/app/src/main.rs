@@ -1151,6 +1151,10 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.debug_popups_input(ctx, raw);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_file_drop(ctx);
         // Intercept closing the window while there are unsaved changes.
@@ -1248,6 +1252,7 @@ fn font_picker(ui: &mut egui::Ui, font: &mut String) -> bool {
         .selected_text(shown)
         .width(200.0)
         .show_ui(ui, |ui| {
+            popup_style(ui);
             if ui
                 .selectable_label(font.is_empty(), "Default (DejaVu Sans)")
                 .clicked()

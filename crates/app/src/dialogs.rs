@@ -42,16 +42,6 @@ impl App {
         }
     }
 
-    pub(crate) fn pick_open_image(&mut self) {
-        if let Some(p) = self
-            .file_dialog()
-            .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "webp", "exr"])
-            .pick_file()
-        {
-            self.open_image(&p.to_string_lossy());
-        }
-    }
-
     pub(crate) fn pick_place(&mut self) {
         if let Some(p) = self
             .file_dialog()
