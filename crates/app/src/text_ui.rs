@@ -271,14 +271,15 @@ impl App {
             {
                 convert = Some(lumenply_render::text_layout::to_paragraph(&t));
             }
-            if let Some([w, h]) = t.box_size.as_mut() {
-                ui.add_space(4.0);
-                let rw = value_field(ui, "Box width", w, 8.0..=20000.0, "", 54.0);
-                ui.label(RichText::new("\u{00D7}").color(MUTED));
-                let rh = value_field(ui, "Box height", h, 8.0..=20000.0, "", 54.0);
-                finished |= edit_finished(&rw) || edit_finished(&rh);
-            }
         });
+        if let Some([w, h]) = t.box_size.as_mut() {
+            row(ui, "Box", |ui| {
+                let rw = value_field(ui, "Box width", w, 8.0..=20000.0, " px", 70.0);
+                ui.label(RichText::new("\u{00D7}").color(MUTED));
+                let rh = value_field(ui, "Box height", h, 8.0..=20000.0, " px", 70.0);
+                finished |= edit_finished(&rw) || edit_finished(&rh);
+            });
+        }
         if let Some(c) = convert {
             t = c;
             finished = true;

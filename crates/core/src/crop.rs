@@ -93,12 +93,11 @@ impl Command for CropCanvas {
                     sm.cache = Some(lumenply_render::transform_store(&sm.source, &sm.transform));
                 }
                 LayerContent::Text(text) => {
-                    let (x, y) = t.apply(text.x, text.y);
                     // Whole-pixel crops keep the anchor exact.
-                    (text.x, text.y) = match exact {
-                        Some((dx, dy)) => (text.x + dx as f32, text.y + dy as f32),
-                        None => (x, y),
-                    };
+                    match exact {
+                        Some((dx, dy)) => (text.x, text.y) = (text.x + dx as f32, text.y + dy as f32),
+                        None => text.map_position(|x, y| t.apply(x, y)),
+                    }
                     lumenply_render::text::refresh_cache(text);
                 }
                 _ => {}

@@ -1167,6 +1167,15 @@ impl App {
                 if resp.hovered() {
                     ctx.set_cursor_icon(egui::CursorIcon::Move);
                 }
+                // Double-clicking text edits it, as in Photoshop.
+                if resp.double_clicked_by(primary) {
+                    let hit = resp.interact_pointer_pos().map(&to_doc).and_then(|(x, y)| {
+                        text_layer_at(self.editor.doc().layers(), x, y).map(|id| (id, x, y))
+                    });
+                    if let Some((id, x, y)) = hit {
+                        self.begin_text_edit(ctx, id, crate::text_edit::EditStart::At(x, y));
+                    }
+                }
                 if resp.drag_started_by(primary) {
                     let fill = self.active_layer().is_some_and(|l| l.fill_layer().is_some());
                     if let Some(why) = self.lock_block(layer_actions::LockNeed::Move) {

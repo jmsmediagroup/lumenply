@@ -567,6 +567,21 @@ impl TextLayer {
             cache: None,
         }
     }
+
+    /// Move the text through a point mapping (an image rotation, flip or
+    /// crop). Point text maps its anchor; paragraph text maps its box's
+    /// centre and keeps the box's size, so the box stays over the same
+    /// part of the image whichever corner ends up where.
+    pub fn map_position(&mut self, f: impl Fn(f32, f32) -> (f32, f32)) {
+        match self.box_size {
+            Some([w, h]) => {
+                let (cx, cy) = f(self.x + w / 2.0, self.y + h / 2.0);
+                self.x = cx - w / 2.0;
+                self.y = cy - h / 2.0;
+            }
+            None => (self.x, self.y) = f(self.x, self.y),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

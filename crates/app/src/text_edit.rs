@@ -778,7 +778,9 @@ impl App {
         let pressed = resp.is_pointer_button_down_on() && ctx.input(|i| i.pointer.primary_pressed());
         if pressed {
             if let Some(p) = ctx.input(|i| i.pointer.press_origin()).map(to_doc) {
-                self.text_press(ctx, resp, p, mods, now, grab_r);
+                if self.text_press(ctx, p, mods, now, grab_r) {
+                    resp.request_focus();
+                }
             }
         }
         if resp.dragged_by(primary) {
@@ -829,15 +831,16 @@ impl App {
         }
     }
 
+    /// A primary press at document point p. Returns true when a session
+    /// takes (or keeps) the keyboard.
     fn text_press(
         &mut self,
         ctx: &egui::Context,
-        resp: &egui::Response,
         p: (f32, f32),
         mods: egui::Modifiers,
         now: f64,
         grab_r: f32,
-    ) {
+    ) -> bool {
         if let Some(s) = self.typer.session.as_mut() {
             if let (Some(h), Some(b)) = (handle_at(s, p, grab_r), s.box_rect()) {
                 s.grab = Some(Grab::Resize {
@@ -887,10 +890,9 @@ impl App {
             } else {
                 // A press outside the text commits; it starts nothing new.
                 self.commit_text_edit();
-                return;
+                return false;
             }
-            resp.request_focus();
-            return;
+            return true;
         }
 
         let force_new = mods.shift || std::mem::take(&mut self.text_new_armed);
@@ -908,6 +910,7 @@ impl App {
             // Point text on release, or a paragraph box if it drags.
             TextClick::New => self.typer.press = Some(p),
         }
+        self.typer.session.is_some()
     }
 
     fn text_drag(&mut self, p: (f32, f32)) {
@@ -1028,7 +1031,8 @@ impl App {
     /// paragraph box, `text:edit` edits the active text layer (caret at the
     /// end), `text:select=A:B` selects byte range A..B, `text:caret=I`
     /// places the caret, `text:commit` ends the session, `text:leading=N`,
-    /// `text:shift=N`, `text:caps`, `text:justify` restyle the active text.
+    /// `text:size=N`, `text:shift=N`, `text:caps`, `text:justify` restyle the
+    /// active text (`size` also sets the size for new text).
     pub(crate) fn debug_text_edit(&mut self, ctx: &egui::Context, rest: &str) -> bool {
         let nums = |s: &str| -> Vec<f32> { s.split(':').filter_map(|v| v.trim().parse().ok()).collect() };
         if let Some(arg) = rest.strip_prefix("box=") {
@@ -1057,6 +1061,8 @@ impl App {
             let restyle = |t: &mut TextLayer| -> bool {
                 if let Some(v) = num("leading=", 1.2) {
                     t.line_height = v;
+                } else if let Some(v) = num("size=", 72.0) {
+                    t.size = v;
                 } else if let Some(v) = num("shift=", 0.0) {
                     t.baseline_shift = v;
                 } else if rest == "caps" {
@@ -1071,6 +1077,9 @@ impl App {
             let mut probe = TextLayer::new("", 0.0, 0.0, 1.0, [0.0; 4]);
             if !restyle(&mut probe) {
                 return false;
+            }
+            if let Some(v) = num("size=", 72.0) {
+                self.text_size = v;
             }
             if let (Some(id), Some(mut t)) = (self.active, self.active_text()) {
                 restyle(&mut t);
@@ -1524,5 +1533,77 @@ mod tests {
         frame(&mut app, &ctx, Vec::new(), egui::Modifiers::NONE);
         assert!(!app.text_editing());
         assert_eq!(app.editor.history().last().copied(), Some("Add text"));
+    }
+
+    #[test]
+    fn the_mouse_places_the_caret_and_selects_words_lines_and_ranges() {
+        let (mut app, ctx, id) = app();
+        let mut t = app.editor.doc().layer(id).unwrap().text_layer().unwrap().clone();
+        t.text = "Hello world\nsecond line".into();
+        app.run(&SetText {
+            layer: id,
+            text: t.clone(),
+        });
+        let steps = app.editor.history().len();
+        let lay = layout(&t);
+        let none = egui::Modifiers::NONE;
+        let y0 = lay.lines[0].baseline - 5.0;
+        let y1 = lay.lines[1].baseline - 5.0;
+        let at = |i: usize, y: f32| (lay.caret(i).x + 1.0, y);
+        let range = |app: &App| app.typer.session.as_ref().unwrap().buf.range();
+
+        // A press on "w" starts editing there; quick repeats grow the
+        // selection: the word, the line, everything.
+        assert!(app.text_press(&ctx, at(6, y0), none, 10.0, 4.0));
+        assert_eq!(range(&app), (6, 6));
+        app.text_press(&ctx, at(6, y0), none, 10.2, 4.0);
+        assert_eq!(range(&app), (6, 11), "double-click: the word");
+        app.text_press(&ctx, at(6, y0), none, 10.4, 4.0);
+        assert_eq!(range(&app), (0, 11), "triple-click: the line");
+        app.text_press(&ctx, at(6, y0), none, 10.6, 4.0);
+        assert_eq!(range(&app), (0, 23), "quadruple-click: everything");
+
+        // Later: a press and a drag down to line 2 selects across lines.
+        app.text_press(&ctx, at(6, y0), none, 20.0, 4.0);
+        app.text_drag(at(18, y1));
+        assert_eq!(range(&app), (6, 18));
+        // Shift+press extends from the anchor.
+        app.text_press(&ctx, at(2, y0), egui::Modifiers::SHIFT, 30.0, 4.0);
+        let s = &app.typer.session.as_ref().unwrap().buf;
+        assert_eq!((s.anchor, s.caret), (6, 2));
+        assert_eq!(app.editor.history().len(), steps, "selecting edits nothing");
+
+        // Cmd-drag moves the text by whole pixels.
+        app.text_press(&ctx, at(6, y0), egui::Modifiers::COMMAND, 40.0, 4.0);
+        app.text_drag((at(6, y0).0 + 30.4, y0 + 15.0));
+        let moved = app.editor.doc().layer(id).unwrap().text_layer().unwrap().clone();
+        assert_eq!((moved.x, moved.y), (50.0, 95.0));
+        // A press well outside the text commits and starts nothing.
+        assert!(!app.text_press(&ctx, (235.0, 10.0), none, 50.0, 4.0));
+        assert!(!app.text_editing());
+        assert_eq!(app.editor.history().len(), steps + 1, "the move is one step");
+    }
+
+    #[test]
+    fn box_handles_resize_the_paragraph_while_editing() {
+        let (mut app, ctx, _) = app();
+        app.begin_new_text(&ctx, 10.0, 10.0, Some([100.0, 60.0]));
+        let id = app.active.unwrap();
+        app.text_change(1.0, true, |b| b.insert("one two three four"));
+        // Grab the bottom-right handle and pull it out by (30, 20).
+        assert!(app.text_press(&ctx, (110.0, 70.0), egui::Modifiers::NONE, 2.0, 4.0));
+        app.text_drag((140.0, 90.0));
+        let t = app.editor.doc().layer(id).unwrap().text_layer().unwrap().clone();
+        assert_eq!((t.x, t.y, t.box_size), (10.0, 10.0, Some([130.0, 80.0])));
+        // The top-left handle moves that corner; the far edges stay.
+        app.text_press(&ctx, (10.0, 10.0), egui::Modifiers::NONE, 3.0, 4.0);
+        app.text_drag((30.0, 0.0));
+        let t = app.editor.doc().layer(id).unwrap().text_layer().unwrap().clone();
+        assert_eq!((t.x, t.y, t.box_size), (30.0, 0.0, Some([110.0, 90.0])));
+        // Still one step: typing and resizing in a single session.
+        app.commit_text_edit();
+        assert_eq!(app.editor.history().last().copied(), Some("Add text"));
+        assert!(app.editor.undo().is_some());
+        assert!(app.editor.doc().layer(id).is_none());
     }
 }
