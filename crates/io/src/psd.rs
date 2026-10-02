@@ -1700,13 +1700,34 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 layer_masks.vector = vmsk.clone();
                 layer_masks.shaped &= vector_mask;
                 if let Some(f) = fill.take_if(|_| vector_mask) {
-                    shape_layer = vmsk
-                        .as_deref()
-                        .and_then(|m| shape::parse_shape(f, m, vstk.as_deref(), width, height));
+                    // A feathered or faded vector mask isn't a crisp outline.
+                    let soft = layer_masks.record.as_ref().is_some_and(|r| {
+                        r.vector_density.is_some_and(|d| d < 255) || r.vector_feather.is_some_and(|f| f > 0.0)
+                    });
+                    if !soft {
+                        shape_layer = vmsk
+                            .as_deref()
+                            .and_then(|m| shape::parse_shape(f.clone(), m, vstk.as_deref(), width, height));
+                    }
                     if shape_layer.is_none() {
-                        warnings.push(format!(
-                            "shape layer '{name}' was imported as pixels (its outline uses path operations a Lumenply shape can't hold yet)"
-                        ));
+                        let stroked = vstk
+                            .as_deref()
+                            .and_then(shape::parse_stroke)
+                            .is_some_and(|(stroke, _)| stroke.is_some());
+                        let drawable = vmsk
+                            .as_deref()
+                            .is_some_and(|m| masks::rasterize(m, width, height).is_some());
+                        if stroked || !drawable {
+                            warnings.push(format!(
+                                "shape layer '{name}' was imported as pixels (its outline uses path operations a Lumenply shape can't hold yet)"
+                            ));
+                        } else {
+                            // Still editable: the fill clipped by the vector
+                            // mask, drawn from its path (Photoshop may not
+                            // have stored pixels at all).
+                            fill = Some(f);
+                            layer_masks.shaped = false;
+                        }
                     }
                 }
                 if pattern {
@@ -2147,6 +2168,45 @@ mod tests {
         let p = l.pixels().expect("pixel layer").get_pixel(1, 1);
         assert!(p.r > 0.99 && p.g < 0.01, "the rendered red shape: {p:?}");
         assert_eq!(l.pixels().unwrap().get_pixel(3, 3).a, 0.0);
+
+        // An outline with path operations stays an editable fill layer,
+        // clipped by the vector mask drawn from its path: here two squares
+        // intersected leave only x = 1 of the 4×4 canvas.
+        let fixed = |v: f32| ((v / 4.0) * (1 << 24) as f32) as i32;
+        let mut vmsk = Vec::new();
+        put_u32(&mut vmsk, 3);
+        put_u32(&mut vmsk, 0);
+        for x0 in [0.0f32, 1.0] {
+            put_u16(&mut vmsk, 0);
+            put_u16(&mut vmsk, 4);
+            vmsk.extend_from_slice(&3i16.to_be_bytes()); // intersect
+            vmsk.extend_from_slice(&[0; 20]);
+            for (x, y) in [(x0, 0.0), (x0 + 2.0, 0.0), (x0 + 2.0, 4.0), (x0, 4.0)] {
+                put_u16(&mut vmsk, 1);
+                for _ in 0..3 {
+                    put_i32(&mut vmsk, fixed(y));
+                    put_i32(&mut vmsk, fixed(x));
+                }
+            }
+        }
+        let (rec, chans) = record_with_blocks(&[
+            (
+                key,
+                extra::fill_block(&lumenply_doc::Fill::Solid {
+                    color: [0.0, 1.0, 0.0],
+                })
+                .1,
+            ),
+            (b"vmsk", vmsk),
+        ]);
+        let doc = load_bytes("fill-ops.psd", &craft_psd(3, 4, 4, &rec, &chans)).unwrap();
+        let l = &doc.value.layers()[0];
+        assert!(l.fill_layer().is_some(), "an editable fill layer");
+        let m = l.mask.as_ref().expect("the vector mask");
+        assert_eq!(
+            (m.value(0, 2), m.value(1, 2), m.value(2, 2), m.value(3, 2)),
+            (0.0, 1.0, 0.0, 0.0)
+        );
 
         // Pattern fills keep their pixels too.
         let (rec, chans) = record_with_blocks(&[(b"PtFl", vec![0; 8])]);
