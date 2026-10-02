@@ -374,10 +374,13 @@ impl App {
                             {
                                 act = Some("clear");
                             }
-                            ui.add_enabled(false, egui::Button::new("New layer"))
-                                .on_disabled_hover_text(
-                                    "New layer from selection needs a new engine command (planned)",
-                                );
+                            if ui
+                                .add_enabled(self.active_is_pixel(), egui::Button::new("New layer"))
+                                .on_hover_text("Copy the selected pixels onto a new layer")
+                                .clicked()
+                            {
+                                act = Some("layer-via-copy");
+                            }
                         });
                     });
             });

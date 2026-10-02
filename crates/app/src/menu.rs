@@ -376,6 +376,14 @@ impl App {
                         self.add_pixel_layer();
                         ui.close_menu();
                     }
+                    if ui
+                        .add_enabled(self.active_is_pixel(), egui::Button::new("Layer via copy"))
+                        .on_hover_text("Copy the selection (or the whole layer) onto a new layer")
+                        .clicked()
+                    {
+                        self.run_menu_action("layer-via-copy");
+                        ui.close_menu();
+                    }
                     ui.menu_button("New adjustment layer", |ui| {
                         for (name, adj) in adjustment_presets() {
                             if ui.button(name).clicked() {

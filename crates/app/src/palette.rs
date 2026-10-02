@@ -56,6 +56,7 @@ impl App {
             m("Deselect", "Ctrl+D", "deselect"),
             m("Invert selection", "Ctrl+Shift+I", "invert-sel"),
             m("New layer", "", "new-layer"),
+            m("New layer from selection (layer via copy)", "", "layer-via-copy"),
             m("Group layers", "Ctrl+G", "group"),
             m("Ungroup", "", "ungroup"),
             m("Delete layer", "", "delete-layer"),
@@ -256,6 +257,14 @@ impl App {
             "deselect" => self.run(&SetSelection { selection: None }),
             "invert-sel" => self.run(&InvertSelection),
             "new-layer" => self.add_pixel_layer(),
+            "layer-via-copy" => {
+                if let Some(layer) = self.active {
+                    let name = self
+                        .active_layer()
+                        .map_or("Layer copy".into(), |l| format!("{} copy", l.name));
+                    self.run(&NewLayerFromSelection { layer, name });
+                }
+            }
             "group" => self.group_selected(),
             "ungroup" => self.ungroup_active(),
             "delete-layer" => self.delete_active(),

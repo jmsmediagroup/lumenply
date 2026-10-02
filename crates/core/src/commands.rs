@@ -521,6 +521,59 @@ impl Command for MaskFromSelection {
 }
 
 /// Rename a layer.
+/// Copy a layer's selected pixels onto a new layer directly above it
+/// ("layer via copy"). Without a selection the whole layer is copied.
+pub struct NewLayerFromSelection {
+    pub layer: LayerId,
+    pub name: String,
+}
+
+impl Command for NewLayerFromSelection {
+    fn label(&self) -> String {
+        "Layer via copy".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        let src = doc.layer(self.layer).ok_or(EditError::NoLayer(self.layer))?;
+        let store = src.pixels().ok_or(EditError::NotPixel(self.layer))?;
+        let mut copy = match &doc.selection {
+            None => store.clone(),
+            Some(sel) => {
+                // Keep only the covered pixels, weighted by coverage.
+                let mut out = nge_tiles::TileStore::new();
+                let bounds = sel.bounds_within(doc.canvas());
+                for c in store.coords() {
+                    if c.rect().intersect(&bounds).is_empty() {
+                        continue;
+                    }
+                    let Some(tile) = store.tile(c) else { continue };
+                    let mut t = tile.clone();
+                    let (ox, oy) = c.origin();
+                    let px = t.pixels_mut();
+                    for (i, p) in px.iter_mut().enumerate() {
+                        let (x, y) = (
+                            ox + (i % nge_tiles::TILE_SIZE) as i32,
+                            oy + (i / nge_tiles::TILE_SIZE) as i32,
+                        );
+                        let v = sel.value(x, y);
+                        if v < 1.0 {
+                            *p = p.scale(v);
+                        }
+                    }
+                    out.insert(c, std::sync::Arc::new(t));
+                }
+                out.prune_blank();
+                out
+            }
+        };
+        copy.compact();
+        let id = doc.alloc_id();
+        let mut l = Layer::pixel(id, self.name.clone());
+        *l.pixels_mut().expect("pixel layer") = copy;
+        insert_above(doc, l, Some(self.layer))
+    }
+}
+
 pub struct RenameLayer {
     pub layer: LayerId,
     pub name: String,
@@ -1992,6 +2045,65 @@ mod tests {
         let m = doc.layer(id).unwrap().mask.as_ref().unwrap();
         assert_eq!(m.value(450, 130), 0.0, "hidden block rotated with the image");
         assert_eq!(m.value(100, 500), 1.0, "rest of the canvas stays revealed");
+    }
+
+    #[test]
+    fn new_layer_from_selection_copies_covered_pixels_above() {
+        let mut doc = Document::new(100, 100);
+        let id = doc.add_pixel_layer("src");
+        for x in 0..100 {
+            doc.layer_mut(id)
+                .unwrap()
+                .pixels_mut()
+                .unwrap()
+                .set_pixel(x, 50, Rgba::WHITE);
+        }
+        doc.selection = Some(Selection::rect(Rect::new(0, 0, 40, 100)));
+        NewLayerFromSelection {
+            layer: id,
+            name: "src copy".into(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+
+        assert_eq!(doc.layer_count(), 2);
+        let copy = &doc.layers()[1];
+        assert_eq!(copy.name, "src copy");
+        let px = copy.pixels().unwrap();
+        assert_eq!(px.get_pixel(20, 50), Rgba::WHITE, "inside the selection");
+        assert!(px.get_pixel(60, 50).is_transparent(), "outside left behind");
+        // The source is untouched.
+        let src = doc.layers()[0].pixels().unwrap();
+        assert_eq!(src.get_pixel(60, 50), Rgba::WHITE);
+
+        // Without a selection the whole layer is copied.
+        doc.selection = None;
+        NewLayerFromSelection {
+            layer: id,
+            name: "full copy".into(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(
+            doc.layers()[1].name,
+            "full copy",
+            "inserted directly above the source"
+        );
+        assert_eq!(doc.layers()[1].pixels().unwrap().get_pixel(60, 50), Rgba::WHITE);
+
+        // Feathered coverage scales alpha.
+        let mut sel = Selection::rect(Rect::new(0, 40, 100, 20));
+        sel.feather(4.0);
+        doc.selection = Some(sel);
+        NewLayerFromSelection {
+            layer: id,
+            name: "soft".into(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let soft = doc.layers()[1].pixels().unwrap();
+        let a = soft.get_pixel(20, 50).a;
+        assert!(a > 0.9, "centre nearly opaque: {a}");
     }
 
     #[test]
