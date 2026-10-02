@@ -124,7 +124,11 @@ None of these could be tested in the container.
 
 - [x] Healing brush and spot healing (rim-diffusion colour, optional texture
       from a clone-style source; new Heal tool, key J, Spot toggle)
-- [ ] Paths / pen tool (vector), stroke and fill paths, selection from path
+- [x] Pen tool and paths: cubic-bezier work path (click corners, drag curves,
+      close on the first point; one undo step per path), fill / stroke /
+      selection-from-path, saved in .nge
+- [ ] Path editing (move anchors/handles after placing), multiple named paths,
+      holes via even-odd across subpaths
 - [x] Skew and non-uniform scale in free transform (edge handles stretch one
       axis, mirror across the centre; W/H/Rotate/Skew fields in the options bar)
 - [ ] Perspective and warp transforms (non-affine; needs a mesh resampler)

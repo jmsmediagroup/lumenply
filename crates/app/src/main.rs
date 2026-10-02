@@ -216,6 +216,10 @@ struct App {
     histogram: [u32; histogram::BINS],
     /// User preferences (undo caps, canvas colour, autosave interval).
     prefs: session::Prefs,
+    /// Pen: the last subpath is still being extended.
+    pen_open: bool,
+    /// Pen: dragging out the handles of the just-placed node.
+    pen_dragging: bool,
     /// Healing brush: true = spot mode (no texture source needed).
     heal_spot: bool,
     /// Quick-mask mode: paint the selection itself under a red overlay.
@@ -334,6 +338,8 @@ impl App {
             recent: session::load_recent(),
             histogram: [0; histogram::BINS],
             prefs: session::Prefs::load(),
+            pen_open: false,
+            pen_dragging: false,
             heal_spot: true,
             quick_mask: false,
             sel_points: Vec::new(),
@@ -385,6 +391,8 @@ impl App {
     /// source, free transform). Called when the document is replaced.
     fn cancel_interaction(&mut self) {
         self.drag = None;
+        self.pen_open = false;
+        self.pen_dragging = false;
         self.drag_start = None;
         self.stroke.clear();
         self.lasso.clear();
@@ -761,6 +769,8 @@ impl App {
                 })
             } else if i.key_pressed(Key::J) {
                 Some(Tool::Heal)
+            } else if i.key_pressed(Key::P) {
+                Some(Tool::Pen)
             } else if i.key_pressed(Key::H) {
                 Some(Tool::Hand)
             } else {

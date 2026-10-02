@@ -410,9 +410,87 @@ pub struct Document {
     /// The active selection, if any. Part of the document so it is covered
     /// by undo; not written to project files.
     pub selection: Option<Selection>,
+    /// The pen tool's work path; covered by undo and saved with projects.
+    pub work_path: Option<VectorPath>,
     /// Bottom-to-top.
     layers: Vec<Layer>,
     next_id: LayerId,
+}
+
+/// One anchor of a vector path: the point plus absolute cubic-bezier
+/// handles. A corner node keeps both handles on the point.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PathNode {
+    pub point: (f32, f32),
+    pub handle_in: (f32, f32),
+    pub handle_out: (f32, f32),
+}
+
+impl PathNode {
+    pub fn corner(x: f32, y: f32) -> Self {
+        PathNode {
+            point: (x, y),
+            handle_in: (x, y),
+            handle_out: (x, y),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SubPath {
+    pub nodes: Vec<PathNode>,
+    pub closed: bool,
+}
+
+/// A vector path: cubic bezier subpaths, drawn by the pen tool.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct VectorPath {
+    pub subpaths: Vec<SubPath>,
+}
+
+impl VectorPath {
+    pub fn is_empty(&self) -> bool {
+        self.subpaths.iter().all(|s| s.nodes.len() < 2)
+    }
+
+    /// Flatten every subpath into a dense polyline (point spacing roughly
+    /// one pixel), returned with its `closed` flag. Fill, stroke, selection
+    /// and the on-canvas preview all build on this.
+    pub fn flatten(&self) -> Vec<(Vec<(f32, f32)>, bool)> {
+        let mut out = Vec::new();
+        for sp in &self.subpaths {
+            if sp.nodes.len() < 2 {
+                continue;
+            }
+            let mut pts: Vec<(f32, f32)> = vec![sp.nodes[0].point];
+            let seg_count = sp.nodes.len() - usize::from(!sp.closed);
+            for i in 0..seg_count {
+                let a = &sp.nodes[i];
+                let b = &sp.nodes[(i + 1) % sp.nodes.len()];
+                flatten_cubic(a.point, a.handle_out, b.handle_in, b.point, &mut pts);
+            }
+            out.push((pts, sp.closed));
+        }
+        out
+    }
+}
+
+/// Append a cubic segment to `out` (the start point is already there),
+/// sampled finely enough that chords stay around a pixel long.
+fn flatten_cubic(p0: (f32, f32), c0: (f32, f32), c1: (f32, f32), p1: (f32, f32), out: &mut Vec<(f32, f32)>) {
+    let approx_len = dist(p0, c0) + dist(c0, c1) + dist(c1, p1);
+    let steps = (approx_len.ceil() as usize).clamp(1, 1024);
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
+        let u = 1.0 - t;
+        let x = u * u * u * p0.0 + 3.0 * u * u * t * c0.0 + 3.0 * u * t * t * c1.0 + t * t * t * p1.0;
+        let y = u * u * u * p0.1 + 3.0 * u * u * t * c0.1 + 3.0 * u * t * t * c1.1 + t * t * t * p1.1;
+        out.push((x, y));
+    }
+}
+
+fn dist(a: (f32, f32), b: (f32, f32)) -> f32 {
+    ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
 }
 
 impl Document {
@@ -421,6 +499,7 @@ impl Document {
             width,
             height,
             selection: None,
+            work_path: None,
             layers: Vec::new(),
             next_id: 1,
         }
@@ -432,6 +511,7 @@ impl Document {
             width,
             height,
             selection: None,
+            work_path: None,
             layers,
             next_id,
         }

@@ -3,6 +3,7 @@ use super::*;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Tool {
     Heal,
+    Pen,
     Move,
     RectSelect,
     EllipseSelect,
@@ -20,7 +21,7 @@ pub(crate) enum Tool {
 }
 
 impl Tool {
-    const ALL: [Tool; 15] = [
+    const ALL: [Tool; 16] = [
         Tool::Move,
         Tool::RectSelect,
         Tool::EllipseSelect,
@@ -33,6 +34,7 @@ impl Tool {
         Tool::Heal,
         Tool::Bucket,
         Tool::Gradient,
+        Tool::Pen,
         Tool::Text,
         Tool::Eyedropper,
         Tool::Hand,
@@ -45,6 +47,7 @@ impl Tool {
             Tool::Eraser => "Eraser",
             Tool::Clone => "Clone Stamp",
             Tool::Heal => "Healing Brush",
+            Tool::Pen => "Pen",
             Tool::Bucket => "Paint Bucket",
             Tool::Gradient => "Gradient",
             Tool::Text => "Text",
@@ -66,6 +69,7 @@ impl Tool {
             Tool::Eraser => "E",
             Tool::Clone => "S",
             Tool::Heal => "J",
+            Tool::Pen => "P",
             Tool::Bucket | Tool::Gradient => "G",
             Tool::Text => "T",
             Tool::Eyedropper => "I",
@@ -84,6 +88,9 @@ impl Tool {
             Tool::Clone => "Clone Stamp (S) — Alt+click or 'Pick source' to set the source",
             Tool::Heal => {
                 "Healing Brush (J) — paints surroundings over blemishes; Alt+click sets a texture source"
+            }
+            Tool::Pen => {
+                "Pen (P) — click for corners, drag for curves; click the first point to close; Enter finishes"
             }
             Tool::Bucket => "Paint Bucket (G)",
             Tool::Gradient => "Gradient (Shift+G)",
@@ -106,13 +113,13 @@ impl App {
             .resizable(false)
             .frame(egui::Frame::none().fill(PANEL).inner_margin(9.0))
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing.y = 5.0;
+                ui.spacing_mut().item_spacing.y = 4.0;
                 for tool in Tool::ALL {
                     // A breath between tool families: move / select / paint /
                     // type & sample / navigate.
                     if matches!(tool, Tool::RectSelect | Tool::Brush | Tool::Text | Tool::Hand) {
                         ui.add_space(3.0);
-                        let (r, _) = ui.allocate_exact_size(egui::vec2(40.0, 1.0), Sense::hover());
+                        let (r, _) = ui.allocate_exact_size(egui::vec2(36.0, 1.0), Sense::hover());
                         ui.painter().hline(
                             r.min.x + 6.0..=r.max.x - 6.0,
                             r.center().y,
@@ -120,7 +127,7 @@ impl App {
                         );
                         ui.add_space(3.0);
                     }
-                    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(40.0), Sense::click());
+                    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(36.0), Sense::click());
                     let active = self.tool == tool;
                     let bg = if active {
                         ACCENT
@@ -131,7 +138,7 @@ impl App {
                     };
                     ui.painter().rect_filled(rect, 6.0, bg);
                     let ink = if active { ACCENT_INK } else { TEXT };
-                    draw_icon(ui.painter(), rect.shrink(11.0), tool, ink);
+                    draw_icon(ui.painter(), rect.shrink(10.0), tool, ink);
                     ui.painter().text(
                         rect.right_bottom() + egui::vec2(-4.0, -2.0),
                         Align2::RIGHT_BOTTOM,
@@ -142,6 +149,8 @@ impl App {
                     if resp.on_hover_text(tool.tip()).clicked() {
                         self.tool = tool;
                         self.lasso.clear();
+                        self.pen_open = false;
+                        self.editor.end_coalescing();
                         if tool != Tool::Move {
                             self.cancel_free_transform();
                         }
@@ -272,6 +281,17 @@ pub(crate) fn draw_icon(p: &egui::Painter, r: egui::Rect, tool: Tool, c: Color32
         }
         Tool::EllipseSelect => {
             p.extend(Shape::dashed_line(&ellipse_points(r, 40), s, 3.0, 2.5));
+        }
+        Tool::Pen => {
+            // A pen nib: pointed outline with a slit and an eye.
+            let tip = egui::pos2(r.center().x, r.max.y);
+            let l = egui::pos2(r.min.x + 2.0, r.min.y + 4.0);
+            let rr = egui::pos2(r.max.x - 2.0, r.min.y + 4.0);
+            let top = egui::pos2(r.center().x, r.min.y);
+            p.add(Shape::closed_line(vec![tip, l, top, rr], s));
+            let eye = egui::pos2(r.center().x, r.min.y + r.height() * 0.42);
+            p.circle_stroke(eye, 1.6, s);
+            p.line_segment([eye + egui::vec2(0.0, 1.6), tip], s);
         }
         Tool::Heal => {
             // A bandaid: a diagonal capsule with two dots.

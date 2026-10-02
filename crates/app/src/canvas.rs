@@ -619,6 +619,93 @@ impl App {
     ) {
         let primary = egui::PointerButton::Primary;
         match self.tool {
+            Tool::Pen => {
+                if resp.hovered() {
+                    ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+                }
+                let mut path = self.editor.doc().work_path.clone().unwrap_or_default();
+                let mut changed = false;
+
+                // Drag places a smooth node and pulls its handles out.
+                if resp.drag_started_by(primary) {
+                    if let Some(q) = ctx.input(|i| i.pointer.press_origin()) {
+                        let (x, y) = to_doc(q);
+                        if !self.pen_open {
+                            path.subpaths.push(nge_doc::SubPath::default());
+                            self.pen_open = true;
+                        }
+                        if let Some(sp) = path.subpaths.last_mut() {
+                            sp.nodes.push(nge_doc::PathNode::corner(x, y));
+                        }
+                        self.pen_dragging = true;
+                        changed = true;
+                    }
+                }
+                if self.pen_dragging && resp.dragged_by(primary) {
+                    if let Some(q) = resp.interact_pointer_pos() {
+                        let (hx, hy) = to_doc(q);
+                        if let Some(n) = path.subpaths.last_mut().and_then(|sp| sp.nodes.last_mut()) {
+                            n.handle_out = (hx, hy);
+                            n.handle_in = (2.0 * n.point.0 - hx, 2.0 * n.point.1 - hy);
+                            changed = true;
+                        }
+                    }
+                }
+                if resp.drag_stopped() {
+                    self.pen_dragging = false;
+                }
+
+                // A click adds a corner node, or closes on the first node.
+                if resp.clicked_by(primary) {
+                    if let Some(q) = resp.interact_pointer_pos() {
+                        let (x, y) = to_doc(q);
+                        let close = self.pen_open
+                            && path.subpaths.last().is_some_and(|sp| {
+                                sp.nodes.len() >= 2 && {
+                                    let f = sp.nodes[0].point;
+                                    ((f.0 - x).powi(2) + (f.1 - y).powi(2)).sqrt() * self.zoom < 8.0
+                                }
+                            });
+                        if close {
+                            if let Some(sp) = path.subpaths.last_mut() {
+                                sp.closed = true;
+                            }
+                            self.pen_open = false;
+                        } else {
+                            if !self.pen_open {
+                                path.subpaths.push(nge_doc::SubPath::default());
+                                self.pen_open = true;
+                            }
+                            if let Some(sp) = path.subpaths.last_mut() {
+                                sp.nodes.push(nge_doc::PathNode::corner(x, y));
+                            }
+                        }
+                        changed = true;
+                    }
+                }
+
+                // Enter finishes the path; Esc drops the open subpath.
+                let (enter, esc) = if ctx.wants_keyboard_input() {
+                    (false, false)
+                } else {
+                    ctx.input(|i| (i.key_pressed(Key::Enter), i.key_pressed(Key::Escape)))
+                };
+                if enter && self.pen_open {
+                    self.pen_open = false;
+                    self.editor.end_coalescing();
+                    self.status = "Path finished — Fill, Stroke or Make selection in the bar".into();
+                }
+                if esc && self.pen_open {
+                    path.subpaths.pop();
+                    self.pen_open = false;
+                    changed = true;
+                }
+
+                if changed {
+                    let path = Some(path).filter(|p| !p.subpaths.is_empty());
+                    self.run_coalescing(&SetWorkPath { path }, "pen");
+                }
+            }
             Tool::Hand => {
                 if resp.hovered() {
                     ctx.set_cursor_icon(if resp.dragged() {
@@ -1145,6 +1232,43 @@ impl App {
                         painter.line_segment([a, b], Stroke::new(1.0, Color32::WHITE));
                         painter.circle_filled(a, 4.0, Color32::WHITE);
                         painter.circle_stroke(b, 4.0, Stroke::new(1.5, Color32::WHITE));
+                    }
+                }
+            }
+            Tool::Pen => {
+                let origin = resp.rect.min + self.pan;
+                let zoom = self.zoom;
+                let ts = |x: f32, y: f32| egui::pos2(origin.x + x * zoom, origin.y + y * zoom);
+                let Some(path) = &self.editor.doc().work_path else {
+                    return;
+                };
+                for (pts, _closed) in path.flatten() {
+                    let line: Vec<Pos2> = pts.iter().map(|&(x, y)| ts(x, y)).collect();
+                    painter.add(Shape::line(
+                        line.clone(),
+                        Stroke::new(2.0, Color32::from_black_alpha(140)),
+                    ));
+                    painter.add(Shape::line(line, Stroke::new(1.2, ACCENT)));
+                }
+                for (si, sp) in path.subpaths.iter().enumerate() {
+                    let open_last = self.pen_open && si + 1 == path.subpaths.len();
+                    for (ni, n) in sp.nodes.iter().enumerate() {
+                        let c = ts(n.point.0, n.point.1);
+                        let first_of_open = open_last && ni == 0 && sp.nodes.len() >= 2;
+                        let fill = if first_of_open { ACCENT } else { Color32::WHITE };
+                        painter.rect_filled(egui::Rect::from_center_size(c, Vec2::splat(6.0)), 1.0, fill);
+                        painter.rect_stroke(
+                            egui::Rect::from_center_size(c, Vec2::splat(6.0)),
+                            1.0,
+                            Stroke::new(1.0, Color32::from_black_alpha(180)),
+                        );
+                        if open_last && ni + 1 == sp.nodes.len() && n.handle_out != n.point {
+                            for h in [n.handle_in, n.handle_out] {
+                                let hp = ts(h.0, h.1);
+                                painter.line_segment([c, hp], Stroke::new(1.0, MUTED));
+                                painter.circle_filled(hp, 2.5, MUTED);
+                            }
+                        }
                     }
                 }
             }

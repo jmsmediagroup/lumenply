@@ -56,6 +56,8 @@ struct Manifest {
     width: u32,
     height: u32,
     next_id: LayerId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    work_path: Option<nge_doc::VectorPath>,
     layers: Vec<LayerRecord>,
 }
 
@@ -128,6 +130,7 @@ fn write_archive(path: &Path, doc: &Document) -> Result<(), ProjectError> {
         width: doc.width,
         height: doc.height,
         next_id: doc.next_id(),
+        work_path: doc.work_path.clone(),
         layers,
     };
     zip.start_file("manifest.json", stored)?;
@@ -250,7 +253,8 @@ pub fn load(path: impl AsRef<Path>) -> Result<Document, ProjectError> {
     let mut max_id = 0;
     let mut seen = std::collections::HashSet::new();
     let mut dup = None;
-    let doc = Document::from_parts(manifest.width, manifest.height, layers, manifest.next_id);
+    let mut doc = Document::from_parts(manifest.width, manifest.height, layers, manifest.next_id);
+    doc.work_path = manifest.work_path.clone().filter(|p| !p.subpaths.is_empty());
     doc.for_each_layer(|l| {
         max_id = max_id.max(l.id);
         if !seen.insert(l.id) {
@@ -527,11 +531,22 @@ mod tests {
         nge_render::text::refresh_cache(&mut tl);
         doc.add_layer(Layer::text(tid, tl));
 
+        doc.work_path = Some(nge_doc::VectorPath {
+            subpaths: vec![nge_doc::SubPath {
+                closed: true,
+                nodes: vec![
+                    nge_doc::PathNode::corner(1.0, 2.0),
+                    nge_doc::PathNode::corner(50.0, 2.0),
+                    nge_doc::PathNode::corner(25.0, 40.0),
+                ],
+            }],
+        });
         let path = temp("rt.nge");
         save(&path, &doc).unwrap();
         let back = load(&path).unwrap();
 
         assert_eq!((back.width, back.height), (700, 300));
+        assert_eq!(back.work_path, doc.work_path, "work path survives");
         assert_eq!(back.next_id(), doc.next_id());
         assert_eq!(back.layer_count(), 5);
         assert!(back.layers()[1].pass_through, "pass-through survives");

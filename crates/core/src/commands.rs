@@ -1506,6 +1506,170 @@ impl Command for CloneStroke {
     }
 }
 
+/// Replace the document's work path (the pen tool coalesces its clicks
+/// through this, so drawing a path is one undo step).
+pub struct SetWorkPath {
+    pub path: Option<nge_doc::VectorPath>,
+}
+
+impl Command for SetWorkPath {
+    fn label(&self) -> String {
+        match &self.path {
+            Some(_) => "Edit path".into(),
+            None => "Clear path".into(),
+        }
+    }
+
+    fn affected(&self, _doc: &Document) -> Option<Rect> {
+        // The path is an overlay; pixels don't change.
+        Some(Rect::default())
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        doc.work_path = self.path.clone().filter(|p| !p.subpaths.is_empty());
+        Ok(())
+    }
+}
+
+/// Coverage of the work path's closed (or auto-closed) subpaths,
+/// antialiased, as a selection-style mask.
+fn work_path_coverage(doc: &Document) -> EditResult<Mask> {
+    let path = doc
+        .work_path
+        .as_ref()
+        .ok_or_else(|| EditError::Invalid("there is no path; draw one with the pen first".into()))?;
+    let mut mask = Mask::hide_all();
+    let mut any = false;
+    for (pts, _closed) in path.flatten() {
+        if pts.len() >= 3 {
+            mask.fill_polygon(&pts, 1.0);
+            any = true;
+        }
+    }
+    if !any {
+        return Err(EditError::Invalid("the path has no fillable subpath".into()));
+    }
+    Ok(mask)
+}
+
+/// Fill the work path's area with a colour on a pixel layer.
+pub struct FillPath {
+    pub layer: LayerId,
+    /// Straight linear RGBA.
+    pub color: [f32; 4],
+}
+
+impl Command for FillPath {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn label(&self) -> String {
+        "Fill path".into()
+    }
+
+    fn affected(&self, doc: &Document) -> Option<Rect> {
+        doc.work_path.as_ref().map(|p| {
+            let mut b: Option<Rect> = None;
+            for (pts, _) in p.flatten() {
+                for (x, y) in pts {
+                    let r = Rect::new(x.floor() as i32 - 1, y.floor() as i32 - 1, 3, 3);
+                    b = Some(b.map_or(r, |acc| acc.union(&r)));
+                }
+            }
+            b.unwrap_or_default().intersect(&doc.canvas())
+        })
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        let canvas = doc.canvas();
+        let coverage = work_path_coverage(doc)?;
+        let sel = doc.selection.clone();
+        let layer = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
+        let store = layer.pixels_mut().ok_or(EditError::NotPixel(self.layer))?;
+        let area = coverage.bounds_within(canvas);
+        let [r, g, b, a] = self.color;
+        for py in area.y..area.bottom() {
+            for px in area.x..area.right() {
+                let cov = coverage.value(px, py) * sel.as_ref().map_or(1.0, |s| s.value(px, py));
+                if cov <= 0.0 {
+                    continue;
+                }
+                let src = Rgba::from_straight(r, g, b, a * cov);
+                let dst = store.get_pixel(px, py);
+                store.set_pixel(px, py, src.over(dst));
+            }
+        }
+        store.prune_blank();
+        Ok(())
+    }
+}
+
+/// Stroke the work path with the brush on a pixel layer.
+pub struct StrokeWorkPath {
+    pub layer: LayerId,
+    pub brush: Brush,
+}
+
+impl Command for StrokeWorkPath {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn label(&self) -> String {
+        "Stroke path".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        let path = doc
+            .work_path
+            .clone()
+            .ok_or_else(|| EditError::Invalid("there is no path; draw one with the pen first".into()))?;
+        let mut any = false;
+        for (pts, closed) in path.flatten() {
+            if pts.len() < 2 {
+                continue;
+            }
+            let mut points: Vec<StrokePoint> =
+                pts.iter().map(|&(x, y)| StrokePoint::new(x, y, 1.0)).collect();
+            if closed {
+                points.push(points[0]);
+            }
+            PaintStroke {
+                layer: self.layer,
+                brush: self.brush,
+                points,
+            }
+            .apply(doc)?;
+            any = true;
+        }
+        if !any {
+            return Err(EditError::Invalid("the path has no strokeable subpath".into()));
+        }
+        Ok(())
+    }
+}
+
+/// Turn the work path into the selection.
+pub struct PathToSelection {
+    pub op: CombineOp,
+}
+
+impl Command for PathToSelection {
+    fn label(&self) -> String {
+        "Selection from path".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        let coverage = work_path_coverage(doc)?;
+        let new = Selection { coverage };
+        let mut sel = doc.selection.take().unwrap_or_else(Selection::none);
+        sel.combine(&new, self.op);
+        doc.selection = Some(sel).filter(|s| !s.is_empty());
+        Ok(())
+    }
+}
+
 /// Heal a stroke: repaint each dab with colour diffused in from just
 /// outside it (a small Jacobi solve), so blemishes melt into their
 /// surroundings — including across gradients, where cloning would seam.
@@ -3049,6 +3213,107 @@ mod tests {
             .is_ok(),
             "a seed outside the canvas is a no-op"
         );
+    }
+
+    #[test]
+    fn work_path_fills_strokes_and_selects() {
+        use nge_doc::{PathNode, SubPath, VectorPath};
+        let mut doc = Document::new(100, 100);
+        let id = doc.add_pixel_layer("L");
+
+        // A near-circle of radius 30 around (50,50): four smooth nodes with
+        // the classic kappa handles.
+        let k = 30.0 * 0.5523;
+        let node = |p: (f32, f32), hin: (f32, f32), hout: (f32, f32)| PathNode {
+            point: p,
+            handle_in: hin,
+            handle_out: hout,
+        };
+        let circle = VectorPath {
+            subpaths: vec![SubPath {
+                closed: true,
+                nodes: vec![
+                    node((80.0, 50.0), (80.0, 50.0 - k), (80.0, 50.0 + k)),
+                    node((50.0, 80.0), (50.0 + k, 80.0), (50.0 - k, 80.0)),
+                    node((20.0, 50.0), (20.0, 50.0 + k), (20.0, 50.0 - k)),
+                    node((50.0, 20.0), (50.0 - k, 20.0), (50.0 + k, 20.0)),
+                ],
+            }],
+        };
+        SetWorkPath {
+            path: Some(circle.clone()),
+        }
+        .apply(&mut doc)
+        .unwrap();
+
+        // Flattening hits the on-curve points and the circle's extremes.
+        let flat = doc.work_path.as_ref().unwrap().flatten();
+        assert_eq!(flat.len(), 1);
+        let (pts, closed) = &flat[0];
+        assert!(*closed);
+        let on_circle = pts
+            .iter()
+            .all(|&(x, y)| (((x - 50.0).powi(2) + (y - 50.0).powi(2)).sqrt() - 30.0).abs() < 0.6);
+        assert!(on_circle, "flattened points stay near the circle");
+
+        // Fill: area within a couple of percent of a 30 px circle.
+        FillPath {
+            layer: id,
+            color: [0.9, 0.2, 0.1, 1.0],
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let px = doc.layer(id).unwrap().pixels().unwrap();
+        let mut area = 0.0;
+        for y in 0..100 {
+            for x in 0..100 {
+                area += px.get_pixel(x, y).a;
+            }
+        }
+        let expect = std::f32::consts::PI * 30.0 * 30.0;
+        assert!(
+            (area - expect).abs() / expect < 0.02,
+            "fill area {area} vs {expect}"
+        );
+        assert!(px.get_pixel(50, 50).a > 0.99, "centre filled");
+        assert!(px.get_pixel(5, 5).a < 1e-5, "corner empty");
+
+        // Selection from path matches the fill's coverage.
+        PathToSelection {
+            op: CombineOp::Replace,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let sel = doc.selection.as_ref().unwrap();
+        assert!((sel.value(50, 50) - 1.0).abs() < 1e-4);
+        assert!(sel.value(5, 5) <= 1e-5);
+
+        // Stroke runs paint along the outline: on-path painted, centre not.
+        let mut doc2 = Document::new(100, 100);
+        let id2 = doc2.add_pixel_layer("L");
+        doc2.work_path = Some(circle);
+        StrokeWorkPath {
+            layer: id2,
+            brush: Brush {
+                radius: 3.0,
+                hardness: 1.0,
+                color: [0.0, 0.0, 1.0, 1.0],
+                ..Brush::default()
+            },
+        }
+        .apply(&mut doc2)
+        .unwrap();
+        let px = doc2.layer(id2).unwrap().pixels().unwrap();
+        assert!(px.get_pixel(80, 50).a > 0.9, "outline painted");
+        assert!(px.get_pixel(50, 50).a < 1e-5, "centre untouched");
+
+        // No path → a clear error.
+        assert!(FillPath {
+            layer: id2,
+            color: [0.0; 4]
+        }
+        .apply(&mut Document::new(8, 8))
+        .is_err());
     }
 
     #[test]

@@ -260,6 +260,54 @@ impl App {
                             }
                             ui.label(RichText::new("Shift adds, Alt subtracts").weak());
                         }
+                        Tool::Pen => {
+                            let has_path = self.editor.doc().work_path.is_some();
+                            ui.label(
+                                RichText::new("Click corners, drag curves; click the first point to close")
+                                    .weak(),
+                            );
+                            ui.separator();
+                            if ui
+                                .add_enabled(
+                                    has_path && self.active_is_pixel(),
+                                    egui::Button::new("Fill path"),
+                                )
+                                .clicked()
+                            {
+                                if let Some(layer) = self.active {
+                                    let color = self.make_brush().color;
+                                    self.run(&FillPath { layer, color });
+                                }
+                            }
+                            if ui
+                                .add_enabled(
+                                    has_path && self.active_is_pixel(),
+                                    egui::Button::new("Stroke path"),
+                                )
+                                .clicked()
+                            {
+                                if let Some(layer) = self.active {
+                                    let mut brush = self.make_brush();
+                                    brush.mode = BrushMode::Paint;
+                                    self.run(&StrokeWorkPath { layer, brush });
+                                }
+                            }
+                            if ui
+                                .add_enabled(has_path, egui::Button::new("Make selection"))
+                                .clicked()
+                            {
+                                self.run(&PathToSelection {
+                                    op: self.select_op,
+                                });
+                            }
+                            if ui
+                                .add_enabled(has_path, egui::Button::new("Clear path"))
+                                .clicked()
+                            {
+                                self.pen_open = false;
+                                self.run(&SetWorkPath { path: None });
+                            }
+                        }
                         Tool::Hand => {
                             ui.label(RichText::new("Drag to pan, scroll to zoom").weak());
                         }
