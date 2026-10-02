@@ -10,7 +10,7 @@ pub(crate) enum Dialog {
     ConfirmClose,
     /// An autosave backup from a previous session was found at startup.
     Recover,
-    Preferences(session::Prefs),
+    Preferences(session::Prefs, Option<String>),
     /// Colour-range selection: (tolerance %, whether a preview ran).
     ColorRange(f32, bool),
 }
@@ -279,7 +279,7 @@ impl App {
             Dialog::New(..) => "New document",
             Dialog::ConfirmClose => "Unsaved changes",
             Dialog::Recover => "Recover autosaved document",
-            Dialog::Preferences(_) => "Preferences",
+            Dialog::Preferences(..) => "Preferences",
             Dialog::ColorRange(..) => "Colour range",
             Dialog::Filter(f) => f.name(),
             Dialog::CanvasSize(..) => "Canvas size",
@@ -310,7 +310,7 @@ impl App {
                             );
                         }
                     }
-                    Dialog::Preferences(p) => {
+                    Dialog::Preferences(p, capturing) => {
                         let mut steps = p.undo_steps as f32;
                         if ui
                             .add(
@@ -370,6 +370,61 @@ impl App {
                                 }
                             }
                         });
+                        ui.add_space(6.0);
+                        ui.label(RichText::new("SHORTCUTS").small().strong().color(MUTED));
+                        // Click a binding, press the new keys; Esc cancels.
+                        if let Some(active) = capturing.clone() {
+                            let got = ui.input(|i| {
+                                i.events.iter().find_map(|e| match e {
+                                    egui::Event::Key {
+                                        key,
+                                        pressed: true,
+                                        modifiers,
+                                        ..
+                                    } => Some((*key, *modifiers)),
+                                    _ => None,
+                                })
+                            });
+                            if let Some((key, m)) = got {
+                                if key == Key::Escape {
+                                    *capturing = None;
+                                } else if !matches!(key, Key::Tab | Key::Enter | Key::Space) {
+                                    p.shortcuts.insert(
+                                        active,
+                                        session::Chord {
+                                            cmd: m.command,
+                                            shift: m.shift,
+                                            key: key.name().to_string(),
+                                        },
+                                    );
+                                    *capturing = None;
+                                }
+                            }
+                        }
+                        for (id, label, ..) in session::SHORTCUTS {
+                            ui.horizontal(|ui| {
+                                ui.add_sized(
+                                    [120.0, 18.0],
+                                    egui::Label::new(RichText::new(*label).color(MUTED)),
+                                );
+                                let text = if capturing.as_deref() == Some(*id) {
+                                    "press keys...".to_string()
+                                } else {
+                                    session::chord_label(p, id)
+                                };
+                                let highlight = capturing.as_deref() == Some(*id);
+                                let btn = egui::Button::new(RichText::new(text).monospace())
+                                    .min_size(egui::vec2(110.0, 20.0))
+                                    .fill(if highlight { ACCENT_TINT } else { GROUND })
+                                    .stroke(Stroke::new(1.0, if highlight { ACCENT } else { LINE }));
+                                if ui.add(btn).clicked() {
+                                    *capturing = Some(id.to_string());
+                                }
+                                if p.shortcuts.contains_key(*id) && ui.small_button("reset").clicked() {
+                                    p.shortcuts.remove(*id);
+                                }
+                            });
+                        }
                     }
                     Dialog::Recover => {
                         ui.label("The previous session left an autosaved backup,");
@@ -573,7 +628,7 @@ impl App {
             match &d {
                 Dialog::ConfirmClose | Dialog::Recover => {}
                 Dialog::ColorRange(..) => {}
-                Dialog::Preferences(p) => {
+                Dialog::Preferences(p, _) => {
                     self.prefs = p.clone();
                     self.prefs.apply(&mut self.editor);
                     self.prefs.save();

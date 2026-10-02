@@ -7,6 +7,64 @@ use super::*;
 
 const RECENT_MAX: usize = 10;
 
+/// A rebindable key chord. The key is stored by its egui name so it
+/// serialises readably ("Z", "F5", "ArrowLeft").
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Chord {
+    pub cmd: bool,
+    pub shift: bool,
+    pub key: String,
+}
+
+/// The rebindable actions: (id, label, default cmd, default shift, key).
+/// Order matters for dispatch: chords that contain another chord (redo
+/// holds undo's) must be consumed first.
+pub(crate) const SHORTCUTS: &[(&str, &str, bool, bool, &str)] = &[
+    ("redo", "Redo", true, true, "Z"),
+    ("undo", "Undo", true, false, "Z"),
+    ("invert-sel", "Invert selection", true, true, "I"),
+    ("select-all", "Select all", true, false, "A"),
+    ("deselect", "Deselect", true, false, "D"),
+    ("save", "Save", true, false, "S"),
+    ("open", "Open", true, false, "O"),
+    ("xform", "Free transform", true, false, "T"),
+    ("group", "Group layers", true, false, "G"),
+    ("layer-via-copy", "Layer via copy", true, false, "J"),
+];
+
+/// The effective chord for an action: the user's binding when it parses,
+/// else the built-in default.
+pub(crate) fn resolve_chord(prefs: &Prefs, id: &str) -> Option<(egui::Modifiers, egui::Key)> {
+    let (_, _, dc, ds, dk) = SHORTCUTS.iter().find(|(i, ..)| *i == id)?;
+    let (cmd, shift, key) = match prefs.shortcuts.get(id) {
+        Some(c) => (c.cmd, c.shift, egui::Key::from_name(&c.key)),
+        None => (*dc, *ds, egui::Key::from_name(dk)),
+    };
+    let key = key.or_else(|| egui::Key::from_name(dk))?;
+    let m = egui::Modifiers {
+        command: cmd,
+        shift,
+        ..egui::Modifiers::NONE
+    };
+    Some((m, key))
+}
+
+/// Human-readable form of an action's effective chord.
+pub(crate) fn chord_label(prefs: &Prefs, id: &str) -> String {
+    let Some((m, k)) = resolve_chord(prefs, id) else {
+        return "—".into();
+    };
+    let mut out = String::new();
+    if m.contains(egui::Modifiers::COMMAND) {
+        out.push_str("Ctrl+");
+    }
+    if m.contains(egui::Modifiers::SHIFT) {
+        out.push_str("Shift+");
+    }
+    out.push_str(k.name());
+    out
+}
+
 /// User preferences, persisted as JSON in the data dir.
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -19,6 +77,8 @@ pub(crate) struct Prefs {
     pub undo_memory_mb: usize,
     /// Seconds of unsaved changes between autosave backups.
     pub autosave_secs: u64,
+    /// User key bindings by action id; missing ids use the defaults.
+    pub shortcuts: std::collections::BTreeMap<String, Chord>,
 }
 
 impl Default for Prefs {
@@ -28,6 +88,7 @@ impl Default for Prefs {
             undo_steps: 100,
             undo_memory_mb: 1024,
             autosave_secs: 120,
+            shortcuts: std::collections::BTreeMap::new(),
         }
     }
 }

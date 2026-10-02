@@ -287,7 +287,7 @@ impl App {
                         }
                         ui.separator();
                         if ui.button("Preferences...").clicked() {
-                            self.dialog = Some(Dialog::Preferences(self.prefs.clone()));
+                            self.dialog = Some(Dialog::Preferences(self.prefs.clone(), None));
                             ui.close_menu();
                         }
                     });

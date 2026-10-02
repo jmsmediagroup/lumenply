@@ -637,54 +637,41 @@ impl App {
         if self.editor.doc().selection.is_some() && ctx.input_mut(|i| i.consume_key(M::NONE, Key::Escape)) {
             self.run(&SetSelection { selection: None });
         }
-        let (redo, invert, undo, all, none, save, open, xform, group, copy_layer) = ctx.input_mut(|i| {
-            (
-                i.consume_key(M::COMMAND | M::SHIFT, Key::Z) || i.consume_key(M::COMMAND, Key::Y),
-                i.consume_key(M::COMMAND | M::SHIFT, Key::I),
-                i.consume_key(M::COMMAND, Key::Z),
-                i.consume_key(M::COMMAND, Key::A),
-                i.consume_key(M::COMMAND, Key::D),
-                i.consume_key(M::COMMAND, Key::S),
-                i.consume_key(M::COMMAND, Key::O),
-                i.consume_key(M::COMMAND, Key::T),
-                i.consume_key(M::COMMAND, Key::G),
-                i.consume_key(M::COMMAND, Key::J),
-            )
-        });
-        if copy_layer {
-            self.run_menu_action("layer-via-copy");
-        }
-        if redo {
-            self.redo();
-        }
-        if undo {
-            self.undo();
-        }
-        if invert {
-            self.run(&InvertSelection);
-        }
-        if all {
-            self.run(&SetSelection {
-                selection: Some(Selection::all()),
-            });
-        }
-        if none {
-            self.run(&SetSelection { selection: None });
-        }
-        if save {
-            match self.path.clone() {
-                Some(p) => self.save_path(&p.to_string_lossy()),
-                None => self.pick_save(),
+        // Rebindable command chords (see session::SHORTCUTS for the
+        // defaults and Preferences for rebinding); Ctrl+Y stays a fixed
+        // redo alias.
+        let mut fired: Vec<&'static str> = Vec::new();
+        ctx.input_mut(|i| {
+            for (id, ..) in session::SHORTCUTS {
+                if let Some((m, k)) = session::resolve_chord(&self.prefs, id) {
+                    if i.consume_key(m, k) {
+                        fired.push(id);
+                    }
+                }
             }
-        }
-        if open {
-            self.pick_open();
-        }
-        if xform {
-            self.begin_free_transform();
-        }
-        if group {
-            self.group_selected();
+            if i.consume_key(M::COMMAND, Key::Y) {
+                fired.push("redo");
+            }
+        });
+        for id in fired {
+            match id {
+                "undo" => self.undo(),
+                "redo" => self.redo(),
+                "invert-sel" => self.run(&InvertSelection),
+                "select-all" => self.run(&SetSelection {
+                    selection: Some(Selection::all()),
+                }),
+                "deselect" => self.run(&SetSelection { selection: None }),
+                "save" => match self.path.clone() {
+                    Some(p) => self.save_path(&p.to_string_lossy()),
+                    None => self.pick_save(),
+                },
+                "open" => self.pick_open(),
+                "xform" => self.begin_free_transform(),
+                "group" => self.group_selected(),
+                "layer-via-copy" => self.run_menu_action("layer-via-copy"),
+                _ => {}
+            }
         }
         let (fill, clear) = ctx.input(|i| {
             (

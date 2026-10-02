@@ -322,7 +322,7 @@ impl App {
                 }
             }
             "auto-contrast" => self.auto_contrast(),
-            "prefs" => self.dialog = Some(Dialog::Preferences(self.prefs.clone())),
+            "prefs" => self.dialog = Some(Dialog::Preferences(self.prefs.clone(), None)),
             "fit" => self.view_cmd = Some(ViewCmd::Fit),
             "actual" => self.view_cmd = Some(ViewCmd::Actual),
             "filter-gauss" => self.dialog = Some(Dialog::Filter(Filter::GaussianBlur { radius: 8.0 })),
