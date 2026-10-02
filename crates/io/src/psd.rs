@@ -1408,6 +1408,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let mut is_adjustment = false;
                 let mut adjustment = None;
                 let mut fill = None;
+                let (mut vector_mask, mut pattern) = (false, false);
                 while rd.pos + 12 <= extra_end {
                     let sig = rd.bytes(4)?;
                     if sig != b"8BIM" && sig != b"8B64" {
@@ -1457,9 +1458,13 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                             // An unreadable fill keeps its rendered pixels.
                             None => warnings.push(format!("fill layer '{name}': settings not readable")),
                         },
+                        // A vector mask makes a fill a shape layer.
+                        b"vmsk" | b"vsms" => vector_mask = true,
+                        // Pattern fills keep their rendered pixels.
+                        b"PtFl" => pattern = true,
                         b"levl" | b"curv" | b"brit" | b"CgEd" | b"hue2" | b"hue " | b"blnc" | b"blwh"
                         | b"expA" | b"vibA" | b"thrs" | b"post" | b"nvrt" | b"phfl" | b"mixr" | b"clrL"
-                        | b"grdm" | b"selc" | b"PtFl" => {
+                        | b"grdm" | b"selc" => {
                             is_adjustment = true;
                             if adjustment.is_none() {
                                 adjustment = parse_adjustment(&k, data)?;
@@ -1469,6 +1474,16 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     }
                 }
                 rd.pos = extra_end;
+                // Shape layers (a fill clipped by vector paths) and pattern
+                // fills come in as the pixels Photoshop rendered for them.
+                if vector_mask && fill.take().is_some() {
+                    warnings.push(format!(
+                        "shape layer '{name}' was imported as pixels (vector shapes are not supported yet)"
+                    ));
+                }
+                if pattern {
+                    warnings.push(format!("pattern fill layer '{name}' was imported as pixels"));
+                }
                 let (blend, known) = blend_from_key(&key);
                 heads.push((
                     RawLayer {
@@ -1826,6 +1841,76 @@ mod tests {
         let path = temp(name);
         std::fs::write(&path, bytes).unwrap();
         load(&path)
+    }
+
+    /// A 2×2 layer of opaque red pixels carrying the given tagged blocks.
+    fn record_with_blocks(blocks: &[(&[u8; 4], Vec<u8>)]) -> (Vec<u8>, Vec<u8>) {
+        let mut r = Vec::new();
+        for v in [0, 0, 2, 2] {
+            put_i32(&mut r, v); // top, left, bottom, right
+        }
+        put_u16(&mut r, 4);
+        for id in [0i16, 1, 2, -1] {
+            put_u16(&mut r, id as u16);
+            put_u32(&mut r, 6); // raw compression word + 4 samples
+        }
+        r.extend_from_slice(b"8BIMnorm");
+        r.extend_from_slice(&[255, 0, 0, 0]);
+        let mut extra = Vec::new();
+        put_u32(&mut extra, 0);
+        put_u32(&mut extra, 0);
+        extra.extend_from_slice(&[0, 0, 0, 0]);
+        for (key, data) in blocks {
+            extra.extend_from_slice(&additional_block(key, data));
+        }
+        put_u32(&mut r, extra.len() as u32);
+        r.extend_from_slice(&extra);
+        let mut chans = Vec::new();
+        for v in [255u8, 0, 0, 255] {
+            chans.extend_from_slice(&[0, 0, v, v, v, v]);
+        }
+        (r, chans)
+    }
+
+    #[test]
+    fn fills_import_as_fill_layers_but_shapes_and_patterns_as_pixels() {
+        let (key, soco) = extra::fill_block(&lumenply_doc::Fill::Solid {
+            color: [0.0, 1.0, 0.0],
+        });
+        let (rec, chans) = record_with_blocks(&[(key, soco.clone())]);
+        let doc = load_bytes("fill-soco.psd", &craft_psd(3, 4, 4, &rec, &chans)).unwrap();
+        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+        let l = &doc.value.layers()[0];
+        assert!(matches!(
+            l.fill_layer().map(|f| &f.fill),
+            Some(lumenply_doc::Fill::Solid { color }) if color[1] > 0.99 && color[0] < 0.01
+        ));
+        // Rendered over the whole 4×4 canvas, not the 2×2 record bounds.
+        let p = l.raster_store().unwrap().get_pixel(3, 3);
+        assert!(p.g > 0.99 && p.a == 1.0, "{p:?}");
+
+        // With a vector mask it is a shape: its pixels, with a warning.
+        let (rec, chans) = record_with_blocks(&[(key, soco), (b"vmsk", vec![0; 8])]);
+        let doc = load_bytes("fill-shape.psd", &craft_psd(3, 4, 4, &rec, &chans)).unwrap();
+        assert!(
+            doc.warnings.iter().any(|w| w.contains("shape layer")),
+            "{:?}",
+            doc.warnings
+        );
+        let l = &doc.value.layers()[0];
+        let p = l.pixels().expect("pixel layer").get_pixel(1, 1);
+        assert!(p.r > 0.99 && p.g < 0.01, "the rendered red shape: {p:?}");
+        assert_eq!(l.pixels().unwrap().get_pixel(3, 3).a, 0.0);
+
+        // Pattern fills keep their pixels too.
+        let (rec, chans) = record_with_blocks(&[(b"PtFl", vec![0; 8])]);
+        let doc = load_bytes("fill-pattern.psd", &craft_psd(3, 4, 4, &rec, &chans)).unwrap();
+        assert!(
+            doc.warnings.iter().any(|w| w.contains("pattern fill")),
+            "{:?}",
+            doc.warnings
+        );
+        assert!(doc.value.layers()[0].pixels().is_some());
     }
 
     #[test]
