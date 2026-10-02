@@ -436,6 +436,53 @@ impl App {
         }
 
         ui.horizontal(|ui| {
+            let mut on = fx.color_overlay.is_some();
+            if ui.checkbox(&mut on, "Color overlay").changed() {
+                fx.color_overlay = on.then(lumenply_doc::ColorOverlayFx::default);
+                changed = true;
+                finished = true;
+            }
+            if let Some(co) = &mut fx.color_overlay {
+                let c = color_btn(ui, &mut co.color);
+                changed |= c;
+                finished |= c;
+            }
+        });
+        if let Some(mut co) = fx.color_overlay {
+            let f = slider_row(ui, "Opacity", &mut co.opacity, 0.0..=1.0, "");
+            finished |= f;
+            if co != fx.color_overlay.unwrap() {
+                changed = true;
+            }
+            fx.color_overlay = Some(co);
+        }
+
+        ui.horizontal(|ui| {
+            let mut on = fx.gradient_overlay.is_some();
+            if ui.checkbox(&mut on, "Gradient overlay").changed() {
+                fx.gradient_overlay = on.then(lumenply_doc::GradientOverlayFx::default);
+                changed = true;
+                finished = true;
+            }
+            if let Some(go) = &mut fx.gradient_overlay {
+                let c1 = color_btn(ui, &mut go.start);
+                let c2 = color_btn(ui, &mut go.end);
+                changed |= c1 || c2;
+                finished |= c1 || c2;
+            }
+        });
+        if let Some(mut go) = fx.gradient_overlay {
+            let f = slider_row(ui, "Angle", &mut go.angle, 0.0..=360.0, "°");
+            finished |= f;
+            let f2 = slider_row(ui, "Opacity", &mut go.opacity, 0.0..=1.0, "");
+            finished |= f2;
+            if go != fx.gradient_overlay.unwrap() {
+                changed = true;
+            }
+            fx.gradient_overlay = Some(go);
+        }
+
+        ui.horizontal(|ui| {
             let mut on = fx.stroke.is_some();
             if ui.checkbox(&mut on, "Stroke").changed() {
                 fx.stroke = on.then(StrokeFx::default);

@@ -175,11 +175,52 @@ pub fn box_radius(sigma_like: f32) -> i32 {
 pub struct LayerEffects {
     pub drop_shadow: Option<ShadowFx>,
     pub outer_glow: Option<GlowFx>,
+    /// Flat colour painted over the layer's coverage.
+    pub color_overlay: Option<ColorOverlayFx>,
+    /// Linear gradient painted over the layer's coverage.
+    pub gradient_overlay: Option<GradientOverlayFx>,
     /// Shadow cast by the coverage edge onto the layer's inside.
     pub inner_shadow: Option<ShadowFx>,
     /// Glow creeping inward from the coverage edge.
     pub inner_glow: Option<GlowFx>,
     pub stroke: Option<StrokeFx>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ColorOverlayFx {
+    /// Straight linear RGB.
+    pub color: [f32; 3],
+    pub opacity: f32,
+}
+
+impl Default for ColorOverlayFx {
+    fn default() -> Self {
+        ColorOverlayFx {
+            color: [1.0, 0.45, 0.1],
+            opacity: 1.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GradientOverlayFx {
+    /// Straight linear RGB at the gradient's start and end.
+    pub start: [f32; 3],
+    pub end: [f32; 3],
+    /// Direction in degrees: 0 runs left → right, 90 bottom → top.
+    pub angle: f32,
+    pub opacity: f32,
+}
+
+impl Default for GradientOverlayFx {
+    fn default() -> Self {
+        GradientOverlayFx {
+            start: [0.1, 0.3, 0.9],
+            end: [0.9, 0.2, 0.5],
+            angle: 90.0,
+            opacity: 1.0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -243,6 +284,8 @@ impl LayerEffects {
     pub fn is_empty(&self) -> bool {
         self.drop_shadow.is_none()
             && self.outer_glow.is_none()
+            && self.color_overlay.is_none()
+            && self.gradient_overlay.is_none()
             && self.inner_shadow.is_none()
             && self.inner_glow.is_none()
             && self.stroke.is_none()

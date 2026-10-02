@@ -277,6 +277,7 @@ pub fn render_tile_over(
             let d = dst.get_or_insert_with(Tile::new);
             render_effects_under(d, layer, coord, canvas);
             blend_tile(d, &masked, layer.blend, layer.opacity);
+            render_overlays_over(d, layer, coord, canvas);
             render_inner_over(d, layer, coord, canvas);
             render_stroke_over(d, layer, coord, canvas);
             continue;
@@ -408,6 +409,78 @@ fn render_effects_under(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas:
             }
         }
         blend_tile(dst, &tile, BlendMode::Normal, layer.opacity);
+    }
+}
+
+/// Colour and gradient overlays, painted over the layer's coverage. The
+/// gradient spans the layer's content bounds (the canvas for groups,
+/// whose bounds would mean compositing twice).
+fn render_overlays_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: Rect) {
+    let fx = &layer.effects;
+    if fx.color_overlay.is_none() && fx.gradient_overlay.is_none() {
+        return;
+    }
+    let (ox, oy) = coord.origin();
+    let area = Rect::new(ox, oy, TILE_SIZE as u32, TILE_SIZE as u32);
+    let cov = coverage_raster(layer, area, canvas);
+    let w = area.w as usize;
+    let paint = |dst: &mut Tile, color_at: &dyn Fn(i32, i32) -> ([f32; 3], f32), opacity: f32| {
+        let mut tile = Tile::new();
+        let px = tile.pixels_mut();
+        for row in 0..TILE_SIZE {
+            for col in 0..TILE_SIZE {
+                let clip = cov[row * w + col];
+                if clip <= 0.0 {
+                    continue;
+                }
+                let (c, tint) = color_at(ox + col as i32, oy + row as i32);
+                let a = (opacity * tint * clip).clamp(0.0, 1.0);
+                if a > 0.0 {
+                    px[row * TILE_SIZE + col] = Rgba::from_straight(c[0], c[1], c[2], a);
+                }
+            }
+        }
+        blend_tile(dst, &tile, BlendMode::Normal, layer.opacity);
+    };
+    if let Some(co) = &fx.color_overlay {
+        paint(dst, &|_, _| (co.color, 1.0), co.opacity);
+    }
+    if let Some(go) = &fx.gradient_overlay {
+        let bounds = match layer.raster_store().and_then(|s| s.content_bounds()) {
+            Some(b) => b,
+            None => canvas,
+        };
+        // Project the bounds' corners onto the gradient direction so t
+        // spans exactly 0..1 across the content, whatever the angle.
+        let rad = go.angle.to_radians();
+        let (dx, dy) = (rad.cos(), -rad.sin()); // y grows downward
+        let corners = [
+            (bounds.x as f32, bounds.y as f32),
+            (bounds.right() as f32, bounds.y as f32),
+            (bounds.x as f32, bounds.bottom() as f32),
+            (bounds.right() as f32, bounds.bottom() as f32),
+        ];
+        let dots: Vec<f32> = corners.iter().map(|(x, y)| x * dx + y * dy).collect();
+        let lo = dots.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+        let hi = dots.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+        let span = (hi - lo).max(1e-3);
+        paint(
+            dst,
+            &|x, y| {
+                let t = (((x as f32 + 0.5) * dx + (y as f32 + 0.5) * dy) - lo) / span;
+                let t = t.clamp(0.0, 1.0);
+                let mix = |a: f32, b: f32| a + (b - a) * t;
+                (
+                    [
+                        mix(go.start[0], go.end[0]),
+                        mix(go.start[1], go.end[1]),
+                        mix(go.start[2], go.end[2]),
+                    ],
+                    1.0,
+                )
+            },
+            go.opacity,
+        );
     }
 }
 
@@ -925,6 +998,85 @@ mod tests {
                 assert!((a - b).abs() < 2e-3, "seam mismatch at {dx},{dy}: {a} vs {b}");
             }
         }
+    }
+
+    #[test]
+    fn overlays_paint_the_coverage_and_the_gradient_spans_it() {
+        use lumenply_doc::{ColorOverlayFx, GradientOverlayFx, LayerEffects};
+        let mut doc = Document::new(100, 60);
+        let id = doc.add_pixel_layer("box");
+        for y in 20..40 {
+            for x in 10..90 {
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(0.2, 0.2, 0.2, 1.0),
+                );
+            }
+        }
+        // Full-opacity colour overlay replaces the fill inside, leaves
+        // the outside empty.
+        doc.layer_mut(id).unwrap().effects = LayerEffects {
+            color_overlay: Some(ColorOverlayFx {
+                color: [0.8, 0.1, 0.3],
+                opacity: 1.0,
+            }),
+            ..LayerEffects::default()
+        };
+        let out = composite_raster(&doc);
+        let inside = straight(out.get(50, 30));
+        assert!(
+            close(inside[0], 0.8) && close(inside[2], 0.3),
+            "overlay colour covers the fill: {inside:?}"
+        );
+        assert!(out.get(5, 30).a < 1e-4, "outside untouched");
+
+        // Half opacity mixes with the fill: 0.5·0.8 + 0.5·0.2 = 0.5.
+        doc.layer_mut(id).unwrap().effects.color_overlay = Some(ColorOverlayFx {
+            color: [0.8, 0.1, 0.3],
+            opacity: 0.5,
+        });
+        let out = composite_raster(&doc);
+        let mixed = straight(out.get(50, 30));
+        assert!(close(mixed[0], 0.5), "half-opacity mix: {mixed:?}");
+
+        // A 0° gradient runs left → right across the content bounds:
+        // start colour at the left edge, end colour at the right.
+        doc.layer_mut(id).unwrap().effects = LayerEffects {
+            gradient_overlay: Some(GradientOverlayFx {
+                start: [1.0, 0.0, 0.0],
+                end: [0.0, 0.0, 1.0],
+                angle: 0.0,
+                opacity: 1.0,
+            }),
+            ..LayerEffects::default()
+        };
+        let out = composite_raster(&doc);
+        let left = straight(out.get(11, 30));
+        let right = straight(out.get(88, 30));
+        let mid = straight(out.get(50, 30));
+        assert!(
+            left[0] > 0.95 && left[2] < 0.05,
+            "left edge is the start: {left:?}"
+        );
+        assert!(
+            right[2] > 0.95 && right[0] < 0.05,
+            "right edge is the end: {right:?}"
+        );
+        assert!(
+            (mid[0] - 0.5).abs() < 0.05 && (mid[2] - 0.5).abs() < 0.05,
+            "middle mixes evenly: {mid:?}"
+        );
+        // 90° runs bottom → top: the top edge shows the end colour.
+        doc.layer_mut(id).unwrap().effects.gradient_overlay = Some(GradientOverlayFx {
+            start: [1.0, 0.0, 0.0],
+            end: [0.0, 0.0, 1.0],
+            angle: 90.0,
+            opacity: 1.0,
+        });
+        let out = composite_raster(&doc);
+        assert!(straight(out.get(50, 21))[2] > 0.9, "top is the end colour");
+        assert!(straight(out.get(50, 38))[0] > 0.9, "bottom is the start colour");
     }
 
     #[test]

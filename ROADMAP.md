@@ -151,9 +151,10 @@ None of these could be tested in the container.
       per-layer effects (EFFECTS section in Properties, tile-seam-safe,
       saved in .nge; PSD/ORA warn instead of silently dropping)
 - [~] More styles: inner shadow and inner glow (blurred inverse coverage,
-      clipped to the layer, rendered over it). Still to do: bevel,
-      gradient/pattern overlay; effects on clip-chain members and
-      pass-through groups
+      clipped to the layer, rendered over it); colour and gradient overlays
+      (gradient spans the content bounds at any angle). Still to do: bevel,
+      pattern overlay; effects on clip-chain members and pass-through
+      groups
 - [ ] Smart objects (embedded documents with transforms)
 - [x] Clipping masks (clip chains composite as a unit gated by the base's alpha
       and carrying its blend/opacity; context menu + palette; PSD clipping byte
