@@ -1554,6 +1554,83 @@ impl Command for SetWorkPath {
     }
 }
 
+/// Store a copy of the work path in the document's Paths list.
+pub struct SaveWorkPath {
+    pub name: String,
+}
+
+impl Command for SaveWorkPath {
+    fn label(&self) -> String {
+        format!("Save path \"{}\"", self.name)
+    }
+
+    fn affected(&self, _doc: &Document) -> Option<Rect> {
+        Some(Rect::default())
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        let path = doc
+            .work_path
+            .clone()
+            .ok_or_else(|| EditError::Invalid("there is no path; draw one with the pen first".into()))?;
+        if self.name.trim().is_empty() {
+            return Err(EditError::Invalid("the path needs a name".into()));
+        }
+        doc.saved_paths.push(lumenply_doc::NamedPath {
+            name: self.name.clone(),
+            path,
+        });
+        Ok(())
+    }
+}
+
+/// Make a saved path the work path again (a copy; the stored one stays).
+pub struct UseSavedPath {
+    pub index: usize,
+}
+
+impl Command for UseSavedPath {
+    fn label(&self) -> String {
+        "Load path".into()
+    }
+
+    fn affected(&self, _doc: &Document) -> Option<Rect> {
+        Some(Rect::default())
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        let named = doc
+            .saved_paths
+            .get(self.index)
+            .ok_or_else(|| EditError::Invalid(format!("no saved path #{}", self.index)))?;
+        doc.work_path = Some(named.path.clone());
+        Ok(())
+    }
+}
+
+/// Remove a path from the Paths list.
+pub struct DeleteSavedPath {
+    pub index: usize,
+}
+
+impl Command for DeleteSavedPath {
+    fn label(&self) -> String {
+        "Delete path".into()
+    }
+
+    fn affected(&self, _doc: &Document) -> Option<Rect> {
+        Some(Rect::default())
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        if self.index >= doc.saved_paths.len() {
+            return Err(EditError::Invalid(format!("no saved path #{}", self.index)));
+        }
+        doc.saved_paths.remove(self.index);
+        Ok(())
+    }
+}
+
 /// Coverage of the work path's closed (or auto-closed) subpaths,
 /// antialiased, as a selection-style mask.
 fn work_path_coverage(doc: &Document) -> EditResult<Mask> {
@@ -3410,6 +3487,46 @@ mod tests {
         }
         .apply(&mut Document::new(8, 8))
         .is_err());
+    }
+
+    #[test]
+    fn saved_paths_store_load_and_delete() {
+        use lumenply_doc::{PathNode, SubPath, VectorPath};
+        let tri = VectorPath {
+            subpaths: vec![SubPath {
+                closed: true,
+                nodes: vec![
+                    PathNode::corner(10.0, 10.0),
+                    PathNode::corner(50.0, 10.0),
+                    PathNode::corner(30.0, 40.0),
+                ],
+            }],
+        };
+        let mut doc = Document::new(64, 64);
+        // Saving without a work path is a clear error.
+        assert!(SaveWorkPath { name: "a".into() }.apply(&mut doc).is_err());
+        doc.work_path = Some(tri.clone());
+        SaveWorkPath {
+            name: "Outline".into(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.saved_paths.len(), 1);
+        assert_eq!(doc.saved_paths[0].name, "Outline");
+
+        // Clearing the work path leaves the saved copy intact; loading
+        // brings it back.
+        SetWorkPath { path: None }.apply(&mut doc).unwrap();
+        assert!(doc.work_path.is_none());
+        UseSavedPath { index: 0 }.apply(&mut doc).unwrap();
+        assert_eq!(doc.work_path.as_ref(), Some(&tri));
+        assert!(UseSavedPath { index: 3 }.apply(&mut doc).is_err());
+
+        DeleteSavedPath { index: 0 }.apply(&mut doc).unwrap();
+        assert!(doc.saved_paths.is_empty());
+        assert!(DeleteSavedPath { index: 0 }.apply(&mut doc).is_err());
+        // The work path copy survives the delete.
+        assert_eq!(doc.work_path.as_ref(), Some(&tri));
     }
 
     #[test]

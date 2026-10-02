@@ -59,6 +59,8 @@ struct Manifest {
     next_id: LayerId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     work_path: Option<lumenply_doc::VectorPath>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    saved_paths: Vec<lumenply_doc::NamedPath>,
     layers: Vec<LayerRecord>,
 }
 
@@ -134,6 +136,7 @@ fn write_archive(path: &Path, doc: &Document) -> Result<(), ProjectError> {
         height: doc.height,
         next_id: doc.next_id(),
         work_path: doc.work_path.clone(),
+        saved_paths: doc.saved_paths.clone(),
         layers,
     };
     zip.start_file("manifest.json", stored)?;
@@ -259,6 +262,12 @@ pub fn load(path: impl AsRef<Path>) -> Result<Document, ProjectError> {
     let mut dup = None;
     let mut doc = Document::from_parts(manifest.width, manifest.height, layers, manifest.next_id);
     doc.work_path = manifest.work_path.clone().filter(|p| !p.subpaths.is_empty());
+    doc.saved_paths = manifest
+        .saved_paths
+        .iter()
+        .filter(|n| !n.path.subpaths.is_empty())
+        .cloned()
+        .collect();
     doc.for_each_layer(|l| {
         max_id = max_id.max(l.id);
         if !seen.insert(l.id) {
@@ -547,12 +556,17 @@ mod tests {
                 ],
             }],
         });
+        doc.saved_paths = vec![lumenply_doc::NamedPath {
+            name: "Outline".into(),
+            path: doc.work_path.clone().unwrap(),
+        }];
         let path = temp("rt.nge");
         save(&path, &doc).unwrap();
         let back = load(&path).unwrap();
 
         assert_eq!((back.width, back.height), (700, 300));
         assert_eq!(back.work_path, doc.work_path, "work path survives");
+        assert_eq!(back.saved_paths, doc.saved_paths, "named paths survive");
         assert_eq!(
             back.layers()[0].effects,
             doc.layers()[0].effects,

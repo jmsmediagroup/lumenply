@@ -137,10 +137,11 @@ None of these could be tested in the container.
 - [x] Pen tool and paths: cubic-bezier work path (click corners, drag curves,
       close on the first point; one undo step per path), fill / stroke /
       selection-from-path, saved in .nge
-- [~] Path editing: drag anchors and handles after placing (click selects a
+- [x] Path editing: drag anchors and handles after placing (click selects a
       node and shows its handles, symmetric handles stay mirrored, Backspace
       deletes the node); holes via even-odd across subpaths (fill and
-      path-to-selection). Still to do: multiple named paths
+      path-to-selection); multiple named paths (Save path + Paths list in
+      the pen options bar, saved in .lumen, every change undoable)
 - [x] Skew and non-uniform scale in free transform (edge handles stretch one
       axis, mirror across the centre; W/H/Rotate/Skew fields in the options bar)
 - [ ] Perspective and warp transforms (non-affine; needs a mesh resampler)

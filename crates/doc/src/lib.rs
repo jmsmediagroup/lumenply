@@ -612,9 +612,19 @@ pub struct Document {
     pub selection: Option<Selection>,
     /// The pen tool's work path; covered by undo and saved with projects.
     pub work_path: Option<VectorPath>,
+    /// Named paths kept alongside the work path (the Paths list); covered
+    /// by undo and saved with projects.
+    pub saved_paths: Vec<NamedPath>,
     /// Bottom-to-top.
     layers: Vec<Layer>,
     next_id: LayerId,
+}
+
+/// A path stored under a name in the document's Paths list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NamedPath {
+    pub name: String,
+    pub path: VectorPath,
 }
 
 /// One anchor of a vector path: the point plus absolute cubic-bezier
@@ -700,6 +710,7 @@ impl Document {
             height,
             selection: None,
             work_path: None,
+            saved_paths: Vec::new(),
             layers: Vec::new(),
             next_id: 1,
         }
@@ -712,6 +723,7 @@ impl Document {
             height,
             selection: None,
             work_path: None,
+            saved_paths: Vec::new(),
             layers,
             next_id,
         }

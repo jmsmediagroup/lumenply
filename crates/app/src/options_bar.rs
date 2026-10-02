@@ -314,6 +314,53 @@ impl App {
                                 self.pen_open = false;
                                 self.run(&SetWorkPath { path: None });
                             }
+                            ui.separator();
+                            if ui
+                                .add_enabled(has_path, egui::Button::new("Save path"))
+                                .on_hover_text("Keep a named copy in the document's Paths list")
+                                .clicked()
+                            {
+                                let name = format!("Path {}", self.editor.doc().saved_paths.len() + 1);
+                                self.run(&SaveWorkPath { name });
+                            }
+                            let names: Vec<String> = self
+                                .editor
+                                .doc()
+                                .saved_paths
+                                .iter()
+                                .map(|n| n.name.clone())
+                                .collect();
+                            if !names.is_empty() {
+                                let mut load = None;
+                                let mut delete = None;
+                                egui::ComboBox::from_id_salt("saved-paths")
+                                    .selected_text(format!("Paths ({})", names.len()))
+                                    .width(130.0)
+                                    .show_ui(ui, |ui| {
+                                        for (i, name) in names.iter().enumerate() {
+                                            ui.horizontal(|ui| {
+                                                if ui.selectable_label(false, name).clicked() {
+                                                    load = Some(i);
+                                                }
+                                                if ui
+                                                    .small_button("✕")
+                                                    .on_hover_text("Delete this saved path")
+                                                    .clicked()
+                                                {
+                                                    delete = Some(i);
+                                                }
+                                            });
+                                        }
+                                    });
+                                if let Some(i) = load {
+                                    self.pen_open = false;
+                                    self.pen_sel = None;
+                                    self.run(&UseSavedPath { index: i });
+                                }
+                                if let Some(i) = delete {
+                                    self.run(&DeleteSavedPath { index: i });
+                                }
+                            }
                         }
                         Tool::Hand => {
                             ui.label(RichText::new("Drag to pan, scroll to zoom").weak());
