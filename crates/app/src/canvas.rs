@@ -252,17 +252,29 @@ impl App {
                 let painter = painter.with_clip_rect(rect);
                 self.apply_view_cmd(rect);
 
+                // Scroll pans; Alt+scroll (or a pinch) zooms at the cursor.
+                let space = !ctx.wants_keyboard_input() && ctx.input(|i| i.key_down(Key::Space));
                 if resp.hovered() {
-                    let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
-                    let pinch = ctx.input(|i| i.zoom_delta());
-                    let factor = (scroll * 0.004).exp() * pinch;
+                    let (scroll, pinch, alt) =
+                        ctx.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers.alt));
+                    let factor = if alt {
+                        (scroll.y * 0.004).exp() * pinch
+                    } else {
+                        pinch
+                    };
                     if (factor - 1.0).abs() > 1e-4 {
                         if let Some(p) = resp.hover_pos() {
                             self.zoom_at(rect, p, factor);
                         }
+                    } else if !alt && scroll != Vec2::ZERO {
+                        self.pan += scroll;
+                    }
+                    if space {
+                        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
                     }
                 }
                 if resp.dragged_by(egui::PointerButton::Middle)
+                    || (space && resp.dragged())
                     || (self.tool == Tool::Hand && resp.dragged_by(egui::PointerButton::Primary))
                 {
                     self.pan += resp.drag_delta();
@@ -280,9 +292,10 @@ impl App {
                     (x >= 0.0 && y >= 0.0 && x < dw && y < dh).then_some((x as i32, y as i32))
                 });
 
+                // While Space pans, the active tool must not also fire.
                 if self.xform.is_some() {
                     self.handle_xform(ctx, &resp, to_doc, to_screen);
-                } else {
+                } else if !space {
                     self.handle_tool(ctx, &resp, to_doc);
                 }
 
