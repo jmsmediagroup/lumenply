@@ -69,8 +69,12 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
   `layout:layer=background`, `select:rect=X:Y:W:H`, `select:caf`,
   `crop:frame=X0:Y0:X1:Y1`, `guides:add=v:X`, `adj:add=gradient-map`,
   `adj:fill=gradient`, `liquify:demo`, `raw:open=PATH`, `layout:tool=shape`,
-  `shape:kind=star`, `shape:draw=X0:Y0:X1:Y1`, drags as
-  `popups:press=X:Y,popups:move=X:Y,popups:release=X:Y`; tokens that toggle
+  `shape:kind=star`, `shape:draw=X0:Y0:X1:Y1`, `gradient:open|style=…|draw=…`,
+  `brush:panel|tip=Name|set=key:value|stroke=X0:Y0:X1:Y1|import=PATH`,
+  `text:box=X:Y:W:H|edit|select=A:B|caret=I|commit`, `refine:…` (Select and
+  Mask), `retouch:…`, `export-as:…`; drags as
+  `popups:press=X:Y,popups:move=X:Y,popups:release=X:Y`, typing as
+  `popups:type=…`/`popups:key=Shift+W`; tokens that toggle
   view prefs such as `rulers`/`grid` save prefs — another reason for a scratch
   `HOME`), and
   `--window-size 960x640` for narrow layouts. Run screenshots with `HOME`
@@ -100,6 +104,12 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
   name (`resp.widget_info(..)` or `theme::a11y_name`); floating areas use
   `theme::BACKDROP_SENSE` so they swallow clicks without being Tab stops. `a11y_tests`
   in main.rs render the whole UI (`App::frame`) and fail on any unnamed control.
+- `Response::has_focus()` is false whenever the window itself is unfocused (as in
+  headless screenshot runs); check `ctx.memory(|m| m.has_focus(id))` instead.
+- **PSD fidelity is measured, not guessed**: `scripts/psd_corpus.py` renders the
+  public psd-tools and ag-psd test files (~480 real Photoshop files) with the CLI
+  and compares each with the composite Photoshop saved inside it. Run it before
+  and after any PSD reader or compositor change and compare the two result files.
 - Tests that run app frames must not autosave (see the `launch` helper in `a11y_tests`):
   a backup left in the test data folder opens the Recover dialog in every later test.
 - Pen pressure (`crates/app/src/pen.rs`): Windows pens arrive as egui touches with `force`;

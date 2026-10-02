@@ -77,7 +77,14 @@ None of these could be tested in the container.
 - [ ] HiDPI / display scaling (canvas maths assume `pixels_per_point` handled by egui)
 - [ ] Brush responsiveness at 4K in a release build; measure stroke latency
 - [ ] Run the CI workflow on GitHub and fix what breaks -- skip for now
-- [ ] Open real-world PSDs from Photoshop/Affinity/Photopea; collect failures as test files
+- [~] Open real-world PSDs: a corpus of 482 real Photoshop files (the psd-tools
+      and ag-psd test fixtures) renders through the CLI and is compared with
+      the composite Photoshop saved in each file (scripted; mean/p99 diff).
+      Baseline 2026-10-03: 412 open, 186 match within 1/255; the failures
+      are non-RGB modes and 32-bit, the differences mostly unimported layer
+      effects, fill opacity, missing blend modes and linear-vs-gamma blending
+      (see section 4). Still open: Affinity/Photopea files, a checked-in
+      regression subset
 
 ## 2. Performance
 
@@ -156,8 +163,14 @@ None of these could be tested in the container.
       blwh maps PS's six weights onto our three); PSB import (version 2:
       8-byte section/channel lengths, 4-byte RLE counts, 300k dim cap,
       wide-length block keys; .psb accepted by app and CLI, fixture
-      psd-tools-verified). Still open: PSB export, text layers as
-      editable PSD text, live filters as smart filters
+      psd-tools-verified). Masks as Photoshop stores them: the pixel mask
+      in channel −3 beside a vector mask, vector masks rasterised from their
+      path with path operations (combine/subtract/intersect/exclude),
+      mask density and feather, both masks multiplied; shape outlines an
+      even-odd shape can't hold keep Photoshop's pixels (corpus:
+      intersect-group 113.9 → 0, layer_mask_data 46.6 → 26.0). Still
+      open: PSB export, text layers as editable PSD text, live filters as
+      smart filters
 - [x] OpenRaster (.ora) import/export for GIMP/Krita interchange (layers, groups,
       opacity, visibility, the ten blend modes; masks baked in, adjustments and
       live filters skipped with warnings)
@@ -167,6 +180,16 @@ None of these could be tested in the container.
 
 - [x] Healing brush and spot healing (rim-diffusion colour, optional texture
       from a clone-style source; new Heal tool, key J, Spot toggle)
+- [x] Retouching as tool modes: Heal ▸ Spot (content-aware by default) /
+      Healing / Patch (Source/Destination, Content-Aware) / Move
+      (content-aware move, Adapt) / Red Eye; Brush ▸ Blur / Sharpen /
+      History (source = any history step, from the bar's From menu or a
+      History card's context menu); Eraser ▸ Background (Once/Continuous,
+      Contiguous, Protect FG) / Magic; Shift+J and Shift+E cycle modes; a
+      Sample menu (Current / Current & below / All) lets Patch and Spot work
+      on an empty layer; strokes heal as one region on a parallel membrane
+      solver (render::membrane, 900×600 in 0.06 s). Still open: Patch
+      Diffusion/Transparent, Move's Structure/Color, Healing "Aligned"
 - [x] Pen tool and paths: cubic-bezier work path (click corners, drag curves,
       close on the first point; one undo step per path), fill / stroke /
       selection-from-path, saved in .nge
@@ -184,11 +207,16 @@ None of these could be tested in the container.
       Perspective and Warp (straight into the mode); free transform has
       Perspective/Warp toggles (4×4 mesh, drag points, drag elsewhere to
       move all; disabled with a reason for smart objects)
-- [~] Brush engine: spacing jitter, dodge/burn, smudge (drags pixels along
-      the stroke from a per-dab snapshot), sponge (Sat+/Sat− scale chroma
-      around gamma luminance) and presets (shape parameters saved in
-      prefs.json; Save preset + dropdown in the brush bar). Still to do:
-      textures
+- [x] Brush engine: spacing jitter, dodge/burn, smudge, sponge, presets;
+      sampled tips (mip-mapped bilinear, angle/roundness) used by every
+      brush tool; shape dynamics (size/angle/roundness jitter, angle follows
+      stroke, flip), scattering, count, transfer (opacity/flow jitter),
+      colour dynamics, canvas-anchored paper grain; Brush settings panel
+      with tip picker; Photoshop .abr import (v1/v2, v6/v7/v10, RLE,
+      8/16-bit, preset names/spacing/size; 438-tip CC0 set in 0.1 s);
+      Edit ▸ Define brush tip; 5 generated tips; the last brush returns at
+      launch (ADR 0012). Still open: stroke-level opacity vs flow, pen
+      tilt/rotation, dual brush, ABR dynamics/textures
 - [x] Layer styles: drop shadow, outer glow and stroke as non-destructive
       per-layer effects (EFFECTS section in Properties, tile-seam-safe,
       saved in .nge; PSD/ORA warn instead of silently dropping)
@@ -268,6 +296,15 @@ None of these could be tested in the container.
       diamond, angle, scale, reverse, offset) compositing like pixel layers from
       a derived canvas cache; Layer ▸ New fill layer; PSD SoCo/GdFl round-trip
       (ADR 0008)
+- [x] Gradient tool: multi-stop gradients, Linear/Radial/Angle/Reflected/
+      Diamond, Reverse, Dither (deterministic, against 8-bit banding),
+      Transparency, opacity and blend mode, blended by the selection, locks
+      respected; paints layer masks; a Fill-layer mode makes an editable
+      gradient fill layer from the drag. Options bar: gradient swatch →
+      popover with presets (foreground→background/transparent, 10
+      built-ins, user presets in prefs) and the stop editor; style icons;
+      live preview with guide line, Shift 45°, Esc cancels. Still open:
+      screen-resolution preview for huge documents, editing after release
 - [x] Gradient stop editor (click to add, drag to move, drag off to remove,
       per-stop colour picker and opacity, presets), shared by Gradient Map and
       gradient fills
@@ -301,16 +338,37 @@ None of these could be tested in the container.
       psd-tools-verified; ORA bakes (ADR 0010)
 - [ ] Pattern fills (PSD imports them as pixels)
 - [~] Text: searchable font picker (system fonts via fontdb, .ttc face index
-      honoured), bold/italic/bold-italic (real faces, else synthetic oblique
-      and synthetic bold), alignment (left/centre/right), tracking in em/1000;
-      missing fonts render in DejaVu Sans with a "Missing fonts" notice on open;
-      Text-tool clicks edit or reposition the active text (Shift+click or
-      "New text" adds a layer). Still to do: on-canvas caret editing,
-      editable PSD text (TySh; export rasterises and names the font)
+      honoured), bold/italic (real faces, else synthetic), tracking;
+      missing fonts render in DejaVu Sans with a notice. On-canvas editing:
+      caret, mouse/keyboard selection (word/line jumps, multi-click),
+      clipboard, in-session undo, Esc/Cmd+Enter/click-outside commit as one
+      step, Cancel reverts, empty new text leaves no layer. Paragraph text:
+      drag a box, word wrap, left/centre/right/justify, resize handles,
+      overflow marker, Point⇄Paragraph. Character options: leading,
+      baseline shift, all caps, metrics kerning, underline, strikethrough;
+      per-character colour/size/bold/italic/underline/strike (ADR 0013).
+      Still open: editable PSD text (TySh), IME pre-edit display,
+      per-character fonts
 - [x] Animated marching ants (boundary dashes march; huge outlines fall back
       to the static texture)
 - [x] Select by colour range (Select menu + palette: fuzziness slider with live
       marching-ants preview, soft graded edges, cancel undoes)
+- [x] Select and Mask (Select menu, Option+Cmd+R, palette): full-window
+      workspace — overlay / on black / on white / black & white / marching
+      ants and Show Edge, zoom and pan; Radius, Smart Radius, Refine Edge
+      brush, Smooth, Feather, Contrast, Shift Edge, Decontaminate Colours;
+      output to selection / layer mask / new layer / new layer with mask,
+      one undo step each. Engine core::refine: local colour-cluster matting
+      in linear light + guided filter (1800×1205 in ~0.1 s). Still open:
+      quick-select/lasso inside, refining an existing mask, a preview
+      worker thread, closed-form matting for hair
+- [x] Smart filters (ADR 0011): a per-layer filter stack (enable, opacity,
+      blend, one filter mask from the selection) on pixel, smart, text, fill
+      and shape layers; the Filter menu adds them on smart objects, Filter ▸
+      Convert for smart filters; Layers sub-rows and a Properties section;
+      tile-exact incremental cache; .lumen round trip; PSD/ORA bake with a
+      warning; GPU falls back to CPU. Still open: painting the filter mask,
+      PSD smart filters, faster drags on huge layers
 - [x] Quick-mask mode (Q): paint the selection under the classic red overlay —
       white selects, black deselects, live while stroking
 - [ ] AI tools (local ONNX): subject select, upscaling — see project overview
