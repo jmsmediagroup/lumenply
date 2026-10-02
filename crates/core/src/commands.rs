@@ -2577,7 +2577,7 @@ impl Command for SetBlendMode {
     }
 
     fn label(&self) -> String {
-        format!("Blend mode: {}", self.blend.name())
+        format!("Blend mode: {}", self.blend.label())
     }
 
     fn apply(&self, doc: &mut Document) -> EditResult {

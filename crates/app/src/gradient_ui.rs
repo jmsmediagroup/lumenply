@@ -353,17 +353,18 @@ impl App {
         style_buttons(ui, &mut self.gradient.style);
         ui.separator();
 
-        let r = egui::ComboBox::from_id_salt("gradient-blend")
-            .selected_text(blend_label(self.gradient.blend))
-            .width(if tier == Tier::Tight { 78.0 } else { 96.0 })
-            .show_ui(ui, |ui| {
-                popup_style(ui);
-                for m in BlendMode::ALL {
-                    ui.selectable_value(&mut self.gradient.blend, m, blend_label(m));
-                }
-            })
-            .response;
-        a11y_name(&r, "Gradient blend mode");
+        let mut sel = Some(self.gradient.blend);
+        let r = crate::blend_ui::blend_combo(
+            ui,
+            "gradient-blend",
+            "Gradient blend mode",
+            Some(if tier == Tier::Tight { 78.0 } else { 96.0 }),
+            &mut sel,
+            false,
+        );
+        if let Some(m) = sel {
+            self.gradient.blend = m;
+        }
         r.on_hover_text("How the gradient blends with the pixels under it");
         let mut op = self.gradient.opacity * 100.0;
         let changed = if tier == Tier::Tight {
@@ -901,21 +902,6 @@ fn preset_chip(ui: &mut egui::Ui, name: &str, g: &Gradient, on: bool) -> bool {
     chip.on_hover_text(name).clicked()
 }
 
-/// A blend mode's name for menus ("normal" → "Normal", "hard-light" →
-/// "Hard Light").
-fn blend_label(m: BlendMode) -> String {
-    m.name()
-        .split(['-', '_', ' '])
-        .map(|w| {
-            let mut c = w.chars();
-            c.next()
-                .map(|f| f.to_uppercase().chain(c).collect::<String>())
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -979,8 +965,8 @@ mod tests {
                 "Transparent Rainbow"
             ]
         );
-        assert_eq!(blend_label(BlendMode::HardLight), "Hard Light");
-        assert_eq!(blend_label(BlendMode::Normal), "Normal");
+        assert_eq!(BlendMode::HardLight.label(), "Hard Light");
+        assert_eq!(BlendMode::Normal.label(), "Normal");
         // Spectrum's sixth stop is magenta at 5/6.
         let s = &builtin_presets()[6].1;
         assert_eq!(s.stops[5].color, [1.0, 0.0, 1.0]);

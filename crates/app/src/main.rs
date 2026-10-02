@@ -23,6 +23,7 @@ use lumenply_io::project;
 use lumenply_tiles::{Affine, Raster, Rect};
 
 mod adjust_ui;
+mod blend_ui;
 mod brand;
 mod camera_raw;
 mod canvas;
