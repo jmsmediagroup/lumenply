@@ -67,7 +67,9 @@ Legend: `[x]` done and tested · `[~]` done but unverified or partial · `[ ]` n
 
 None of these could be tested in the container.
 
-- [ ] App builds and launches on Windows, macOS and Linux (X11 and Wayland/XWayland)
+- [~] App builds and launches on Windows, macOS and Linux (X11 and Wayland/XWayland)
+      — macOS (Apple Silicon, 2026-10-02): builds clean (tests, clippy, fmt),
+      launches and renders; Windows and Linux still unverified
 - [ ] Keyboard shortcuts: V B E S G Shift+G W L Shift+L T I M Shift+M H [ ] 0 1,
       Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y, Ctrl+A/D/Shift+I, Ctrl+S/O/T/G, Shift+F5, Delete,
       Enter/Esc in free transform
@@ -139,6 +141,20 @@ None of these could be tested in the container.
 
 ---
 
+## Fixed after code review (2026-10-02)
+
+- `Mask::combine` seeded new tiles at 0 instead of the mask default (broke
+  Select All + subtract/intersect)
+- masks were corrupted by move/transform/resize/rotate/flip (zero tiles pruned,
+  area outside tiles reset); masks now transform through `transform_mask`
+- project save is atomic (temp file + rename); a failed save no longer
+  destroys the existing file
+- PSD reader and .nge loader hardened against malformed/malicious files
+  (bounds checks, size caps, duplicate-id and coordinate validation)
+- blur radii sanitized (NaN/negative/infinite); curves no longer panic on NaN
+- app shell: shortcuts no longer fire during dialogs, drags or free transform;
+  stale transform previews cleared; clone single-click offset fixed
+
 ## Known limitations and debts
 
 - Pressure is fixed at 1.0 in the app (engine supports it).
@@ -146,4 +162,4 @@ None of these could be tested in the container.
 - Text layers cannot be scaled or rotated without rasterizing.
 - The selection outline is static, not animated.
 - `LICENSE` is a placeholder pointing to the GPLv3 text.
-- No git history yet: run `git init` before the first change.
+
