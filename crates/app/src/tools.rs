@@ -438,9 +438,9 @@ pub(crate) fn draw_icon(p: &egui::Painter, r: egui::Rect, tool: Tool, c: Color32
                 ((b - n).x, (b - n).y),
                 ((a - n).x, (a - n).y),
             ]));
-            for (x, y) in [(7.0, 7.0), (9.0, 9.0), (9.0, 7.0), (7.0, 9.0)] {
-                p.circle_filled(g(x, y), 0.9 * k, c);
-            }
+            // The healing cross on the pad.
+            p.add(line(&[(6.4, 8.0), (9.6, 8.0)]));
+            p.add(line(&[(8.0, 6.4), (8.0, 9.6)]));
         }
         Tool::Bucket => {
             // A tipped bucket pouring a drop.
@@ -484,20 +484,24 @@ pub(crate) fn draw_icon(p: &egui::Painter, r: egui::Rect, tool: Tool, c: Color32
             p.add(line(&[(5.5, 14.5), (10.5, 14.5)]));
         }
         Tool::Eyedropper => {
-            // A pipette: squeeze bulb, collar, glass tube, tip.
-            let a = egui::vec2(3.5, 12.5);
-            let b = egui::vec2(9.5, 6.5);
-            let d = (b - a).normalized();
-            let n = egui::vec2(-d.y, d.x) * 1.7;
-            p.add(closed(&[
-                ((a + n).x, (a + n).y),
-                ((b + n).x, (b + n).y),
-                ((b - n).x, (b - n).y),
-                ((a - n).x, (a - n).y),
-            ]));
-            p.add(line(&[(7.8, 4.6), (11.4, 8.2)]));
-            p.circle_stroke(g(12.2, 3.8), 2.4 * k, s);
-            p.add(line(&[(3.0, 13.0), (1.2, 14.8)]));
+            // A pipette: a slim glass tube, a collar, and a squeeze bulb
+            // continuing the same diagonal, with the tip at bottom left.
+            let quad = |a: egui::Vec2, b: egui::Vec2, half: f32, cap: f32| {
+                let d = (b - a).normalized();
+                let n = egui::vec2(-d.y, d.x) * half;
+                let tip = b + d * cap;
+                closed(&[
+                    ((a + n).x, (a + n).y),
+                    ((b + n).x, (b + n).y),
+                    (tip.x, tip.y),
+                    ((b - n).x, (b - n).y),
+                    ((a - n).x, (a - n).y),
+                ])
+            };
+            p.add(quad(egui::vec2(3.6, 12.4), egui::vec2(9.0, 7.0), 1.2, 0.0));
+            p.add(line(&[(7.9, 4.9), (11.1, 8.1)]));
+            p.add(quad(egui::vec2(10.6, 5.4), egui::vec2(13.0, 3.0), 2.0, 1.6));
+            p.add(line(&[(3.6, 12.4), (1.3, 14.7)]));
         }
         Tool::Hand => {
             // An open hand: thumb, four fingers, palm.

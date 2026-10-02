@@ -29,7 +29,8 @@ impl App {
     /// `layout:about` / `recover` / `confirm-close` / `confirm-tab` /
     /// `export-jpeg` open those dialogs, `layout:history` folds or opens the history strip,
     /// `layout:focus-tool=<name>` gives a rail button keyboard focus,
-    /// `layout:live-blur` adds a live blur layer above the active one.
+    /// `layout:live-blur` adds a live blur layer above the active one,
+    /// `layout:fx` turns on a drop shadow and a stroke on the active layer.
     fn debug_layout(&mut self, ctx: &egui::Context, tok: &str) -> bool {
         let Some(tok) = tok.strip_prefix("layout:") else {
             return false;
@@ -85,6 +86,17 @@ impl App {
             // user's preferences.
             "history" => self.prefs.history_collapsed = !self.prefs.history_collapsed,
             "live-blur" => self.add_filter_layer(Filter::GaussianBlur { radius: 8.0 }),
+            // Drop shadow and stroke on the active layer (effects section).
+            "fx" => {
+                if let Some(layer) = self.active {
+                    let effects = lumenply_doc::LayerEffects {
+                        drop_shadow: Some(lumenply_doc::ShadowFx::default()),
+                        stroke: Some(lumenply_doc::StrokeFx::default()),
+                        ..Default::default()
+                    };
+                    self.run(&SetLayerEffects { layer, effects });
+                }
+            }
             _ => return false,
         }
         true
