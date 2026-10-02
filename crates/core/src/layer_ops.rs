@@ -196,14 +196,19 @@ pub fn merge_down_kind(doc: &Document, id: LayerId) -> Result<MergeKind, &'stati
     if !l.visible {
         return Err("The layer is hidden");
     }
-    if l.locks.all {
+    // Locks count with their enclosing groups' (see `locks`).
+    let own = crate::locks::effective_locks(doc, id);
+    if own.all {
         return Err("The layer is locked");
     }
     if l.children().is_some() {
+        if own.pixels {
+            return Err("The layer's pixels are locked");
+        }
         return Ok(MergeKind::Group);
     }
     if clip_baseable(l) && list.get(i + 1).is_some_and(|above| above.clip) {
-        if l.locks.pixels {
+        if own.pixels || own.transparency {
             return Err("The layer's pixels are locked");
         }
         return Ok(MergeKind::ClippingMask);
@@ -221,7 +226,10 @@ pub fn merge_down_kind(doc: &Document, id: LayerId) -> Result<MergeKind, &'stati
         LayerContent::Group(_) => return Err("The layer below is a group; merge the group first"),
         _ => {}
     }
-    if below.locks.pixels || below.locks.all {
+    // Merging paints onto the lower layer: its pixel and transparency
+    // locks refuse that (its position lock doesn't: nothing moves).
+    let under = crate::locks::effective_locks(doc, below.id);
+    if under.pixels || under.transparency {
         return Err("The layer below is locked");
     }
     Ok(MergeKind::Down)
@@ -998,5 +1006,54 @@ mod tests {
         let mut empty = Editor::new(Document::new(4, 4));
         assert_eq!(stamp_visible_block(empty.doc()), Some("Nothing is visible"));
         assert!(empty.execute(&StampVisible { name: String::new() }).is_err());
+    }
+
+    #[test]
+    fn merging_respects_locks() {
+        use crate::locks::SetLayerLocks;
+        use lumenply_doc::LayerLocks;
+        let (mut ed, b, a) = two_layers();
+        for (locks, why) in [
+            (
+                LayerLocks {
+                    transparency: true,
+                    ..LayerLocks::NONE
+                },
+                Some("The layer below is locked"),
+            ),
+            (
+                LayerLocks {
+                    pixels: true,
+                    ..LayerLocks::NONE
+                },
+                Some("The layer below is locked"),
+            ),
+            (
+                LayerLocks {
+                    position: true,
+                    ..LayerLocks::NONE
+                },
+                None,
+            ),
+        ] {
+            ed.execute(&SetLayerLocks { layer: b, locks }).unwrap();
+            assert_eq!(merge_down_kind(ed.doc(), a).err(), why, "{locks:?}");
+        }
+        ed.execute(&SetLayerLocks {
+            layer: a,
+            locks: LayerLocks {
+                all: true,
+                ..LayerLocks::NONE
+            },
+        })
+        .unwrap();
+        assert_eq!(merge_down_kind(ed.doc(), a), Err("The layer is locked"));
+        // Whole-document merges are not limited by locks, as in Photoshop.
+        ed.execute(&MergeVisible).unwrap();
+        assert_eq!(ed.doc().layers().len(), 1);
+        assert!(
+            ed.doc().layer(b).unwrap().locks.position,
+            "the merged layer keeps the lower one's locks"
+        );
     }
 }
