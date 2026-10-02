@@ -538,6 +538,8 @@ impl App {
     }
 
     fn filter_menu(&mut self, ui: &mut egui::Ui) {
+        self.act(ui, "Liquify...", "liquify");
+        menu_separator(ui);
         for (name, f) in filter_presets() {
             self.act(ui, &format!("{name}..."), palette::filter_id(&f));
         }

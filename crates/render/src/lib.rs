@@ -16,12 +16,14 @@
 pub mod cache;
 pub mod filters;
 pub mod gpu;
+pub mod liquify;
 pub mod text;
 pub mod transform;
 
 pub use cache::BelowCache;
 pub use filters::{apply_filter, filter_raster, Filter};
 pub use gpu::GpuCompositor;
+pub use liquify::{liquify_preview, liquify_store, Displacement, LiquifyTool};
 pub use transform::{
     perspective_mask, perspective_store, perspective_store_h, sample_bilinear, transform_mask,
     transform_store, warp_mask, warp_store, Homography, WarpGrid,

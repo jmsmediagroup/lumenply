@@ -13,6 +13,7 @@ impl App {
             || self.debug_text(ctx, tok)
             || self.debug_color(ctx, tok)
             || self.debug_start(ctx, tok)
+            || self.debug_liquify(ctx, tok)
     }
 
     /// Menus, popups, context menus and combo boxes (`popups:...`).

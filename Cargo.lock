@@ -2071,6 +2071,7 @@ dependencies = [
  "lumenply-io",
  "lumenply-render",
  "lumenply-tiles",
+ "rayon",
  "rfd",
  "serde",
  "serde_json",

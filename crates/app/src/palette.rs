@@ -115,6 +115,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Actual pixels", "actual"),
     ("Show or hide the history strip", "toggle-history"),
     ("About Lumenply", "about"),
+    ("Liquify...", "liquify"),
 ];
 
 /// The id of the destructive filter dialog for a filter kind.
@@ -394,6 +395,10 @@ impl App {
             "xform" if !pixel && !smart => Some("Select a pixel layer or smart object first"),
             "perspective" | "warp" if smart => Some("Rasterize the smart object first"),
             "perspective" | "warp" if !pixel => need_pixel,
+            "liquify" if smart || layer.is_some_and(|l| l.text_layer().is_some()) => {
+                Some("Rasterize the layer first")
+            }
+            "liquify" if !pixel => need_pixel,
             id if id.starts_with("filter-") && !pixel => Some("Filters apply to a pixel layer"),
             "deselect" | "feather" if !selection => need_selection,
             "crop" => {
@@ -606,6 +611,7 @@ impl App {
             }
             "prefs" => self.dialog = Some(Dialog::Preferences(self.prefs.clone(), None)),
             "about" => self.dialog = Some(Dialog::About),
+            "liquify" => self.open_liquify(),
             "zoom-in" => self.view_cmd = Some(ViewCmd::ZoomIn),
             "zoom-out" => self.view_cmd = Some(ViewCmd::ZoomOut),
             "toggle-history" => {
@@ -641,7 +647,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 64); // + zoom in, zoom out, history strip
+        assert_eq!(n, 65); // + zoom in, zoom out, history strip, liquify
     }
 
     #[test]

@@ -22,6 +22,7 @@ pub(crate) struct Chord {
 /// holds undo's) must be consumed first.
 pub(crate) const SHORTCUTS: &[(&str, &str, bool, bool, &str)] = &[
     ("redo", "Redo", true, true, "Z"),
+    ("liquify", "Liquify", true, true, "X"),
     ("undo", "Undo", true, false, "Z"),
     ("invert-sel", "Invert selection", true, true, "I"),
     ("select-all", "Select all", true, false, "A"),

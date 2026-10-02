@@ -8,6 +8,7 @@
 
 pub mod commands;
 pub mod demo;
+pub mod liquify;
 
 use lumenply_doc::{Document, LayerId};
 

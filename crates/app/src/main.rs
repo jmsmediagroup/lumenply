@@ -31,6 +31,7 @@ mod dialogs;
 mod histogram;
 mod history;
 mod layers;
+mod liquify;
 mod menu;
 mod options_bar;
 mod palette;
@@ -253,6 +254,8 @@ struct App {
     text_align: TextAlign,
     /// "New text" pressed: the next Text-tool click starts a new layer.
     text_new_armed: bool,
+    /// Filter > Liquify's workspace, while open (it replaces the editor UI).
+    liquify: Option<Box<liquify::LiquifyState>>,
     /// Clone source point (document space), and whether the next click picks it.
     clone_source: Option<(f32, f32)>,
     clone_picking: bool,
@@ -418,6 +421,7 @@ impl App {
             text_font: String::new(),
             text_align: TextAlign::Left,
             text_new_armed: false,
+            liquify: None,
             clone_source: None,
             clone_picking: true,
             clone_offset: (0, 0),
@@ -1213,6 +1217,11 @@ impl eframe::App for App {
 impl App {
     /// One UI frame; `update` without the eframe window, so tests can run it.
     fn frame(&mut self, ctx: &egui::Context) {
+        if self.liquify.is_some() {
+            self.liquify_ui(ctx);
+            self.debug_screenshot(ctx);
+            return;
+        }
         self.handle_file_drop(ctx);
         // Intercept closing the window while there are unsaved changes.
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close && self.any_unsaved() {
@@ -1452,7 +1461,7 @@ mod smart_tests {
 }
 
 #[cfg(test)]
-mod a11y_tests {
+pub(crate) mod a11y_tests {
     use super::*;
     use egui::accesskit::{Action, Role};
 
@@ -1460,7 +1469,7 @@ mod a11y_tests {
     /// that a screen reader could only announce as an unnamed control.
     /// egui's own scroll bars (thin unnamed strips) can't be named from
     /// outside egui and are left out.
-    fn nameless(app: &mut App, ctx: &egui::Context) -> Vec<String> {
+    pub(crate) fn nameless(app: &mut App, ctx: &egui::Context) -> Vec<String> {
         let mut found = Vec::new();
         for _ in 0..3 {
             let raw = egui::RawInput {
@@ -1510,7 +1519,7 @@ mod a11y_tests {
         app
     }
 
-    fn ctx() -> egui::Context {
+    pub(crate) fn ctx() -> egui::Context {
         let ctx = egui::Context::default();
         theme::install(&ctx);
         ctx.enable_accesskit();
