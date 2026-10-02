@@ -122,6 +122,11 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Edit smart object contents", "smart-edit"),
     ("Save selection...", "save-selection"),
     ("Trim...", "trim"),
+    ("Cut", "cut"),
+    ("Copy", "copy"),
+    ("Copy merged", "copy-merged"),
+    ("Paste", "paste"),
+    ("Paste in place", "paste-in-place"),
     ("Keyboard shortcuts", "shortcuts"),
     ("Reveal all", "reveal-all"),
     ("Rotate image by angle...", "rot-angle"),
@@ -166,6 +171,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("New fill layer: solid color", "fill-solid"),
     ("New fill layer: gradient", "fill-gradient"),
     ("New shape layer from path", "shape-from-path"),
+    ("Select and Mask...", "select-mask"),
     ("Spot Healing Brush (Heal ▸ Spot)", "tool-spot-heal"),
     ("Patch tool (Heal ▸ Patch)", "tool-patch"),
     ("Content-Aware Move tool (Heal ▸ Move)", "tool-content-move"),
@@ -538,6 +544,8 @@ impl App {
             "liquify" if !pixel => need_pixel,
             "smart-edit" | "smart-replace" if !smart => Some("Select a smart object first"),
             "save-selection" if !selection => need_selection,
+            "cut" if !pixel => need_pixel,
+            "copy" if layer.and_then(|l| l.raster_store()).is_none() => Some("Select a layer with pixels"),
             "load-selection" if doc.saved_selections.is_empty() => Some("No saved selections yet"),
             "reveal-all" if lumenply_core::canvas_ops::RevealAll::frame(doc) == doc.canvas() => {
                 Some("Everything is already on the canvas")
@@ -593,6 +601,7 @@ impl App {
             }
             "fill-dialog" | "content-aware" if !pixel => need_pixel,
             "content-aware" if !selection => Some("Select the area to fill first"),
+            "select-mask" if !selection => need_selection,
             _ => None,
         }
     }
@@ -610,6 +619,11 @@ impl App {
         }
         let (m, k) = match id {
             "fill" => (M::SHIFT, Key::F5),
+            "cut" => (M::COMMAND, Key::X),
+            "copy" => (M::COMMAND, Key::C),
+            "copy-merged" => (M::COMMAND | M::SHIFT, Key::C),
+            "paste" => (M::COMMAND, Key::V),
+            "paste-in-place" => (M::COMMAND | M::SHIFT, Key::V),
             "fill-dialog" => (M::SHIFT, Key::Backspace),
             "clear" => return "Delete".into(),
             // egui spells these keys "Equals"/"Minus"; show the symbols.
@@ -622,6 +636,7 @@ impl App {
             "actual" => (M::NONE, Key::Num1),
             "quick-mask" => (M::NONE, Key::Q),
             "palette" => (M::COMMAND, Key::K),
+            "select-mask" => (M::COMMAND | M::ALT, Key::R),
             _ => return String::new(),
         };
         shortcut_text(ctx, m, k)
@@ -779,6 +794,15 @@ impl App {
             "prefs" => self.dialog = Some(Dialog::Preferences(self.prefs.clone(), None)),
             "about" => self.dialog = Some(Dialog::About),
             "shortcuts" => self.dialog = Some(Dialog::Shortcuts),
+            "cut" => self.cut_pixels(),
+            "copy" => {
+                self.copy_pixels(false);
+            }
+            "copy-merged" => {
+                self.copy_pixels(true);
+            }
+            "paste" => self.paste_pixels(false),
+            "paste-in-place" => self.paste_pixels(true),
             "liquify" => self.open_liquify(),
             "export-as" => self.open_export_as(),
             "smart-edit" => self.edit_smart_contents(),
@@ -832,6 +856,7 @@ impl App {
                 let margin = self.content_aware_margin();
                 self.dialog = Some(Dialog::Fill(aware, margin, 0));
             }
+            "select-mask" => self.open_select_mask(),
             aid if guides::VIEW_ACTIONS.contains(&aid) => self.run_view_aid(aid),
             tool if self.retouch_tool_action(tool) => {}
             filter if filter.starts_with("filter-") => {
@@ -860,7 +885,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 122); // + shape from path, retouching modes
+        assert_eq!(n, 128); // + Select and Mask, retouching modes
     }
 
     #[test]

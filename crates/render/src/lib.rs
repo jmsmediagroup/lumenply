@@ -19,6 +19,7 @@ pub mod fill;
 pub mod filters;
 mod filters_more;
 pub mod gpu;
+pub mod gradient_draw;
 pub mod inpaint;
 pub mod liquify;
 pub mod membrane;

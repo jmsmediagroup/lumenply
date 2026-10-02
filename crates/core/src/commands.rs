@@ -103,7 +103,7 @@ impl Command for AddAdjustmentLayer {
 }
 
 /// Insert `layer` directly above `above` (same sibling list), or on top.
-fn insert_above(doc: &mut Document, layer: Layer, above: Option<LayerId>) -> EditResult {
+pub(crate) fn insert_above(doc: &mut Document, layer: Layer, above: Option<LayerId>) -> EditResult {
     match above.and_then(|a| doc.siblings_mut(a).map(|list| (a, list))) {
         Some((a, list)) => {
             let i = list.iter().position(|l| l.id == a).expect("in siblings");

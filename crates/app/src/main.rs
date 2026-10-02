@@ -26,12 +26,14 @@ mod adjust_ui;
 mod brand;
 mod camera_raw;
 mod canvas;
+mod clipboard;
 mod color_picker;
 mod crop;
 mod debug;
 mod demo;
 mod dialogs;
 mod export_as;
+mod gradient_ui;
 mod guides;
 mod histogram;
 mod history;
@@ -48,6 +50,7 @@ mod quick_select_tool;
 mod retouch_ui;
 #[cfg(test)]
 mod select_fill_tests;
+mod select_mask;
 mod session;
 mod shape_tool;
 mod smart_contents;
@@ -284,8 +287,6 @@ struct App {
     tolerance: f32,
     contiguous: bool,
     sample_merged: bool,
-    gradient_kind: GradientKind,
-    gradient_to_transparent: bool,
     text_size: f32,
     text_bold: bool,
     text_italic: bool,
@@ -293,6 +294,8 @@ struct App {
     text_align: TextAlign,
     /// "New text" pressed: the next Text-tool click starts a new layer.
     text_new_armed: bool,
+    /// Edit ▸ Copy's pixels at full precision.
+    clip: Option<clipboard::Clip>,
     /// Quick Selection (the Wand tool's sibling mode) and its stroke.
     quick: quick_select_tool::QuickSelectState,
     /// Identifies the live document across tab switches (contents tabs
@@ -307,6 +310,10 @@ struct App {
     liquify: Option<Box<liquify::LiquifyState>>,
     /// The Camera Raw develop workspace, while a RAW file is being opened.
     camera_raw: Option<Box<camera_raw::CameraRawState>>,
+    /// Select ▸ Select and Mask's workspace, while open (it replaces the
+    /// editor UI), and the settings it remembers between openings.
+    select_mask: Option<Box<select_mask::SelectMaskState>>,
+    select_mask_prefs: select_mask::SelectMaskPrefs,
     /// Clone source point (document space), and whether the next click picks it.
     clone_source: Option<(f32, f32)>,
     clone_picking: bool,
@@ -409,6 +416,8 @@ struct App {
     aids: guides::ViewAids,
     /// The Shape tool's options and drag (shape_tool.rs).
     shape: shape_tool::ShapeTool,
+    /// The Gradient tool's options, popover and drag (gradient_ui.rs).
+    gradient: gradient_ui::GradientTool,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -445,6 +454,7 @@ impl App {
     fn new(cc: &eframe::CreationContext<'_>, args: &[String]) -> Self {
         theme::install(&cc.egui_ctx);
         pen::install();
+        clipboard::install();
         macos_open::set_waker(&cc.egui_ctx);
         Self::launch(args)
     }
@@ -474,8 +484,6 @@ impl App {
             tolerance: 0.12,
             contiguous: true,
             sample_merged: false,
-            gradient_kind: GradientKind::Linear,
-            gradient_to_transparent: false,
             text_size: 72.0,
             text_bold: false,
             text_italic: false,
@@ -488,7 +496,10 @@ impl App {
             smart_link: None,
             export_as: None,
             quick: Default::default(),
+            clip: None,
             camera_raw: None,
+            select_mask: None,
+            select_mask_prefs: Default::default(),
             clone_source: None,
             clone_picking: true,
             clone_offset: (0, 0),
@@ -570,6 +581,7 @@ impl App {
             crop: crop::CropTool::default(),
             aids: guides::ViewAids::default(),
             shape: Default::default(),
+            gradient: Default::default(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -928,22 +940,6 @@ impl App {
         }
     }
 
-    fn gradient_command(&self, layer: LayerId, start: (f32, f32), end: (f32, f32)) -> GradientFill {
-        let from = linear_rgba(self.brush_rgb, 1.0);
-        let to = if self.gradient_to_transparent {
-            [from[0], from[1], from[2], 0.0]
-        } else {
-            linear_rgba(self.bg_rgb, 1.0)
-        };
-        GradientFill {
-            layer,
-            start,
-            end,
-            colors: [from, to],
-            kind: self.gradient_kind,
-        }
-    }
-
     /// The command a brush stroke becomes: paint pixels, paint the mask, or clone.
     /// Flip quick-mask mode; the overlay swaps between red coverage and
     /// marching ants on the next refresh.
@@ -1073,6 +1069,7 @@ impl App {
         // free transform consume it first for their own cancel).
         if self.editor.doc().selection.is_some()
             && !color_picker::is_open(ctx)
+            && !self.gradient.open
             && ctx.input_mut(|i| i.consume_key(M::NONE, Key::Escape))
         {
             self.run(&SetSelection { selection: None });
@@ -1086,6 +1083,10 @@ impl App {
             // it goes first.
             if i.consume_key(M::COMMAND | M::SHIFT | M::ALT, Key::E) {
                 fired.push("stamp-visible");
+            }
+            // Select and Mask (Alt+Cmd+R) holds the rulers chord.
+            if i.consume_key(M::COMMAND | M::ALT, Key::R) {
+                fired.push("select-mask");
             }
             for (id, ..) in session::SHORTCUTS {
                 if let Some((m, k)) = session::resolve_chord(&self.prefs, id) {
@@ -1374,6 +1375,11 @@ impl App {
             self.debug_screenshot(ctx);
             return;
         }
+        if self.select_mask.is_some() {
+            self.select_mask_ui(ctx);
+            self.debug_screenshot(ctx);
+            return;
+        }
         if self.export_as.is_some() {
             self.export_as_ui(ctx);
             self.debug_screenshot(ctx);
@@ -1382,6 +1388,9 @@ impl App {
         // Files opened from Finder (or the Dock) while running or at launch.
         for path in macos_open::take_pending() {
             self.open_path(&path);
+        }
+        if !self.no_doc {
+            self.clipboard_keys(ctx);
         }
         self.handle_file_drop(ctx);
         // Intercept closing the window while there are unsaved changes.
