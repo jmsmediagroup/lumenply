@@ -1141,7 +1141,7 @@ impl App {
                     .data_mut(|d| d.get_persisted::<f32>(split_id))
                     .map_or(layers_auto, |h| h.clamp(layers_min, layers_max));
                 let props_max = (avail - quick_h - layers_want - 24.0).max(72.0);
-                egui::ScrollArea::vertical()
+                let scroll_out = egui::ScrollArea::vertical()
                     .id_salt("props")
                     .max_height(props_max)
                     .auto_shrink([false, true])
@@ -1154,6 +1154,7 @@ impl App {
                             })
                             .show(ui, |ui| self.properties_ui(ui));
                     });
+                a11y_scroll(ui.ctx(), &scroll_out, "Properties");
                 let (bar, grip) =
                     ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), Sense::click_and_drag());
                 let live = grip.hovered() || grip.dragged();
@@ -1196,6 +1197,22 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.frame(ctx);
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.shot.is_some() {
+            return; // a screenshot run never counts as a user exit
+        }
+        // An intentional exit needs no crash recovery; a stale backup would
+        // only raise a misleading prompt next launch.
+        session::remove_autosave();
+    }
+}
+
+impl App {
+    /// One UI frame; `update` without the eframe window, so tests can run it.
+    fn frame(&mut self, ctx: &egui::Context) {
         self.handle_file_drop(ctx);
         // Intercept closing the window while there are unsaved changes.
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close && self.any_unsaved() {
@@ -1247,15 +1264,6 @@ impl eframe::App for App {
         }
         self.splash_ui(ctx);
         self.debug_screenshot(ctx);
-    }
-
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        if self.shot.is_some() {
-            return; // a screenshot run never counts as a user exit
-        }
-        // An intentional exit needs no crash recovery; a stale backup would
-        // only raise a misleading prompt next launch.
-        session::remove_autosave();
     }
 }
 
@@ -1440,5 +1448,228 @@ mod smart_tests {
         let _ = ctx.run(raw, |ctx| app.shortcuts(ctx));
         assert!(!app.text_new_armed, "Esc disarms New text");
         assert_eq!(app.status, "New text cancelled");
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use egui::accesskit::{Action, Role};
+
+    /// Runs frames and returns every keyboard-reachable accessibility node
+    /// that a screen reader could only announce as an unnamed control.
+    /// egui's own scroll bars (thin unnamed strips) can't be named from
+    /// outside egui and are left out.
+    fn nameless(app: &mut App, ctx: &egui::Context) -> Vec<String> {
+        let mut found = Vec::new();
+        for _ in 0..3 {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            let out = ctx.run(raw, |ctx| app.frame(ctx));
+            let update = out
+                .platform_output
+                .accesskit_update
+                .expect("accesskit is enabled");
+            found = update
+                .nodes
+                .iter()
+                .filter(|(_, n)| n.supports_action(Action::Focus))
+                .filter(|(_, n)| n.name().is_none_or(|s| s.trim().is_empty()))
+                .filter(|(_, n)| {
+                    let b = n.bounds().unwrap_or_default();
+                    !(n.role() == Role::Unknown && b.width().min(b.height()) <= 10.0)
+                })
+                .map(|(_, n)| {
+                    let b = n.bounds().unwrap_or_default();
+                    format!(
+                        "{:?} at ({:.0}, {:.0}) {:.0}×{:.0}",
+                        n.role(),
+                        b.x0,
+                        b.y0,
+                        b.width(),
+                        b.height()
+                    )
+                })
+                .collect();
+        }
+        found
+    }
+
+    /// The app with no dialog up, and no autosave while frames run: a
+    /// backup left in the test data folder would greet every later launch
+    /// with the Recover dialog.
+    fn launch(args: &[String]) -> App {
+        let mut app = App::launch(args);
+        app.dialog = None;
+        app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
+        app
+    }
+
+    fn ctx() -> egui::Context {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        ctx.enable_accesskit();
+        ctx
+    }
+
+    #[test]
+    fn the_welcome_screen_names_every_control() {
+        let mut app = launch(&[]);
+        assert!(app.no_doc);
+        assert_eq!(nameless(&mut app, &ctx()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_editor_names_every_control_for_every_tool() {
+        let mut app = launch(&["--demo".to_string()]);
+        let ctx = ctx();
+        for tool in Tool::ALL {
+            app.tool = tool;
+            let missing = nameless(&mut app, &ctx);
+            assert_eq!(missing, Vec::<String>::new(), "with the {} tool", tool.name());
+        }
+    }
+
+    #[test]
+    fn the_colour_picker_names_every_control() {
+        let mut app = launch(&["--demo".to_string()]);
+        let ctx = ctx();
+        ctx.memory_mut(|m| m.open_popup(color_picker::fg_picker()));
+        let missing = nameless(&mut app, &ctx);
+        assert!(
+            ctx.memory(|m| m.is_popup_open(color_picker::fg_picker())),
+            "the picker stayed open"
+        );
+        assert_eq!(missing, Vec::<String>::new());
+    }
+
+    #[test]
+    fn every_dialog_layer_kind_and_effect_names_every_control() {
+        // A tiny document: every frame re-renders it in an unoptimised build.
+        let mut app = launch(&[]);
+        app.open_in_new_tab(blank(64, 64), None);
+        let ctx = ctx();
+        let mut failures = Vec::new();
+        let mut check = |app: &mut App, what: &str| {
+            let missing = nameless(app, &ctx);
+            if !missing.is_empty() {
+                failures.push(format!("{what}: {missing:?}"));
+            }
+        };
+        let top = |app: &App| app.editor.doc().layers().last().unwrap().id;
+        let bg = top(&app);
+        app.set_active(Some(bg));
+        check(&mut app, "pixel layer");
+        app.run(&SetLayerEffects {
+            layer: bg,
+            effects: lumenply_doc::LayerEffects {
+                drop_shadow: Some(Default::default()),
+                outer_glow: Some(Default::default()),
+                color_overlay: Some(Default::default()),
+                gradient_overlay: Some(Default::default()),
+                inner_shadow: Some(Default::default()),
+                inner_glow: Some(Default::default()),
+                bevel: Some(Default::default()),
+                stroke: Some(Default::default()),
+            },
+        });
+        check(&mut app, "every layer effect on");
+        app.run_menu_action("add-mask");
+        assert!(app.editing_mask);
+        check(&mut app, "editing a mask");
+        app.run(&AddTextLayer {
+            text: TextLayer::new("Hi", 8.0, 8.0, 12.0, [0.0, 0.0, 0.0, 1.0]),
+            above: None,
+        });
+        let text = top(&app);
+        app.set_active(Some(text));
+        app.tool = Tool::Text;
+        check(&mut app, "text layer with the Text tool");
+        app.tool = Tool::Brush;
+        app.set_active(Some(bg));
+        app.run_menu_action("smart-object");
+        assert!(app.active_layer().unwrap().smart_layer().is_some());
+        check(&mut app, "smart object");
+        app.run_menu_action("group");
+        assert!(matches!(
+            app.active_layer().unwrap().content,
+            LayerContent::Group(_)
+        ));
+        check(&mut app, "group");
+        // One at a time: stacked live filters multiply the render cost.
+        for (name, adj) in adjustment_presets() {
+            app.add_adjustment(adj);
+            check(&mut app, &format!("{name} adjustment layer"));
+            app.run_menu_action("undo");
+        }
+        for (name, f) in filter_presets() {
+            app.add_filter_layer(f.clone());
+            check(&mut app, &format!("{name} filter layer"));
+            app.run_menu_action("undo");
+            app.dialog = Some(Dialog::Filter(f));
+            check(&mut app, &format!("{name} filter dialog"));
+        }
+        let dialogs = [
+            ("New", Dialog::New(1920, 1080)),
+            ("Image size", Dialog::ImageSize(800, 600, true)),
+            ("Canvas size", Dialog::CanvasSize(800, 600, (0.5, 0.5))),
+            ("Export JPEG", Dialog::ExportJpeg("out.jpg".into(), 90)),
+            ("Confirm close", Dialog::ConfirmClose),
+            ("Confirm close tab", Dialog::ConfirmCloseTab(0)),
+            ("Recover", Dialog::Recover),
+            ("Preferences", Dialog::Preferences(app.prefs.clone(), None)),
+            ("Colour range", Dialog::ColorRange(25.0, false)),
+            ("About", Dialog::About),
+        ];
+        for (name, d) in dialogs {
+            app.dialog = Some(d);
+            check(&mut app, &format!("{name} dialog"));
+        }
+        app.dialog = None;
+        app.toggle_palette();
+        check(&mut app, "command palette");
+        app.toggle_palette();
+        app.prefs.history_collapsed = !app.prefs.history_collapsed;
+        check(&mut app, "history strip toggled");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn the_roles_a_screen_reader_announces_are_the_right_ones() {
+        let mut app = launch(&["--demo".to_string()]);
+        let ctx = ctx();
+        ctx.memory_mut(|m| m.open_popup(color_picker::fg_picker()));
+        let mut roles = std::collections::HashMap::new();
+        for _ in 0..3 {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            let out = ctx.run(raw, |ctx| app.frame(ctx));
+            roles = out
+                .platform_output
+                .accesskit_update
+                .unwrap()
+                .nodes
+                .iter()
+                .filter_map(|(_, n)| Some((n.name()?.to_string(), n.role())))
+                .collect();
+        }
+        assert_eq!(roles.get("Swap colours"), Some(&Role::Button));
+        assert_eq!(roles.get("Hue"), Some(&Role::Slider));
+        assert_eq!(roles.get("Pick colour from canvas"), Some(&Role::Button));
+        let fg = roles
+            .keys()
+            .find(|k| k.starts_with("Foreground colour #"))
+            .expect("fg well named");
+        assert_eq!(roles[fg], Role::ColorWell);
     }
 }

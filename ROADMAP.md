@@ -236,11 +236,17 @@ None of these could be tested in the container.
       colour, undo step and memory caps, autosave interval
 - [x] Split `crates/app/src/main.rs` into modules (theme, tools, menu, options bar,
       canvas, layers, properties, history, status, dialogs, palette)
-- [~] Accessibility: every icon-only button and tool has an accessible name
-      (`widget_info`), visible keyboard focus rings, sensible Tab order. Still
-      open: eframe's `accesskit` feature is off, so names don't yet reach
-      screen readers (enabling it failed to resolve `futures-sink >= 0.3.34`
-      from the crates.io index here; retry with network access); translations
+- [x] Accessibility: eframe's `accesskit` is on, so VoiceOver / Narrator /
+      Orca see the UI. Every focusable control has a spoken name (custom-painted
+      ones via `widget_info` or `theme::a11y_name`), dialogs announce as
+      dialogs with their title, floating bars and backdrops are not Tab stops,
+      visible focus rings. `a11y_tests` (main.rs) render every tool, layer kind,
+      layer effect, adjustment, filter, dialog and the palette and fail on any
+      unnamed control. (The earlier `futures-sink` resolve failure was a stale
+      local index cache entry, not the registry.)
+- [ ] Accessibility, still open: real screen-reader walkthrough on each OS;
+      egui's own scroll bars are focusable but unnamed (inside egui, so the
+      test skips thin unnamed strips); translations
 
 ## 6b. Quality pass (2026-10-02)
 

@@ -61,7 +61,7 @@ impl App {
                         return;
                     }
                     ui.style_mut().always_scroll_the_only_direction = true;
-                    egui::ScrollArea::horizontal().id_salt("history").show(ui, |ui| {
+                    let scroll_out = egui::ScrollArea::horizontal().id_salt("history").show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
                             // Keep the current step in view as history grows
@@ -80,6 +80,7 @@ impl App {
                             ui.data_mut(|d| d.insert_temp(seen_id, current));
                         });
                     });
+                    a11y_scroll(ui.ctx(), &scroll_out, "History");
                 });
                 if toggle {
                     self.toggle_history_strip();

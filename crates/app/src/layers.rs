@@ -141,7 +141,7 @@ impl App {
                 },
             );
         }
-        egui::ScrollArea::vertical()
+        let scroll_out = egui::ScrollArea::vertical()
             .id_salt("layers")
             .max_height((ui.available_height() - FOOTER_H).max(ROW_H))
             .auto_shrink([false, true])
@@ -333,6 +333,7 @@ impl App {
                                 egui::pos2(rect.max.x - 6.0, cy + 11.0),
                             );
                             let r = ui.put(edit_rect, egui::TextEdit::singleline(text));
+                            a11y_name(&r, "Layer name");
                             r.request_focus();
                             let (enter, escape, click_away) = ui.input(|i| {
                                 (
@@ -544,6 +545,7 @@ impl App {
                     }
                 }
             });
+        a11y_scroll(ui.ctx(), &scroll_out, "Layers");
 
         if rename_cancel {
             renaming = None;

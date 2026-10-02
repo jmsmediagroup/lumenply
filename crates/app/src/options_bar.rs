@@ -54,7 +54,13 @@ impl App {
                             let mut skew = x.shear.atan().to_degrees();
                             let field = |ui: &mut egui::Ui, label: &str, dv: egui::DragValue| {
                                 ui.label(RichText::new(label).color(MUTED));
-                                num_field(ui, dv.fixed_decimals(1), 70.0).changed()
+                                let r = num_field(ui, dv.fixed_decimals(1), 70.0);
+                                a11y_name(&r, match label {
+                                    "W" => "Width",
+                                    "H" => "Height",
+                                    other => other,
+                                });
+                                r.changed()
                             };
                             let c1 = field(ui, "W", egui::DragValue::new(&mut sx).speed(1.0).suffix("%"));
                             let c2 = field(ui, "H", egui::DragValue::new(&mut sy).speed(1.0).suffix("%"));
@@ -230,7 +236,7 @@ impl App {
                                         .iter()
                                         .find(|(m, _)| *m == self.brush.mode)
                                         .map_or("Paint", |(_, l)| *l);
-                                    egui::ComboBox::from_id_salt("brush-mode")
+                                    let r = egui::ComboBox::from_id_salt("brush-mode")
                                         .selected_text(current)
                                         .width(86.0)
                                         .show_ui(ui, |ui| {
@@ -238,8 +244,9 @@ impl App {
                                                 ui.selectable_value(&mut self.brush.mode, m, label);
                                             }
                                         })
-                                        .response
-                                        .on_hover_text("Brush mode");
+                                        .response;
+                                    a11y_name(&r, "Brush mode");
+                                    r.on_hover_text("Brush mode");
                                 }
                                 ui.separator();
                                 self.brush_presets_ui(ui, tier);
@@ -415,7 +422,7 @@ impl App {
                             if !names.is_empty() {
                                 let mut load = None;
                                 let mut delete = None;
-                                egui::ComboBox::from_id_salt("saved-paths")
+                                let r = egui::ComboBox::from_id_salt("saved-paths")
                                     .selected_text(format!("Paths ({})", names.len()))
                                     .width(130.0)
                                     .show_ui(ui, |ui| {
@@ -435,6 +442,7 @@ impl App {
                                             });
                                         }
                                     });
+                                a11y_name(&r.response, "Saved paths");
                                 if let Some(i) = load {
                                     self.pen_open = false;
                                     self.pen_sel = None;
@@ -497,7 +505,7 @@ impl App {
         }
         let mut apply = None;
         let mut delete = None;
-        egui::ComboBox::from_id_salt("brush-presets")
+        let r = egui::ComboBox::from_id_salt("brush-presets")
             .selected_text(format!("Presets ({})", self.prefs.brush_presets.len()))
             .width(120.0)
             .show_ui(ui, |ui| {
@@ -513,6 +521,7 @@ impl App {
                     });
                 }
             });
+        a11y_name(&r.response, "Brush presets");
         if let Some(i) = apply {
             let p = self.prefs.brush_presets[i].clone();
             self.brush.radius = p.radius.clamp(0.5, 500.0);
@@ -594,6 +603,7 @@ fn bar_scroll(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> f32 {
         .show(ui, |ui| {
             ui.horizontal_centered(add);
         });
+    a11y_scroll(ui.ctx(), &out, "Tool options");
     let r = out.inner_rect;
     let hidden_right = out.content_size.x - out.state.offset.x - r.width();
     let fade = |a: egui::Pos2, b: egui::Pos2, from: Color32, to: Color32| {
@@ -640,14 +650,13 @@ fn bar_slider(
         ui.spacing_mut().item_spacing.x = 6.0;
         ui.label(RichText::new(label).color(MUTED));
         let span = range.end() - range.start();
-        let a = ui
-            .add(
-                egui::Slider::new(v, range.clone())
-                    .logarithmic(log)
-                    .show_value(false),
-            )
-            .on_hover_text(label)
-            .changed();
+        let a = ui.add(
+            egui::Slider::new(v, range.clone())
+                .logarithmic(log)
+                .show_value(false),
+        );
+        a11y_name(&a, label);
+        let a = a.on_hover_text(label).changed();
         let b = num_field(
             ui,
             egui::DragValue::new(v)
@@ -656,9 +665,9 @@ fn bar_slider(
                 .fixed_decimals(0)
                 .suffix(suffix),
             58.0,
-        )
-        .changed();
-        a || b
+        );
+        a11y_name(&b, label);
+        a || b.changed()
     })
     .inner
 }

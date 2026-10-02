@@ -416,401 +416,418 @@ impl App {
         let shown = egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
+            .title_bar(false)
             .order(egui::Order::Foreground)
             .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-            .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(16.0)))
+            .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(DIALOG_MARGIN)))
             .show(ctx, |ui| {
-                raise_controls(ui);
-                // Three-button footers need more room than the content.
-                let (min_w, max_w) = match d {
-                    Dialog::Preferences(..) => (320.0, 480.0),
-                    Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) => (420.0, 440.0),
-                    _ => (320.0, 360.0),
-                };
-                ui.set_min_width(min_w);
-                ui.set_max_width(max_w);
-                ui.spacing_mut().item_spacing.y = 8.0;
-                match &mut d {
-                    Dialog::About => {
-                        ui.vertical_centered(|ui| {
-                            let (r, _) = ui.allocate_exact_size(Vec2::splat(96.0), Sense::hover());
-                            ui.painter().rect_filled(r, 22.0, GROUND);
-                            brand::paint_mark(ui.painter(), r.shrink(14.0), TEXT, ACCENT, GROUND);
-                            ui.add_space(6.0);
-                            ui.label(
-                                RichText::new("Lumenply")
-                                    .family(egui::FontFamily::Name("semibold".into()))
-                                    .size(26.0)
-                                    .color(TEXT),
-                            );
-                            ui.label(
-                                RichText::new(format!("Public beta {}", env!("CARGO_PKG_VERSION")))
-                                    .monospace()
-                                    .color(MUTED),
-                            );
-                            ui.label(RichText::new("Free photo editor — GPL-3.0").color(MUTED));
-                            ui.add_space(8.0);
-                            if ui.add(primary_button("Close")).clicked() || enter || esc {
-                                keep = false;
-                            }
-                        });
-                    }
-                    Dialog::ColorRange(tol, previewed) => {
-                        note(ui, "Selects everything close to the brush colour.");
-                        let changed = {
-                            let before = *tol;
-                            slider_row(ui, "Fuzziness", tol, 1.0..=100.0, "%");
-                            *tol != before
-                        };
-                        // The colour being matched, editable (and sampleable) in place.
-                        let recolored = ui
-                            .horizontal(|ui| {
-                                ui.add_sized(
-                                    [LABEL_W, 18.0],
-                                    egui::Label::new(RichText::new("Colour").color(MUTED)),
+                titled(ui, title, |ui| {
+                    raise_controls(ui);
+                    // Three-button footers need more room than the content.
+                    let (min_w, max_w) = match d {
+                        Dialog::Preferences(..) => (320.0, 480.0),
+                        Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) => (420.0, 440.0),
+                        _ => (320.0, 360.0),
+                    };
+                    ui.set_min_width(min_w);
+                    ui.set_max_width(max_w);
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    match &mut d {
+                        Dialog::About => {
+                            ui.vertical_centered(|ui| {
+                                let (r, _) = ui.allocate_exact_size(Vec2::splat(96.0), Sense::hover());
+                                ui.painter().rect_filled(r, 22.0, GROUND);
+                                brand::paint_mark(ui.painter(), r.shrink(14.0), TEXT, ACCENT, GROUND);
+                                ui.add_space(6.0);
+                                ui.label(
+                                    RichText::new("Lumenply")
+                                        .family(egui::FontFamily::Name("semibold".into()))
+                                        .size(26.0)
+                                        .color(TEXT),
                                 );
-                                crate::color_picker::color_edit_button_rgb(ui, &mut self.brush_rgb).changed()
-                            })
-                            .inner;
-                        if changed || recolored || !*previewed {
-                            *previewed = true;
-                            self.run_coalescing(
-                                &SelectColorRange {
-                                    color: self.brush_rgb.map(lumenply_io::srgb_to_linear_f),
-                                    tolerance: *tol / 100.0,
-                                },
-                                "color-range",
-                            );
-                        }
-                    }
-                    Dialog::Preferences(p, capturing) => {
-                        let wide = RowOpts {
-                            label_w: 120.0,
-                            int: true,
-                            ..RowOpts::default()
-                        };
-                        section_title(ui, "GENERAL");
-                        let mut steps = p.undo_steps as f32;
-                        slider_row_ex(ui, "Undo steps", &mut steps, 1.0..=1000.0, "", wide);
-                        p.undo_steps = steps.round().max(1.0) as usize;
-                        let mut mb = p.undo_memory_mb as f32;
-                        let log = RowOpts { log: true, ..wide };
-                        slider_row_ex(ui, "Undo memory", &mut mb, 64.0..=8192.0, " MB", log);
-                        p.undo_memory_mb = mb.round() as usize;
-                        let mut secs = p.autosave_secs as f32;
-                        slider_row_ex(ui, "Autosave every", &mut secs, 15.0..=600.0, " s", wide);
-                        p.autosave_secs = secs.round() as u64;
-                        ui.horizontal(|ui| {
-                            row_label(ui, "Canvas surround", wide.label_w);
-                            for (name, c) in [
-                                ("Graphite", [0x14u8, 0x16, 0x19]),
-                                ("Black", [0x00, 0x00, 0x00]),
-                                ("Grey", [0x80, 0x80, 0x80]),
-                                ("Light", [0xD8, 0xD8, 0xD8]),
-                            ] {
-                                let on = p.canvas_bg == c;
-                                let (r, resp) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
-                                let ring = if on {
-                                    Stroke::new(2.0, ACCENT)
-                                } else if resp.hovered() {
-                                    Stroke::new(1.0, MUTED)
-                                } else {
-                                    Stroke::new(1.0, LINE)
-                                };
-                                ui.painter().rect_filled(
-                                    r.shrink(3.0),
-                                    3.0,
-                                    Color32::from_rgb(c[0], c[1], c[2]),
+                                ui.label(
+                                    RichText::new(format!("Public beta {}", env!("CARGO_PKG_VERSION")))
+                                        .monospace()
+                                        .color(MUTED),
                                 );
-                                ui.painter().rect_stroke(r.shrink(1.0), 4.0, ring);
-                                focus_ring(ui, &resp, r, 4.0);
-                                resp.widget_info(|| {
-                                    egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, name)
-                                });
-                                if resp.on_hover_text(name).clicked() {
-                                    p.canvas_bg = c;
+                                ui.label(RichText::new("Free photo editor — GPL-3.0").color(MUTED));
+                                ui.add_space(8.0);
+                                if ui.add(primary_button("Close")).clicked() || enter || esc {
+                                    keep = false;
                                 }
-                            }
-                            // Any other colour, through the shared picker.
-                            let mut custom = p.canvas_bg.map(|b| b as f32 / 255.0);
-                            if crate::color_picker::color_edit_button_rgb(ui, &mut custom).changed() {
-                                p.canvas_bg = crate::color_picker::to_u8(custom);
-                            }
-                        });
-                        ui.add_space(4.0);
-                        section_title(ui, "SHORTCUTS");
-                        note(ui, "Click a shortcut, then press the new keys (Esc cancels).");
-                        // Click a binding, press the new keys; Esc cancels.
-                        if let Some(active) = capturing.clone() {
-                            let got = ui.input(|i| {
-                                i.events.iter().find_map(|e| match e {
-                                    egui::Event::Key {
-                                        key,
-                                        pressed: true,
-                                        modifiers,
-                                        ..
-                                    } => Some((*key, *modifiers)),
-                                    _ => None,
-                                })
                             });
-                            if let Some((key, m)) = got {
-                                if key == Key::Escape {
-                                    *capturing = None;
-                                } else if !matches!(key, Key::Tab | Key::Enter | Key::Space) {
-                                    p.shortcuts.insert(
-                                        active,
-                                        session::Chord {
-                                            cmd: m.command,
-                                            shift: m.shift,
-                                            key: key.name().to_string(),
-                                        },
+                        }
+                        Dialog::ColorRange(tol, previewed) => {
+                            note(ui, "Selects everything close to the brush colour.");
+                            let changed = {
+                                let before = *tol;
+                                slider_row(ui, "Fuzziness", tol, 1.0..=100.0, "%");
+                                *tol != before
+                            };
+                            // The colour being matched, editable (and sampleable) in place.
+                            let recolored = ui
+                                .horizontal(|ui| {
+                                    ui.add_sized(
+                                        [LABEL_W, 18.0],
+                                        egui::Label::new(RichText::new("Colour").color(MUTED)),
                                     );
-                                    *capturing = None;
-                                }
+                                    crate::color_picker::color_edit_button_rgb(ui, &mut self.brush_rgb)
+                                        .changed()
+                                })
+                                .inner;
+                            if changed || recolored || !*previewed {
+                                *previewed = true;
+                                self.run_coalescing(
+                                    &SelectColorRange {
+                                        color: self.brush_rgb.map(lumenply_io::srgb_to_linear_f),
+                                        tolerance: *tol / 100.0,
+                                    },
+                                    "color-range",
+                                );
                             }
                         }
-                        // The shortcut list scrolls so the footer stays on screen in
-                        // short windows (the dialog is anchored to the centre).
-                        let list_h = (ui.ctx().screen_rect().height() - 430.0).clamp(110.0, 560.0);
-                        egui::ScrollArea::vertical()
-                            .id_salt("prefs-shortcuts")
-                            .max_height(list_h)
-                            .auto_shrink([false, true])
-                            .show(ui, |ui| {
-                                for (id, label, ..) in session::SHORTCUTS {
-                                    ui.horizontal(|ui| {
-                                        row_label(ui, label, wide.label_w);
-                                        let text = if capturing.as_deref() == Some(*id) {
-                                            "press keys…".to_string()
-                                        } else {
-                                            session::chord_label(ui.ctx(), p, id)
-                                        };
-                                        let highlight = capturing.as_deref() == Some(*id);
-                                        let btn = egui::Button::new(RichText::new(text).monospace())
-                                            .min_size(egui::vec2(120.0, 22.0))
-                                            .fill(if highlight { ACCENT_TINT } else { GROUND })
-                                            .stroke(Stroke::new(1.0, if highlight { ACCENT } else { LINE }));
-                                        if ui
-                                            .add(btn)
-                                            .on_hover_text(format!(
-                                                "Click, then press the new keys for {label}"
-                                            ))
-                                            .clicked()
-                                        {
-                                            *capturing = Some(id.to_string());
-                                        }
-                                        if p.shortcuts.contains_key(*id)
-                                            && ui
-                                                .small_button("Reset")
-                                                .on_hover_text("Back to the default shortcut")
-                                                .clicked()
-                                        {
-                                            p.shortcuts.remove(*id);
-                                        }
+                        Dialog::Preferences(p, capturing) => {
+                            let wide = RowOpts {
+                                label_w: 120.0,
+                                int: true,
+                                ..RowOpts::default()
+                            };
+                            section_title(ui, "GENERAL");
+                            let mut steps = p.undo_steps as f32;
+                            slider_row_ex(ui, "Undo steps", &mut steps, 1.0..=1000.0, "", wide);
+                            p.undo_steps = steps.round().max(1.0) as usize;
+                            let mut mb = p.undo_memory_mb as f32;
+                            let log = RowOpts { log: true, ..wide };
+                            slider_row_ex(ui, "Undo memory", &mut mb, 64.0..=8192.0, " MB", log);
+                            p.undo_memory_mb = mb.round() as usize;
+                            let mut secs = p.autosave_secs as f32;
+                            slider_row_ex(ui, "Autosave every", &mut secs, 15.0..=600.0, " s", wide);
+                            p.autosave_secs = secs.round() as u64;
+                            ui.horizontal(|ui| {
+                                row_label(ui, "Canvas surround", wide.label_w);
+                                for (name, c) in [
+                                    ("Graphite", [0x14u8, 0x16, 0x19]),
+                                    ("Black", [0x00, 0x00, 0x00]),
+                                    ("Grey", [0x80, 0x80, 0x80]),
+                                    ("Light", [0xD8, 0xD8, 0xD8]),
+                                ] {
+                                    let on = p.canvas_bg == c;
+                                    let (r, resp) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
+                                    let ring = if on {
+                                        Stroke::new(2.0, ACCENT)
+                                    } else if resp.hovered() {
+                                        Stroke::new(1.0, MUTED)
+                                    } else {
+                                        Stroke::new(1.0, LINE)
+                                    };
+                                    ui.painter().rect_filled(
+                                        r.shrink(3.0),
+                                        3.0,
+                                        Color32::from_rgb(c[0], c[1], c[2]),
+                                    );
+                                    ui.painter().rect_stroke(r.shrink(1.0), 4.0, ring);
+                                    focus_ring(ui, &resp, r, 4.0);
+                                    resp.widget_info(|| {
+                                        egui::WidgetInfo::selected(
+                                            egui::WidgetType::RadioButton,
+                                            true,
+                                            on,
+                                            name,
+                                        )
                                     });
+                                    if resp.on_hover_text(name).clicked() {
+                                        p.canvas_bg = c;
+                                    }
+                                }
+                                // Any other colour, through the shared picker.
+                                let mut custom = p.canvas_bg.map(|b| b as f32 / 255.0);
+                                if crate::color_picker::color_edit_button_rgb(ui, &mut custom).changed() {
+                                    p.canvas_bg = crate::color_picker::to_u8(custom);
                                 }
                             });
-                    }
-                    Dialog::Recover => {
-                        note(
-                            ui,
-                            "The previous session left an autosaved backup, probably after a crash.",
-                        );
-                        footer(ui, |ui| {
-                            if ui.add(primary_button("Recover")).clicked() || enter {
-                                self.recover_autosave();
-                                keep = false;
-                            }
-                            if ui
-                                .add(footer_button("Discard backup"))
-                                .on_hover_text("Delete the backup and start fresh")
-                                .clicked()
-                            {
-                                session::remove_autosave();
-                                keep = false;
-                            }
-                        });
-                    }
-                    Dialog::ConfirmClose => {
-                        note(ui, "The document has unsaved changes.");
-                        footer(ui, |ui| {
-                            if ui.add(primary_button("Save and quit")).clicked() || enter {
-                                match self.path.clone() {
-                                    Some(p) => self.save_path(&p.to_string_lossy()),
-                                    None => self.pick_save(),
+                            ui.add_space(4.0);
+                            section_title(ui, "SHORTCUTS");
+                            note(ui, "Click a shortcut, then press the new keys (Esc cancels).");
+                            // Click a binding, press the new keys; Esc cancels.
+                            if let Some(active) = capturing.clone() {
+                                let got = ui.input(|i| {
+                                    i.events.iter().find_map(|e| match e {
+                                        egui::Event::Key {
+                                            key,
+                                            pressed: true,
+                                            modifiers,
+                                            ..
+                                        } => Some((*key, *modifiers)),
+                                        _ => None,
+                                    })
+                                });
+                                if let Some((key, m)) = got {
+                                    if key == Key::Escape {
+                                        *capturing = None;
+                                    } else if !matches!(key, Key::Tab | Key::Enter | Key::Space) {
+                                        p.shortcuts.insert(
+                                            active,
+                                            session::Chord {
+                                                cmd: m.command,
+                                                shift: m.shift,
+                                                key: key.name().to_string(),
+                                            },
+                                        );
+                                        *capturing = None;
+                                    }
                                 }
-                                if self.editor.history().len() == self.saved_rev {
+                            }
+                            // The shortcut list scrolls so the footer stays on screen in
+                            // short windows (the dialog is anchored to the centre).
+                            let list_h = (ui.ctx().screen_rect().height() - 430.0).clamp(110.0, 560.0);
+                            let scroll_out = egui::ScrollArea::vertical()
+                                .id_salt("prefs-shortcuts")
+                                .max_height(list_h)
+                                .auto_shrink([false, true])
+                                .show(ui, |ui| {
+                                    for (id, label, ..) in session::SHORTCUTS {
+                                        ui.horizontal(|ui| {
+                                            row_label(ui, label, wide.label_w);
+                                            let text = if capturing.as_deref() == Some(*id) {
+                                                "press keys…".to_string()
+                                            } else {
+                                                session::chord_label(ui.ctx(), p, id)
+                                            };
+                                            let highlight = capturing.as_deref() == Some(*id);
+                                            let btn = egui::Button::new(RichText::new(text).monospace())
+                                                .min_size(egui::vec2(120.0, 22.0))
+                                                .fill(if highlight { ACCENT_TINT } else { GROUND })
+                                                .stroke(Stroke::new(
+                                                    1.0,
+                                                    if highlight { ACCENT } else { LINE },
+                                                ));
+                                            if ui
+                                                .add(btn)
+                                                .on_hover_text(format!(
+                                                    "Click, then press the new keys for {label}"
+                                                ))
+                                                .clicked()
+                                            {
+                                                *capturing = Some(id.to_string());
+                                            }
+                                            if p.shortcuts.contains_key(*id)
+                                                && ui
+                                                    .small_button("Reset")
+                                                    .on_hover_text("Back to the default shortcut")
+                                                    .clicked()
+                                            {
+                                                p.shortcuts.remove(*id);
+                                            }
+                                        });
+                                    }
+                                });
+                            a11y_scroll(ui.ctx(), &scroll_out, "Shortcuts");
+                        }
+                        Dialog::Recover => {
+                            note(
+                                ui,
+                                "The previous session left an autosaved backup, probably after a crash.",
+                            );
+                            footer(ui, |ui| {
+                                if ui.add(primary_button("Recover")).clicked() || enter {
+                                    self.recover_autosave();
+                                    keep = false;
+                                }
+                                if ui
+                                    .add(footer_button("Discard backup"))
+                                    .on_hover_text("Delete the backup and start fresh")
+                                    .clicked()
+                                {
+                                    session::remove_autosave();
+                                    keep = false;
+                                }
+                            });
+                        }
+                        Dialog::ConfirmClose => {
+                            note(ui, "The document has unsaved changes.");
+                            footer(ui, |ui| {
+                                if ui.add(primary_button("Save and quit")).clicked() || enter {
+                                    match self.path.clone() {
+                                        Some(p) => self.save_path(&p.to_string_lossy()),
+                                        None => self.pick_save(),
+                                    }
+                                    if self.editor.history().len() == self.saved_rev {
+                                        self.allow_close = true;
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    }
+                                    keep = false;
+                                }
+                                if ui.add(footer_button("Cancel")).clicked() || esc {
+                                    keep = false;
+                                }
+                                ui.add_space(16.0);
+                                if ui
+                                    .add(footer_button("Quit without saving"))
+                                    .on_hover_text("Discard the changes and quit")
+                                    .clicked()
+                                {
                                     self.allow_close = true;
                                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    keep = false;
                                 }
-                                keep = false;
-                            }
-                            if ui.add(footer_button("Cancel")).clicked() || esc {
-                                keep = false;
-                            }
-                            ui.add_space(16.0);
-                            if ui
-                                .add(footer_button("Quit without saving"))
-                                .on_hover_text("Discard the changes and quit")
-                                .clicked()
-                            {
-                                self.allow_close = true;
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                                keep = false;
-                            }
-                        });
-                    }
-                    Dialog::ConfirmCloseTab(i) => {
-                        let i = *i;
-                        note(ui, "This document has unsaved changes.");
-                        footer(ui, |ui| {
-                            if ui.add(primary_button("Save and close")).clicked() || enter {
-                                match self.path.clone() {
-                                    Some(p) => self.save_path(&p.to_string_lossy()),
-                                    None => self.pick_save(),
+                            });
+                        }
+                        Dialog::ConfirmCloseTab(i) => {
+                            let i = *i;
+                            note(ui, "This document has unsaved changes.");
+                            footer(ui, |ui| {
+                                if ui.add(primary_button("Save and close")).clicked() || enter {
+                                    match self.path.clone() {
+                                        Some(p) => self.save_path(&p.to_string_lossy()),
+                                        None => self.pick_save(),
+                                    }
+                                    if self.editor.history().len() == self.saved_rev {
+                                        self.force_close_tab(i);
+                                    }
+                                    keep = false;
                                 }
-                                if self.editor.history().len() == self.saved_rev {
+                                if ui.add(footer_button("Cancel")).clicked() || esc {
+                                    keep = false;
+                                }
+                                ui.add_space(16.0);
+                                if ui
+                                    .add(footer_button("Close without saving"))
+                                    .on_hover_text("Discard the changes and close the document")
+                                    .clicked()
+                                {
                                     self.force_close_tab(i);
+                                    keep = false;
                                 }
-                                keep = false;
+                            });
+                        }
+                        Dialog::ExportJpeg(p, q) => {
+                            ui.label(RichText::new(file_name(p)).monospace().color(MUTED));
+                            let mut qf = *q as f32;
+                            let o = RowOpts {
+                                int: true,
+                                ..RowOpts::default()
+                            };
+                            slider_row_ex(ui, "Quality", &mut qf, 1.0..=100.0, "", o);
+                            *q = qf.round().clamp(1.0, 100.0) as u8;
+                            note(ui, "Transparent areas are flattened onto white.");
+                        }
+                        Dialog::New(w, h) => {
+                            field_row(
+                                ui,
+                                "Width",
+                                egui::DragValue::new(w).range(1..=16384).suffix(" px"),
+                            );
+                            field_row(
+                                ui,
+                                "Height",
+                                egui::DragValue::new(h).range(1..=16384).suffix(" px"),
+                            );
+                        }
+                        Dialog::Filter(f) => {
+                            let row = |ui: &mut egui::Ui,
+                                       label: &str,
+                                       v: &mut f32,
+                                       r: RangeInclusive<f32>,
+                                       sfx: &str,
+                                       o: RowOpts| {
+                                let before = *v;
+                                slider_row_ex(ui, label, v, r, sfx, o);
+                                *v != before
+                            };
+                            // Amounts read as percentages, like the other 0–1 values.
+                            let pct = |ui: &mut egui::Ui, v: &mut f32, r: RangeInclusive<f32>| {
+                                let before = *v;
+                                slider_row_scaled(ui, "Amount", v, r, 100.0, "%");
+                                *v != before
+                            };
+                            let lin = RowOpts::default();
+                            let log = RowOpts { log: true, ..lin };
+                            match f {
+                                Filter::GaussianBlur { radius } | Filter::BoxBlur { radius } => {
+                                    filter_changed |= row(ui, "Radius", radius, 0.5..=60.0, " px", log);
+                                }
+                                Filter::Sharpen { amount, radius } => {
+                                    filter_changed |= pct(ui, amount, 0.0..=5.0);
+                                    filter_changed |= row(ui, "Radius", radius, 0.5..=20.0, " px", lin);
+                                }
+                                Filter::Noise { amount } => {
+                                    filter_changed |= pct(ui, amount, 0.0..=1.0);
+                                }
+                                Filter::MotionBlur { angle, distance } => {
+                                    filter_changed |= row(ui, "Angle", angle, -180.0..=180.0, "°", lin);
+                                    filter_changed |= row(ui, "Distance", distance, 1.0..=200.0, " px", lin);
+                                }
+                                Filter::Median { radius } => {
+                                    let int = RowOpts { int: true, ..lin };
+                                    filter_changed |= row(ui, "Radius", radius, 1.0..=8.0, " px", int);
+                                }
+                                Filter::HighPass { radius } => {
+                                    filter_changed |= row(ui, "Radius", radius, 0.5..=60.0, " px", log);
+                                }
+                            }
+                            note(ui, "Previewed on the canvas; applies to the active layer.");
+                        }
+                        Dialog::CanvasSize(w, h, anchor) => {
+                            field_row(
+                                ui,
+                                "Width",
+                                egui::DragValue::new(w).range(1..=16384).suffix(" px"),
+                            );
+                            field_row(
+                                ui,
+                                "Height",
+                                egui::DragValue::new(h).range(1..=16384).suffix(" px"),
+                            );
+                            ui.horizontal(|ui| {
+                                row_label(ui, "Anchor", LABEL_W);
+                                anchor_grid(ui, anchor);
+                            });
+                        }
+                        Dialog::ImageSize(w, h, lock) => {
+                            let (ow, oh) = (self.editor.doc().width as f32, self.editor.doc().height as f32);
+                            let rw = field_row(
+                                ui,
+                                "Width",
+                                egui::DragValue::new(w).range(1..=16384).suffix(" px"),
+                            );
+                            let rh = field_row(
+                                ui,
+                                "Height",
+                                egui::DragValue::new(h).range(1..=16384).suffix(" px"),
+                            );
+                            if *lock {
+                                if rw.changed() {
+                                    *h = ((*w as f32) * oh / ow).round().max(1.0) as u32;
+                                } else if rh.changed() {
+                                    *w = ((*h as f32) * ow / oh).round().max(1.0) as u32;
+                                }
+                            }
+                            ui.horizontal(|ui| {
+                                ui.add_space(LABEL_W + ui.spacing().item_spacing.x);
+                                check(ui, lock, "Keep aspect ratio");
+                            });
+                            note(ui, "Resamples every layer bilinearly.");
+                        }
+                    }
+                    if !primary.is_empty() {
+                        footer(ui, |ui| {
+                            if ui.add(primary_button(primary)).clicked() || enter {
+                                confirmed = true;
                             }
                             if ui.add(footer_button("Cancel")).clicked() || esc {
                                 keep = false;
                             }
-                            ui.add_space(16.0);
-                            if ui
-                                .add(footer_button("Close without saving"))
-                                .on_hover_text("Discard the changes and close the document")
-                                .clicked()
-                            {
-                                self.force_close_tab(i);
-                                keep = false;
-                            }
                         });
                     }
-                    Dialog::ExportJpeg(p, q) => {
-                        ui.label(RichText::new(file_name(p)).monospace().color(MUTED));
-                        let mut qf = *q as f32;
-                        let o = RowOpts {
-                            int: true,
-                            ..RowOpts::default()
-                        };
-                        slider_row_ex(ui, "Quality", &mut qf, 1.0..=100.0, "", o);
-                        *q = qf.round().clamp(1.0, 100.0) as u8;
-                        note(ui, "Transparent areas are flattened onto white.");
-                    }
-                    Dialog::New(w, h) => {
-                        field_row(
-                            ui,
-                            "Width",
-                            egui::DragValue::new(w).range(1..=16384).suffix(" px"),
-                        );
-                        field_row(
-                            ui,
-                            "Height",
-                            egui::DragValue::new(h).range(1..=16384).suffix(" px"),
-                        );
-                    }
-                    Dialog::Filter(f) => {
-                        let row = |ui: &mut egui::Ui,
-                                   label: &str,
-                                   v: &mut f32,
-                                   r: RangeInclusive<f32>,
-                                   sfx: &str,
-                                   o: RowOpts| {
-                            let before = *v;
-                            slider_row_ex(ui, label, v, r, sfx, o);
-                            *v != before
-                        };
-                        // Amounts read as percentages, like the other 0–1 values.
-                        let pct = |ui: &mut egui::Ui, v: &mut f32, r: RangeInclusive<f32>| {
-                            let before = *v;
-                            slider_row_scaled(ui, "Amount", v, r, 100.0, "%");
-                            *v != before
-                        };
-                        let lin = RowOpts::default();
-                        let log = RowOpts { log: true, ..lin };
-                        match f {
-                            Filter::GaussianBlur { radius } | Filter::BoxBlur { radius } => {
-                                filter_changed |= row(ui, "Radius", radius, 0.5..=60.0, " px", log);
-                            }
-                            Filter::Sharpen { amount, radius } => {
-                                filter_changed |= pct(ui, amount, 0.0..=5.0);
-                                filter_changed |= row(ui, "Radius", radius, 0.5..=20.0, " px", lin);
-                            }
-                            Filter::Noise { amount } => {
-                                filter_changed |= pct(ui, amount, 0.0..=1.0);
-                            }
-                            Filter::MotionBlur { angle, distance } => {
-                                filter_changed |= row(ui, "Angle", angle, -180.0..=180.0, "°", lin);
-                                filter_changed |= row(ui, "Distance", distance, 1.0..=200.0, " px", lin);
-                            }
-                            Filter::Median { radius } => {
-                                let int = RowOpts { int: true, ..lin };
-                                filter_changed |= row(ui, "Radius", radius, 1.0..=8.0, " px", int);
-                            }
-                            Filter::HighPass { radius } => {
-                                filter_changed |= row(ui, "Radius", radius, 0.5..=60.0, " px", log);
-                            }
-                        }
-                        note(ui, "Previewed on the canvas; applies to the active layer.");
-                    }
-                    Dialog::CanvasSize(w, h, anchor) => {
-                        field_row(
-                            ui,
-                            "Width",
-                            egui::DragValue::new(w).range(1..=16384).suffix(" px"),
-                        );
-                        field_row(
-                            ui,
-                            "Height",
-                            egui::DragValue::new(h).range(1..=16384).suffix(" px"),
-                        );
-                        ui.horizontal(|ui| {
-                            row_label(ui, "Anchor", LABEL_W);
-                            anchor_grid(ui, anchor);
-                        });
-                    }
-                    Dialog::ImageSize(w, h, lock) => {
-                        let (ow, oh) = (self.editor.doc().width as f32, self.editor.doc().height as f32);
-                        let rw = field_row(
-                            ui,
-                            "Width",
-                            egui::DragValue::new(w).range(1..=16384).suffix(" px"),
-                        );
-                        let rh = field_row(
-                            ui,
-                            "Height",
-                            egui::DragValue::new(h).range(1..=16384).suffix(" px"),
-                        );
-                        if *lock {
-                            if rw.changed() {
-                                *h = ((*w as f32) * oh / ow).round().max(1.0) as u32;
-                            } else if rh.changed() {
-                                *w = ((*h as f32) * ow / oh).round().max(1.0) as u32;
-                            }
-                        }
-                        ui.horizontal(|ui| {
-                            ui.add_space(LABEL_W + ui.spacing().item_spacing.x);
-                            check(ui, lock, "Keep aspect ratio");
-                        });
-                        note(ui, "Resamples every layer bilinearly.");
-                    }
-                }
-                if !primary.is_empty() {
-                    footer(ui, |ui| {
-                        if ui.add(primary_button(primary)).clicked() || enter {
-                            confirmed = true;
-                        }
-                        if ui.add(footer_button("Cancel")).clicked() || esc {
-                            keep = false;
-                        }
-                    });
-                }
+                })
             });
         // The dialog above the backdrop, which is above everything else.
         if let Some(shown) = shown {
             ctx.move_to_top(shown.response.layer_id);
+            ctx.accesskit_node_builder(shown.response.id, |b| {
+                b.set_role(egui::accesskit::Role::Dialog);
+                b.set_name(title);
+            });
         }
 
         if let Dialog::Filter(f) = &d {
@@ -901,14 +918,53 @@ fn modal_backdrop(ctx: &egui::Context, dim: bool) {
     let screen = ctx.screen_rect();
     egui::Area::new(id)
         .order(egui::Order::Foreground)
+        .sense(BACKDROP_SENSE)
         .fixed_pos(screen.min)
         .show(ctx, |ui| {
-            let (r, _) = ui.allocate_exact_size(screen.size(), Sense::click_and_drag());
+            let blocker = Sense {
+                drag: true,
+                ..BACKDROP_SENSE
+            };
+            let (r, _) = ui.allocate_exact_size(screen.size(), blocker);
             if dim {
                 ui.painter().rect_filled(r, 0.0, Color32::from_black_alpha(110));
             }
         });
     ctx.move_to_top(egui::LayerId::new(egui::Order::Foreground, id));
+}
+
+const DIALOG_MARGIN: f32 = 16.0;
+
+/// A dialog's body under its centred title and hairline, laid out like
+/// egui's window title bar (title row, a gap of both frame margins, the
+/// hairline one margin below the title text). egui's own bar is a focusable
+/// control with no name, and the first Tab stop; this title is plain paint.
+fn titled<R>(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let galley = egui::WidgetText::from(title).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Heading,
+    );
+    let ink = ui.visuals().text_color();
+    let hairline = ui.visuals().widgets.noninteractive.bg_stroke;
+    let h = galley.size().y.max(ui.spacing().interact_size.y);
+    let spacing = ui.spacing().item_spacing.y;
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let (row, _) = ui.allocate_exact_size(Vec2::new(galley.size().x, h), Sense::hover());
+    ui.add_space(2.0 * DIALOG_MARGIN);
+    ui.spacing_mut().item_spacing.y = spacing;
+    let line_y = row.top() + galley.size().y + DIALOG_MARGIN;
+    let out = body(ui);
+    let full = ui.min_rect();
+    let p = ui.ctx().layer_painter(ui.layer_id());
+    let head = egui::Rect::from_x_y_ranges(full.x_range(), row.y_range());
+    let pos = Align2::CENTER_CENTER
+        .align_size_within_rect(galley.size(), head)
+        .min;
+    p.galley(pos, galley, ink);
+    p.hline(full.x_range().expand(DIALOG_MARGIN).shrink(0.1), line_y, hairline);
+    out
 }
 
 /// A muted explanatory line, wrapped to the dialog width.

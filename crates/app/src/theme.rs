@@ -283,6 +283,36 @@ pub(crate) fn num_field(ui: &mut egui::Ui, dv: egui::DragValue<'_>, width: f32) 
     .inner
 }
 
+/// Sets the name a screen reader announces for a control whose visible
+/// label is painted or is a separate widget (egui only names a widget from
+/// its own text).
+pub(crate) fn a11y_name(resp: &egui::Response, name: &str) {
+    resp.ctx.accesskit_node_builder(resp.id, |b| b.set_name(name));
+}
+
+/// The sense for a floating area's background: it swallows clicks so they
+/// don't reach the canvas underneath, without being a Tab stop or an
+/// unnamed screen-reader node.
+pub(crate) const BACKDROP_SENSE: Sense = Sense {
+    click: true,
+    drag: false,
+    focusable: false,
+};
+
+/// Names a scroll area's region. While its content overflows, egui gives
+/// the drag-to-scroll surface a focusable node of its own under
+/// `id.with("area")`; naming a node that doesn't exist would create it.
+pub(crate) fn a11y_scroll<R>(ctx: &egui::Context, out: &egui::scroll_area::ScrollAreaOutput<R>, name: &str) {
+    let id = out.id.with("area");
+    if ctx.read_response(id).is_none() {
+        return;
+    }
+    ctx.accesskit_node_builder(id, |b| {
+        b.set_role(egui::accesskit::Role::ScrollView);
+        b.set_name(name);
+    });
+}
+
 /// A bar across the top or bottom: panel fill, fixed height, side padding,
 /// vertically centred content.
 pub(crate) fn bar_frame() -> egui::Frame {
@@ -439,6 +469,8 @@ pub(crate) fn slider_row_ex(
                 slider = slider.integer();
             }
             let r = ui.add(slider);
+            a11y_name(&n, label);
+            a11y_name(&r, label);
             finished = r.drag_stopped()
                 || (r.changed() && !r.dragged())
                 || n.drag_stopped()
@@ -453,7 +485,9 @@ pub(crate) fn slider_row_ex(
 pub(crate) fn field_row(ui: &mut egui::Ui, label: &str, dv: egui::DragValue<'_>) -> egui::Response {
     ui.horizontal(|ui| {
         row_label(ui, label, LABEL_W);
-        num_field(ui, dv, 96.0)
+        let r = num_field(ui, dv, 96.0);
+        a11y_name(&r, label);
+        r
     })
     .inner
 }

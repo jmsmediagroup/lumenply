@@ -246,6 +246,9 @@ impl App {
                 ui.horizontal_centered(|ui| {
                     // The mark, top-left; click for About.
                     let (chip, resp) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), Sense::click());
+                    resp.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "About Lumenply")
+                    });
                     ui.painter().rect_filled(chip, 7.0, GROUND);
                     brand::paint_mark(ui.painter(), chip.shrink(4.0), TEXT, ACCENT, GROUND);
                     if resp.on_hover_text("About Lumenply").clicked() {

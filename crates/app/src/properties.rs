@@ -179,7 +179,7 @@ impl App {
         ui.horizontal(|ui| {
             row_label(ui, "Blend", LABEL_W);
             ui.spacing_mut().combo_width = ui.available_width();
-            egui::ComboBox::from_id_salt("blend-mode")
+            let r = egui::ComboBox::from_id_salt("blend-mode")
                 .selected_text(sel.map_or("Pass Through".into(), title))
                 .show_ui(ui, |ui| {
                     popup_style(ui);
@@ -190,6 +190,7 @@ impl App {
                         ui.selectable_value(&mut sel, Some(m), title(m));
                     }
                 });
+            a11y_name(&r.response, "Blend mode");
         });
         match sel {
             None if !pass => self.run(&SetPassThrough {
@@ -425,7 +426,9 @@ impl App {
                         .fixed_decimals(0)
                         .prefix(axis)
                         .suffix(" px");
-                    num_field(ui, dv, 78.0)
+                    let r = num_field(ui, dv, 78.0);
+                    a11y_name(&r, &format!("Offset {}", axis.trim()));
+                    r
                 };
                 let rx = field(ui, &mut sfx.dx, "x ");
                 let ry = field(ui, &mut sfx.dy, "y ");
@@ -492,7 +495,9 @@ impl App {
                         .fixed_decimals(0)
                         .prefix(axis)
                         .suffix(" px");
-                    num_field(ui, dv, 78.0)
+                    let r = num_field(ui, dv, 78.0);
+                    a11y_name(&r, &format!("Offset {}", axis.trim()));
+                    r
                 };
                 let rx = field(ui, &mut sfx.dx, "x ");
                 let ry = field(ui, &mut sfx.dy, "y ");
@@ -805,6 +810,10 @@ impl App {
 pub(crate) fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<[f32; 2]>, drag: &mut Option<usize>) -> bool {
     let size = Vec2::splat(210.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    resp.widget_info(|| {
+        let label = format!("Curve, {} points", points.len());
+        egui::WidgetInfo::labeled(egui::WidgetType::Other, true, label)
+    });
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 4.0, GROUND);
     for i in 1..4 {

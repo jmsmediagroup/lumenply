@@ -309,6 +309,8 @@ struct PickerState {
 /// ends.
 pub(crate) fn color_edit_button_rgb(ui: &mut egui::Ui, rgb: &mut [f32; 3]) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(34.0, 20.0), Sense::click());
+    let hex = format_hex(*rgb);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, ui.is_enabled(), &hex));
     let popup_id = resp.id.with("color-picker");
     debug_open_nth(ui.ctx(), popup_id);
     let open = ui.memory(|m| m.is_popup_open(popup_id));
@@ -449,6 +451,7 @@ pub(crate) fn picker_popup(
         // Appear at once: a fading picker reads as sluggish and lets the
         // canvas show through while the first click lands.
         .fade_in(false)
+        .sense(BACKDROP_SENSE)
         .constrain_to(screen.shrink(4.0))
         .show(&ctx, |ui| {
             egui::Frame::popup(ui.style())
@@ -563,6 +566,13 @@ fn picker_body(
 
     // Saturation (x) / value (y) square.
     let (sv_rect, sv) = ui.allocate_exact_size(egui::vec2(W, SV_H), Sense::click_and_drag());
+    sv.widget_info(|| {
+        egui::WidgetInfo::slider(
+            true,
+            (st.hsv[1] * 100.0).round() as f64,
+            "Saturation and brightness",
+        )
+    });
     if sv.is_pointer_button_down_on() {
         if let Some(p) = sv.interact_pointer_pos() {
             st.hsv[1] = ((p.x - sv_rect.left()) / sv_rect.width()).clamp(0.0, 1.0);
@@ -579,6 +589,7 @@ fn picker_body(
 
     // Hue strip: a pill, red at both rounded ends.
     let (hue_rect, hue) = ui.allocate_exact_size(egui::vec2(W, HUE_H), Sense::click_and_drag());
+    hue.widget_info(|| egui::WidgetInfo::slider(true, (st.hsv[0] * 360.0).round() as f64, "Hue"));
     let cap = HUE_H / 2.0;
     let (hx0, hx1) = (hue_rect.left() + cap, hue_rect.right() - cap);
     if hue.is_pointer_button_down_on() {
@@ -595,6 +606,7 @@ fn picker_body(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         let (cr, cmp) = ui.allocate_exact_size(egui::vec2(56.0, 28.0), Sense::click());
+        cmp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Previous colour"));
         {
             let p = ui.painter();
             let mid = cr.center().x;
@@ -626,6 +638,9 @@ fn picker_body(
         cmp.on_hover_text("Left: the colour before (click to go back)  ·  Right: new");
 
         let (er, eye) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::click());
+        eye.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, true, armed, "Pick colour from canvas")
+        });
         let (fill, ink) = if armed {
             (ACCENT, ACCENT_INK)
         } else if eye.hovered() {
@@ -657,6 +672,7 @@ fn picker_body(
             .vertical_align(egui::Align::Center)
             .text_color(if st.hex_bad { BAD } else { TEXT });
         let r = ui.add(te).on_hover_text("Hex: #RRGGBB or #RGB");
+        a11y_name(&r, "Hex colour");
         let ring = if r.has_focus() {
             ACCENT
         } else if r.hovered() {
@@ -708,12 +724,16 @@ fn picker_body(
         let mut b = to_u8(*rgb);
         let mut edited = false;
         let field = (W - 3.0 * 12.0 - 5.0 * 6.0) / 3.0;
-        for (i, label) in ["R", "G", "B"].into_iter().enumerate() {
+        for (i, (label, name)) in [("R", "Red"), ("G", "Green"), ("B", "Blue")]
+            .into_iter()
+            .enumerate()
+        {
             ui.add_sized([12.0, 24.0], egui::Label::new(RichText::new(label).color(MUTED)));
             let r = ui.add_sized(
                 [field, 24.0],
                 egui::DragValue::new(&mut b[i]).range(0..=255).speed(0.5),
             );
+            a11y_name(&r, name);
             edited |= r.changed();
             out.dragging |= r.dragged();
             out.drag_stopped |= r.drag_stopped();
@@ -733,7 +753,17 @@ fn picker_body(
         ui.spacing_mut().item_spacing.x = gap;
         let side = (W - gap * (RECENT_MAX as f32 - 1.0)) / RECENT_MAX as f32;
         for i in 0..RECENT_MAX {
-            let (r, resp) = ui.allocate_exact_size(egui::vec2(side, side), Sense::click());
+            // An empty slot is only a placeholder: not clickable, not a Tab stop.
+            let sense = if i < list.len() {
+                Sense::click()
+            } else {
+                Sense::hover()
+            };
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(side, side), sense);
+            if let Some(&c8) = list.get(i) {
+                let label = format!("Recent colour {}", format_hex(c8.map(|x| x as f32 / 255.0)));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, true, &label));
+            }
             match list.get(i) {
                 Some(&c8) => {
                     let c = c8.map(|x| x as f32 / 255.0);

@@ -166,10 +166,24 @@ impl App {
             finished |= align_toggles(ui, &mut t.align);
             bar_separator(ui);
             muted(ui, "Size");
-            finished |= edit_finished(&value_field(ui, &mut t.size, 6.0..=400.0, " px", 66.0));
+            finished |= edit_finished(&value_field(
+                ui,
+                "Font size",
+                &mut t.size,
+                6.0..=400.0,
+                " px",
+                66.0,
+            ));
             if !narrow {
                 muted(ui, "Tracking");
-                finished |= edit_finished(&value_field(ui, &mut t.tracking, -200.0..=800.0, "", 50.0));
+                finished |= edit_finished(&value_field(
+                    ui,
+                    "Tracking",
+                    &mut t.tracking,
+                    -200.0..=800.0,
+                    "",
+                    50.0,
+                ));
             }
             finished |= text_color_button(ui, &mut t.color);
             self.commit_text(id, &before, t, finished);
@@ -184,7 +198,7 @@ impl App {
             align_toggles(ui, &mut self.text_align);
             bar_separator(ui);
             muted(ui, "Size");
-            value_field(ui, &mut self.text_size, 6.0..=400.0, " px", 66.0);
+            value_field(ui, "Font size", &mut self.text_size, 6.0..=400.0, " px", 66.0);
             bar_separator(ui);
             self.new_text_button(ui);
             if self.text_new_armed {
@@ -252,6 +266,7 @@ impl App {
                     .desired_width(f32::INFINITY),
             )
         });
+        a11y_name(&r, "Text");
         finished |= r.lost_focus();
         row(ui, "Font", |ui| {
             let w = ui.available_width();
@@ -392,7 +407,7 @@ fn field_style<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R 
 
 /// The options bar's one-line text field (focusable by id from the canvas).
 fn text_field(ui: &mut egui::Ui, text: &mut String, width: f32) -> egui::Response {
-    field_style(ui, |ui| {
+    let r = field_style(ui, |ui| {
         ui.add_sized(
             [width, ROW_H],
             egui::TextEdit::singleline(text)
@@ -400,12 +415,15 @@ fn text_field(ui: &mut egui::Ui, text: &mut String, width: f32) -> egui::Respons
                 .hint_text("Type your text")
                 .vertical_align(egui::Align::Center),
         )
-    })
+    });
+    a11y_name(&r, "Text");
+    r
 }
 
 /// A compact numeric box: drag to scrub, click to type. Mono digits.
 fn value_field(
     ui: &mut egui::Ui,
+    name: &str,
     v: &mut f32,
     range: RangeInclusive<f32>,
     suffix: &str,
@@ -418,7 +436,7 @@ fn value_field(
         vis.widgets.hovered.weak_bg_fill = GROUND;
         vis.widgets.active.weak_bg_fill = GROUND;
         ui.style_mut().drag_value_text_style = egui::TextStyle::Monospace;
-        ui.add_sized(
+        let r = ui.add_sized(
             [width, ROW_H],
             egui::DragValue::new(v)
                 .range(range)
@@ -432,7 +450,9 @@ fn value_field(
                     }
                 })
                 .suffix(suffix),
-        )
+        );
+        a11y_name(&r, name);
+        r
     })
 }
 
@@ -486,6 +506,7 @@ fn align_toggles(ui: &mut egui::Ui, align: &mut TextAlign) -> bool {
         ] {
             let on = *align == a;
             let r = chip(ui, on, RichText::new(""), 28.0).on_hover_text(tip);
+            a11y_name(&r, tip);
             // Three lines of a paragraph, ragged on the free side.
             let c = r.rect.center();
             let color = if on { ACCENT } else { TEXT };
@@ -544,6 +565,7 @@ fn value_slider_row(
             );
             ui.spacing_mut().slider_width = (ui.available_width() - 10.0).max(60.0);
             let r = ui.add(egui::Slider::new(v, range).logarithmic(log).show_value(false));
+            a11y_name(&r, label);
             finished = r.drag_stopped() || (r.changed() && !r.dragged());
         });
     });
@@ -578,6 +600,7 @@ pub(crate) fn font_picker(ui: &mut egui::Ui, salt: &str, font: &mut String, widt
 
     // The button: a field showing the family, elided, with a chevron.
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, ROW_H), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("Font {font}")));
     let open = ui.memory(|m| m.is_popup_open(popup_id));
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
@@ -659,6 +682,7 @@ pub(crate) fn font_picker(ui: &mut egui::Ui, salt: &str, font: &mut String, widt
                         .desired_width(f32::INFINITY),
                 )
             });
+            a11y_name(&sr, "Search fonts");
             if fresh {
                 sr.request_focus();
             }
@@ -702,7 +726,7 @@ pub(crate) fn font_picker(ui: &mut egui::Ui, salt: &str, font: &mut String, widt
                         area = area.vertical_scroll_offset((i as f32 * (row_h + spacing) - 120.0).max(0.0));
                     }
                 }
-                area.show_rows(ui, row_h, entries.len(), |ui, range| {
+                let scroll_out = area.show_rows(ui, row_h, entries.len(), |ui, range| {
                     for (value, label) in &entries[range] {
                         let on = *value == font.as_str();
                         // Full-width rows, names left-aligned.
@@ -716,6 +740,7 @@ pub(crate) fn font_picker(ui: &mut egui::Ui, salt: &str, font: &mut String, widt
                         }
                     }
                 });
+                a11y_scroll(ui.ctx(), &scroll_out, "Fonts");
             }
             ui.add_space(2.0);
             let total = families.len() + 1;

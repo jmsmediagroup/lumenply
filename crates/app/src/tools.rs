@@ -163,7 +163,7 @@ impl App {
             .frame(egui::Frame::none().fill(PANEL).inner_margin(PAD))
             .show(ctx, |ui| {
                 let tools_h = (ui.available_height() - WELL_H).max(BTN);
-                egui::ScrollArea::vertical()
+                let scroll_out = egui::ScrollArea::vertical()
                     .id_salt("tool-rail")
                     .max_height(tools_h)
                     .auto_shrink([false, true])
@@ -191,6 +191,7 @@ impl App {
                             }
                         }
                     });
+                a11y_scroll(ui.ctx(), &scroll_out, "Tools");
                 ui.vertical_centered(|ui| self.color_well(ui));
             });
     }
@@ -245,6 +246,7 @@ impl App {
         // Swap, in the free top-right corner.
         let swap_rect = egui::Rect::from_min_size(rect.min + egui::vec2(28.0, 0.0), Vec2::splat(12.0));
         let swap = ui.interact(swap_rect, ui.id().with("swap-colors"), Sense::click());
+        swap.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Swap colours"));
         {
             let p = ui.painter();
             let st = Stroke::new(1.3, if swap.hovered() { TEXT } else { MUTED });
@@ -260,6 +262,7 @@ impl App {
         // Reset to black over white, in the free bottom-left corner.
         let reset_rect = egui::Rect::from_min_size(rect.min + egui::vec2(0.0, 32.0), Vec2::splat(12.0));
         let reset = ui.interact(reset_rect, ui.id().with("reset-colors"), Sense::click());
+        reset.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Default colours"));
         {
             let p = ui.painter();
             let a = egui::Rect::from_min_size(reset_rect.min, Vec2::splat(7.0));
@@ -291,6 +294,10 @@ impl App {
         };
         let bg_resp = ui.interact(bg_rect, ui.id().with("bg-well"), Sense::click());
         let fg_resp = ui.interact(fg_rect, ui.id().with("fg-well"), Sense::click());
+        let fg_label = format!("Foreground colour {}", color_picker::format_hex(self.brush_rgb));
+        let bg_label = format!("Background colour {}", color_picker::format_hex(self.bg_rgb));
+        fg_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, true, &fg_label));
+        bg_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, true, &bg_label));
         let p = ui.painter();
         p.rect_filled(bg_rect, 4.0, color_picker::to_color32(self.bg_rgb));
         p.rect_stroke(bg_rect, 4.0, edge(bg_open, bg_resp.hovered()));

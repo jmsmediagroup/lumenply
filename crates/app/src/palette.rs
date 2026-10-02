@@ -234,6 +234,7 @@ impl App {
         let width = 480.0;
         egui::Area::new("palette".into())
             .order(egui::Order::Foreground)
+            .sense(BACKDROP_SENSE)
             .fixed_pos(egui::pos2(screen.center().x - width / 2.0, screen.min.y + 80.0))
             .show(ctx, |ui| {
                 egui::Frame::window(&ctx.style())
@@ -246,12 +247,13 @@ impl App {
                                 .hint_text("Search tools, filters, commands...")
                                 .desired_width(f32::INFINITY),
                         );
+                        a11y_name(&edit, "Search commands");
                         edit.request_focus();
                         if edit.changed() {
                             state.selected = 0;
                         }
                         ui.separator();
-                        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        let scroll_out = egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                             ui.spacing_mut().item_spacing.y = 1.0;
                             for (i, e) in hits.iter().enumerate() {
                                 let active = i == state.selected;
@@ -259,6 +261,14 @@ impl App {
                                     egui::vec2(ui.available_width(), MENU_ITEM_H),
                                     Sense::click(),
                                 );
+                                resp.widget_info(|| {
+                                    egui::WidgetInfo::selected(
+                                        egui::WidgetType::SelectableLabel,
+                                        e.block.is_none(),
+                                        active,
+                                        &e.label,
+                                    )
+                                });
                                 if active {
                                     resp.scroll_to_me(None);
                                 }
@@ -308,6 +318,7 @@ impl App {
                                 ui.label(RichText::new("No matching command").color(MUTED));
                             }
                         });
+                        a11y_scroll(ui.ctx(), &scroll_out, "Commands");
                     });
             });
 

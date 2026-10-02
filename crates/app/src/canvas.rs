@@ -383,6 +383,7 @@ impl App {
             .frame(egui::Frame::none().fill(self.prefs.canvas_color()))
             .show(ctx, |ui| {
                 let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
+                a11y_name(&resp, "Canvas");
                 let rect = resp.rect;
                 let painter = painter.with_clip_rect(rect);
                 self.apply_view_cmd(rect);
@@ -487,6 +488,7 @@ impl App {
     fn zoom_pill(&mut self, ctx: &egui::Context, clip: egui::Rect) {
         egui::Area::new("zoom-pill".into())
             .order(egui::Order::Foreground)
+            .sense(BACKDROP_SENSE)
             .pivot(Align2::RIGHT_BOTTOM)
             .fixed_pos(clip.right_bottom() - egui::vec2(14.0, 14.0))
             .show(ctx, |ui| {
@@ -498,7 +500,9 @@ impl App {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;
-                            if ui.add(egui::Button::new("−").frame(false)).clicked() {
+                            let out = ui.add(egui::Button::new("−").frame(false));
+                            a11y_name(&out, "Zoom out");
+                            if out.clicked() {
                                 self.zoom_at(clip, clip.center(), 1.0 / 1.25);
                             }
                             ui.add_sized(
@@ -509,7 +513,9 @@ impl App {
                                         .color(TEXT),
                                 ),
                             );
-                            if ui.add(egui::Button::new("+").frame(false)).clicked() {
+                            let zin = ui.add(egui::Button::new("+").frame(false));
+                            a11y_name(&zin, "Zoom in");
+                            if zin.clicked() {
                                 self.zoom_at(clip, clip.center(), 1.25);
                             }
                             ui.separator();
@@ -545,6 +551,7 @@ impl App {
         let mut act: Option<&'static str> = None;
         egui::Area::new("sel-actions".into())
             .order(egui::Order::Foreground)
+            .sense(BACKDROP_SENSE)
             .fixed_pos(pos)
             .show(ctx, |ui| {
                 egui::Frame::none()

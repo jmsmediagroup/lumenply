@@ -18,7 +18,7 @@ lumenply-doc.workspace = true
 lumenply-render.workspace = true
 lumenply-io.workspace = true
 lumenply-core.workspace = true
-eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts", "x11"] }
+eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts", "x11", "accesskit"] }
 # Native file dialogs. Default features on purpose: on Linux/BSD that is the
 # XDG desktop portal over D-Bus (no GTK needed to build), falling back to
 # `zenity` at run time when no portal answers. Windows and macOS use the

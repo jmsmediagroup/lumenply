@@ -231,7 +231,7 @@ impl App {
                 let height_id = egui::Id::new("welcome-content-height");
                 let last_h = ctx.data(|d| d.get_temp::<f32>(height_id)).unwrap_or(560.0);
                 let view = ui.available_size();
-                egui::ScrollArea::vertical()
+                let scroll_out = egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         let w = (view.x - 64.0).clamp(560.0, 980.0);
@@ -275,6 +275,7 @@ impl App {
                             ctx.request_repaint();
                         }
                     });
+                a11y_scroll(ui.ctx(), &scroll_out, "Welcome");
             });
     }
 
@@ -336,6 +337,7 @@ impl App {
             Vec2::splat(22.0),
         );
         let x = ui.interact(x_rect, ui.id().with("welcome-error-x"), Sense::click());
+        x.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Dismiss"));
         ui.painter().text(
             x_rect.center(),
             Align2::CENTER_CENTER,
@@ -402,6 +404,7 @@ impl App {
         }
         let img_h = (LEFT_W * 1205.0 / 1800.0).round();
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(LEFT_W, img_h + 58.0), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Open the demo photo"));
         let p = ui.painter();
         let hot = resp.hovered();
         p.rect_filled(rect, 10.0, if hot { RAISED } else { PANEL });
@@ -449,6 +452,9 @@ impl App {
                 egui::pos2(head.right(), head.bottom() + 4.0),
             );
             let clear = ui.interact(clear_rect, ui.id().with("welcome-clear-recent"), Sense::click());
+            clear.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Clear recent files list")
+            });
             ui.painter().text(
                 egui::pos2(head.right() - 2.0, head.center().y),
                 Align2::RIGHT_CENTER,
@@ -512,6 +518,13 @@ impl App {
                 .map(|d| relative_age(d.as_secs()));
             let missing = meta.is_none();
             let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 46.0), Sense::click());
+            resp.widget_info(|| {
+                let name = std::path::Path::new(path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy());
+                let label = format!("Open {}", name.unwrap_or_default());
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label)
+            });
             let hot = resp.hovered();
             let p = ui.painter();
             if hot {
@@ -694,6 +707,7 @@ fn action_button(
     primary: bool,
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(LEFT_W, 56.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, title));
     let hot = resp.hovered();
     let p = ui.painter();
     let (fill, ink, sub_ink) = if primary {

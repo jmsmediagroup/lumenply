@@ -88,6 +88,12 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
 - egui is 0.29: `drag_stopped()`, `id_salt()`, `ComboBox::from_label`. Record a drag's start
   position yourself on `drag_started` — `press_origin()` is already cleared on release.
 - Shortcuts must be ignored while a text field has focus (`ctx.wants_keyboard_input()`).
+- accesskit is on: every custom-painted or separately-labelled control needs a spoken
+  name (`resp.widget_info(..)` or `theme::a11y_name`); floating areas use
+  `theme::BACKDROP_SENSE` so they swallow clicks without being Tab stops. `a11y_tests`
+  in main.rs render the whole UI (`App::frame`) and fail on any unnamed control.
+- Tests that run app frames must not autosave (see the `launch` helper in `a11y_tests`):
+  a backup left in the test data folder opens the Recover dialog in every later test.
 - Pen pressure is not wired: the app passes pressure 1.0 to every stroke point.
 - The bundled font is DejaVu Sans in `crates/render/fonts/` (Bitstream Vera licence).
 - The `--demo` document is built in `crates/app/src/demo.rs` from a CC0 photo
