@@ -962,8 +962,9 @@ impl App {
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::Modifiers as M;
-        // The palette toggle works even while a text field has focus.
-        if ctx.input_mut(|i| i.consume_key(M::COMMAND, Key::K)) {
+        // The palette toggle works even while a text field has focus (but
+        // not under a modal dialog, which would cover it).
+        if self.dialog.is_none() && ctx.input_mut(|i| i.consume_key(M::COMMAND, Key::K)) {
             self.toggle_palette();
         }
         if self.palette.is_some() || ctx.wants_keyboard_input() {

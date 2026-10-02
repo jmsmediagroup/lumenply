@@ -356,7 +356,7 @@ impl App {
         let mut keep = true;
         let mut confirmed = false;
         let mut filter_changed = false;
-        egui::Window::new(title)
+        let shown = egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
             .order(egui::Order::Foreground)
@@ -730,6 +730,10 @@ impl App {
                     });
                 }
             });
+        // The dialog above the backdrop, which is above everything else.
+        if let Some(shown) = shown {
+            ctx.move_to_top(shown.response.layer_id);
+        }
 
         if let Dialog::Filter(f) = &d {
             if filter_changed || !self.filter_previewed {
@@ -812,11 +816,13 @@ impl App {
 
 /// A full-window layer under a dialog that swallows clicks, so nothing
 /// behind it can be edited while the dialog is open; optionally dimmed.
+/// It sits in the foreground order on top of the canvas's floating bars
+/// (zoom, selection actions); the dialog is then raised above it.
 fn modal_backdrop(ctx: &egui::Context, dim: bool) {
     let id = egui::Id::new("modal-backdrop");
     let screen = ctx.screen_rect();
     egui::Area::new(id)
-        .order(egui::Order::Middle)
+        .order(egui::Order::Foreground)
         .fixed_pos(screen.min)
         .show(ctx, |ui| {
             let (r, _) = ui.allocate_exact_size(screen.size(), Sense::click_and_drag());
@@ -824,7 +830,7 @@ fn modal_backdrop(ctx: &egui::Context, dim: bool) {
                 ui.painter().rect_filled(r, 0.0, Color32::from_black_alpha(110));
             }
         });
-    ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, id));
+    ctx.move_to_top(egui::LayerId::new(egui::Order::Foreground, id));
 }
 
 /// A muted explanatory line, wrapped to the dialog width.
