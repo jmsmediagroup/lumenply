@@ -135,38 +135,48 @@ fn distance_sq(inside: &[bool], w: usize, h: usize, target: bool) -> Vec<f64> {
     d
 }
 
-/// The work area: the canvas grown by `margin`, its coverage read with
+/// The work area: `roi` (the part of the canvas that can hold coverage
+/// other than the default) grown by `margin`, its coverage read with
 /// coordinates clamped to the canvas (the border repeats outward).
-fn clamped_dense(mask: &Mask, canvas: Rect, margin: i32) -> (Rect, Vec<f32>) {
-    let inner = mask.to_dense(canvas);
+fn clamped_dense(mask: &Mask, canvas: Rect, roi: Rect, margin: i32) -> (Rect, Vec<f32>) {
+    let inner = mask.to_dense(roi);
     let area = Rect::new(
-        canvas.x - margin,
-        canvas.y - margin,
-        canvas.w + 2 * margin as u32,
-        canvas.h + 2 * margin as u32,
+        roi.x - margin,
+        roi.y - margin,
+        roi.w + 2 * margin as u32,
+        roi.h + 2 * margin as u32,
     );
-    let (cw, ch) = (canvas.w as i32, canvas.h as i32);
-    let mut out = vec![0f32; area.w as usize * area.h as usize];
+    let mut out = vec![mask.default; area.w as usize * area.h as usize];
     for y in 0..area.h as i32 {
-        let sy = (y - margin).clamp(0, ch - 1) as usize;
+        let cy = (area.y + y).clamp(canvas.y, canvas.bottom() - 1);
+        if cy < roi.y || cy >= roi.bottom() {
+            continue;
+        }
+        let row = (cy - roi.y) as usize * roi.w as usize;
         for x in 0..area.w as i32 {
-            let sx = (x - margin).clamp(0, cw - 1) as usize;
-            out[y as usize * area.w as usize + x as usize] = inner[sy * canvas.w as usize + sx];
+            let cx = (area.x + x).clamp(canvas.x, canvas.right() - 1);
+            if cx >= roi.x && cx < roi.right() {
+                out[y as usize * area.w as usize + x as usize] = inner[row + (cx - roi.x) as usize];
+            }
         }
     }
     (area, out)
 }
 
-/// Copy the canvas part of a work-area buffer back into the mask.
+/// Copy the in-canvas part of a work-area buffer back into the mask.
 fn write_canvas(mask: &mut Mask, canvas: Rect, area: Rect, buf: &[f32]) {
-    let m = (canvas.x - area.x) as usize;
-    let aw = area.w as usize;
-    let mut inner = vec![0f32; canvas.w as usize * canvas.h as usize];
-    for y in 0..canvas.h as usize {
-        let src = &buf[(y + m) * aw + m..(y + m) * aw + m + canvas.w as usize];
-        inner[y * canvas.w as usize..(y + 1) * canvas.w as usize].copy_from_slice(src);
+    let dst = area.intersect(&canvas);
+    if dst.is_empty() {
+        return;
     }
-    mask.set_dense(canvas, &inner);
+    let (ox, oy) = ((dst.x - area.x) as usize, (dst.y - area.y) as usize);
+    let (aw, dw) = (area.w as usize, dst.w as usize);
+    let mut inner = vec![0f32; dw * dst.h as usize];
+    for y in 0..dst.h as usize {
+        let start = (y + oy) * aw + ox;
+        inner[y * dw..(y + 1) * dw].copy_from_slice(&buf[start..start + dw]);
+    }
+    mask.set_dense(dst, &inner);
 }
 
 /// Signed distance to the selection edge at every work-area pixel:
@@ -229,8 +239,21 @@ impl Selection {
         if n <= 0.0 {
             return;
         }
+        // Only the selection's tiles (plus the reach) need work, unless it
+        // covers everything outside them too.
+        let roi = if self.coverage.default > 0.0 {
+            canvas
+        } else {
+            match self.coverage.tiles.bounds() {
+                Some(b) => b.intersect(&canvas),
+                None => return,
+            }
+        };
+        if roi.is_empty() {
+            return;
+        }
         let margin = n.ceil() as i32 + 2;
-        let (area, cov) = clamped_dense(&self.coverage, canvas, margin);
+        let (area, cov) = clamped_dense(&self.coverage, canvas, roi, margin);
         let (w, h) = (area.w as usize, area.h as usize);
         let out: Vec<f32> = match op {
             EdgeOp::Expand(_) | EdgeOp::Contract(_) | EdgeOp::Border(_) => {
@@ -368,6 +391,22 @@ mod tests {
         );
         assert_eq!(s.value(20, 20), 0.0, "the corner rounds off");
         assert_eq!(s.value(22, 22), 1.0);
+    }
+
+    #[test]
+    fn a_small_selection_on_a_big_canvas_only_works_around_itself() {
+        // Tiles 2..4 of a 2000×1500 canvas; the result matches the small
+        // canvas case shifted, including across a tile edge (x = 768).
+        let big = Rect::new(0, 0, 2000, 1500);
+        let mut s = Selection::rect(Rect::new(760, 600, 30, 20));
+        s.modify_edge(EdgeOp::Expand(3.0), big);
+        assert_eq!(row(&s, 610, 755..760), vec![0.0, 0.0, 1.0, 1.0, 1.0]);
+        assert_eq!(row(&s, 610, 790..795), vec![1.0, 1.0, 1.0, 0.0, 0.0]);
+        assert!((s.value(757, 598) - 0.394).abs() < 1e-3, "{}", s.value(757, 598));
+        assert_eq!(s.tight_bounds(big), Rect::new(757, 597, 36, 26));
+        // Contract back: the original rectangle, square corners and all.
+        s.modify_edge(EdgeOp::Contract(3.0), big);
+        assert_eq!(s.tight_bounds(big), Rect::new(760, 600, 30, 20));
     }
 
     #[test]
