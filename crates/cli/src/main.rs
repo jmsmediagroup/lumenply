@@ -216,6 +216,32 @@ fn load_any(path: &PathBuf) -> Result<Document> {
     }
 }
 
+/// One line about a text layer: string, font, size, colour, placement.
+fn text_info(t: &lumenply_doc::TextLayer) -> String {
+    let hex = |v: f32| (lumenply_io::linear_to_srgb_f(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+    let mut s = format!(
+        "text: {:?} ({}px, font {:?}{}{}, #{:02x}{:02x}{:02x}, at {},{}, {:?}",
+        t.text,
+        t.size,
+        lumenply_render::text::font_display_name(&t.font),
+        if t.bold { " bold" } else { "" },
+        if t.italic { " italic" } else { "" },
+        hex(t.color[0]),
+        hex(t.color[1]),
+        hex(t.color[2]),
+        t.x,
+        t.y,
+        t.align
+    );
+    if let Some([w, h]) = t.box_size {
+        s += &format!(", box {w}x{h}");
+    }
+    if !t.runs.is_empty() {
+        s += &format!(", {} runs", t.runs.len());
+    }
+    s + ")"
+}
+
 fn print_tree(layers: &[Layer], depth: usize) {
     for l in layers {
         let kind = match &l.content {
@@ -223,7 +249,7 @@ fn print_tree(layers: &[Layer], depth: usize) {
             LayerContent::Group(c) => format!("group, {} children", c.len()),
             LayerContent::Adjustment(a) => format!("adjustment: {}", a.name()),
             LayerContent::Filter(f) => format!("live filter: {}", f.name()),
-            LayerContent::Text(t) => format!("text: {:?} ({}px)", t.text, t.size),
+            LayerContent::Text(t) => text_info(t),
             LayerContent::Smart(s) => format!("smart object, {} source tiles", s.source.len()),
             LayerContent::Fill(f) => format!("fill: {}", f.fill.name()),
             LayerContent::Shape(sh) => format!("shape: {}", sh.geometry.name()),

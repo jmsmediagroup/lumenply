@@ -304,6 +304,8 @@ impl App {
                     } else {
                         format!("Imported {path} ({n} items skipped: {})", rep.warnings.join("; "))
                     };
+                    // Photoshop type layers name their fonts too.
+                    self.note_missing_fonts();
                 }
                 Err(e) => self.status = format!("Could not import {path}: {e}"),
             }

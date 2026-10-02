@@ -27,7 +27,7 @@ pub(crate) const EMBOLDEN: f32 = 1.0 / 24.0;
 
 /// Faces at or above this weight count as bold; lighter faces asked for
 /// bold are emboldened synthetically.
-const BOLD_WEIGHT: u16 = 600;
+pub(crate) const BOLD_WEIGHT: u16 = 600;
 
 pub(crate) struct Resolved {
     pub(crate) font: Arc<Font>,
@@ -42,7 +42,7 @@ fn fonts() -> &'static Mutex<HashMap<String, Arc<Resolved>>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn font_db() -> &'static fontdb::Database {
+pub(crate) fn font_db() -> &'static fontdb::Database {
     static DB: OnceLock<fontdb::Database> = OnceLock::new();
     DB.get_or_init(|| {
         let mut db = fontdb::Database::new();
@@ -90,7 +90,8 @@ pub fn is_font_path(font: &str) -> bool {
 
 /// Whether a layer's `font` renders as itself on this machine: the empty
 /// default and DejaVu Sans are bundled, a file must exist, and a family
-/// must be installed (family names match exactly, as fontdb does).
+/// (or a PostScript name, as PSD text names faces) must be installed
+/// (names match exactly, as fontdb does).
 pub fn font_is_available(font: &str) -> bool {
     if font.is_empty() || font == BUNDLED_FAMILY {
         return true;
@@ -98,7 +99,7 @@ pub fn font_is_available(font: &str) -> bool {
     if is_font_path(font) {
         return std::path::Path::new(font).is_file();
     }
-    all_families().iter().any(|n| n == font)
+    all_families().iter().any(|n| n == font) || crate::font_names::face_by_postscript(font).is_some()
 }
 
 /// The fonts named by text layers (searched through groups) that are not
@@ -187,7 +188,11 @@ pub(crate) fn resolve(t: &TextLayer) -> Arc<Resolved> {
                     fontdb::Style::Normal
                 },
             };
-            match font_db().query(&query) {
+            // A PostScript name (from a PSD) names one exact face.
+            let found = font_db()
+                .query(&query)
+                .or_else(|| crate::font_names::face_by_postscript(&t.font));
+            match found {
                 Some(id) => {
                     let (italic, bold) = font_db().face(id).map_or((false, false), |f| {
                         (f.style != fontdb::Style::Normal, f.weight.0 >= BOLD_WEIGHT)

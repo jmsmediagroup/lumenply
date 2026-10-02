@@ -301,6 +301,8 @@ pub(super) enum Val {
     Unit([u8; 4], f64),
     Obj(Desc),
     List(Vec<Val>),
+    /// Raw data (`tdta`), e.g. a type layer's EngineData.
+    Raw(Vec<u8>),
 }
 
 /// A descriptor: class id and keyed items, in order.
@@ -406,6 +408,11 @@ fn put_val(d: &mut Vec<u8>, v: &Val) {
                 put_val(d, it);
             }
         }
+        Val::Raw(bytes) => {
+            d.extend_from_slice(b"tdta");
+            put_u32(d, bytes.len() as u32);
+            d.extend_from_slice(bytes);
+        }
     }
 }
 
@@ -491,11 +498,9 @@ fn read_val(d: &mut Rd, ty: &[u8; 4], depth: usize) -> Option<Val> {
             read_unicode(d)?;
             Val::Text(String::from_utf8_lossy(&read_key(d)?).into_owned())
         }
-        // Raw data: skipped, kept as an empty text.
         b"tdta" => {
             let n = d.u32().ok()? as usize;
-            d.skip(n).ok()?;
-            Val::Text(String::new())
+            Val::Raw(d.bytes(n).ok()?.to_vec())
         }
         _ => return None,
     })
@@ -508,6 +513,15 @@ pub(super) fn parse_descriptor(data: &[u8]) -> Option<Desc> {
         return None;
     }
     read_desc(&mut d, 0)
+}
+
+/// Read a version-16 descriptor at the reader's position, leaving it just
+/// past the descriptor (for blocks that carry more after it).
+pub(super) fn read_descriptor(d: &mut Rd) -> Option<Desc> {
+    if d.u32().ok()? != 16 {
+        return None;
+    }
+    read_desc(d, 0)
 }
 
 /// An `RGBC` colour object (0..255 doubles) from straight linear RGB.

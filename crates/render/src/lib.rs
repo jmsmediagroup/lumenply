@@ -20,6 +20,7 @@ pub mod fill;
 pub mod filters;
 mod filters_more;
 mod fx;
+pub mod font_names;
 pub mod gpu;
 pub mod gradient_draw;
 pub mod inpaint;
