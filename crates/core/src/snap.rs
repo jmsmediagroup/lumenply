@@ -5,6 +5,7 @@
 //! pixels: the UI converts its screen-pixel snap distance by the zoom.
 
 use lumenply_doc::{Document, LayerId};
+use lumenply_tiles::{Rect, TileStore, TILE_SIZE};
 
 /// What a snap line came from. When two lines are equally close, the
 /// earlier kind wins (a guide beats the canvas edge beats a layer edge
@@ -140,7 +141,7 @@ pub fn doc_lines(doc: &Document, opts: &SnapOptions, skip: &[LayerId]) -> SnapLi
                     walk(children, skip, out);
                     continue;
                 }
-                if let Some(b) = l.raster_store().and_then(|s| s.content_bounds()) {
+                if let Some(b) = l.raster_store().and_then(painted_bounds) {
                     out.xs.push((b.x as f32, SnapSource::Layer));
                     out.xs.push((b.right() as f32, SnapSource::Layer));
                     out.ys.push((b.y as f32, SnapSource::Layer));
@@ -151,6 +152,53 @@ pub fn doc_lines(doc: &Document, opts: &SnapOptions, skip: &[LayerId]) -> SnapLi
         walk(doc.layers(), skip, &mut out);
     }
     out
+}
+
+/// The tight bounds of `store`'s non-transparent pixels, like
+/// `TileStore::content_bounds`, but scanning outermost tiles first and
+/// skipping every tile that lies wholly inside what is already found: a
+/// full-canvas photo costs its four corner tiles, not all of them.
+pub fn painted_bounds(store: &TileStore) -> Option<Rect> {
+    let mut coords: Vec<_> = store.coords().collect();
+    let (x0, x1) = (
+        coords.iter().map(|c| c.x).min()?,
+        coords.iter().map(|c| c.x).max()?,
+    );
+    let (y0, y1) = (
+        coords.iter().map(|c| c.y).min()?,
+        coords.iter().map(|c| c.y).max()?,
+    );
+    // Corners first, then edges, then inwards.
+    coords.sort_by_key(|c| (c.x - x0).min(x1 - c.x) + (c.y - y0).min(y1 - c.y));
+    let mut acc: Option<Rect> = None;
+    for c in coords {
+        let tr = c.rect();
+        if acc.is_some_and(|a| a.union(&tr) == a) {
+            continue;
+        }
+        let Some(tile) = store.tile(c) else { continue };
+        let px = tile.pixels();
+        let (mut lx, mut ly, mut hx, mut hy) = (usize::MAX, usize::MAX, 0, 0);
+        for (i, p) in px.iter().enumerate() {
+            if p.a > 0.0 {
+                let (x, y) = (i % TILE_SIZE, i / TILE_SIZE);
+                lx = lx.min(x);
+                ly = ly.min(y);
+                hx = hx.max(x);
+                hy = hy.max(y);
+            }
+        }
+        if lx <= hx && ly <= hy {
+            let r = Rect::new(
+                tr.x + lx as i32,
+                tr.y + ly as i32,
+                (hx - lx + 1) as u32,
+                (hy - ly + 1) as u32,
+            );
+            acc = Some(acc.map_or(r, |a| a.union(&r)));
+        }
+    }
+    acc
 }
 
 #[cfg(test)]
@@ -231,6 +279,25 @@ mod tests {
         // 70..128 has its centre at 99: one pixel off the centre line.
         let [sx, _] = l.snap_rect(70.0, 0.0, 128.0, 10.0, 6.0);
         assert_eq!(sx.map(|s| (s.delta, s.line)), Some((1.0, 100.0)));
+    }
+
+    #[test]
+    fn painted_bounds_match_a_full_scan() {
+        let mut s = TileStore::new();
+        assert_eq!(painted_bounds(&s), None);
+        // A filled block across many tiles, plus stray pixels inside and
+        // at the far edges, plus an allocated but blank tile.
+        for y in 30..700 {
+            for x in -40..900 {
+                s.set_pixel(x, y, Rgba::WHITE);
+            }
+        }
+        s.set_pixel(1200, 5, Rgba::from_straight(1.0, 1.0, 1.0, 0.01));
+        s.set_pixel(400, 400, Rgba::TRANSPARENT);
+        s.set_pixel(-300, -300, Rgba::TRANSPARENT);
+        s.set_pixel(-299, 1500, Rgba::WHITE);
+        assert_eq!(painted_bounds(&s), s.content_bounds());
+        assert_eq!(painted_bounds(&s), Some(Rect::new(-299, 5, 1500, 1496)));
     }
 
     #[test]

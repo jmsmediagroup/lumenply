@@ -147,7 +147,7 @@ impl App {
         self.aids.move_bounds = self
             .active_layer()
             .and_then(|l| l.raster_store())
-            .and_then(|s| s.content_bounds());
+            .and_then(snap::painted_bounds);
     }
 
     /// Move tool: the whole-pixel offset after snapping the moved bounds.
