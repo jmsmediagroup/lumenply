@@ -536,6 +536,7 @@ impl App {
         for p in &launch.places {
             app.place_image(p);
         }
+        app.restore_brush();
         if session::autosave_file().is_some_and(|p| p.exists()) {
             app.dialog = Some(Dialog::Recover);
         }
@@ -1259,6 +1260,7 @@ impl eframe::App for App {
         // An intentional exit needs no crash recovery; a stale backup would
         // only raise a misleading prompt next launch.
         session::remove_autosave();
+        self.remember_brush();
     }
 }
 

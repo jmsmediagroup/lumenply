@@ -342,6 +342,22 @@ impl App {
         self.brush.dynamics = (&p.dynamics).into();
     }
 
+    /// Put back the brush from the last session (see `remember_brush`).
+    pub(crate) fn restore_brush(&mut self) {
+        if let Some(p) = self.prefs.current_brush.clone() {
+            // A tip that has gone since is no news at launch.
+            let status = std::mem::take(&mut self.status);
+            self.apply_preset(&p);
+            self.status = status;
+        }
+    }
+
+    /// Keep the brush (tip, shape, dynamics) for the next session.
+    pub(crate) fn remember_brush(&mut self) {
+        self.prefs.current_brush = Some(Box::new(self.current_preset("Last used".into())));
+        self.prefs.save();
+    }
+
     /// Put tip `id` on the brush ("" = round). Picking a tip also picks
     /// its spacing, and an imported tip its own size.
     pub(crate) fn select_tip(&mut self, id: &str) {
@@ -1114,6 +1130,29 @@ mod tests {
         // Removing it deletes it from the list.
         app.delete_tip(&id);
         assert!(app.brushes.index_of(&id).is_none() && app.brush.tip.is_none());
+    }
+
+    #[test]
+    fn the_last_brush_comes_back_at_launch() {
+        let mut app = launch();
+        app.select_tip("builtin:Leaf");
+        app.brush.radius = 33.0;
+        app.brush.angle = -40.0;
+        app.brush.dynamics.scatter_across = true;
+        app.brush.dynamics.texture_depth = 0.4;
+        // What `remember_brush` writes at exit (without touching the
+        // shared test prefs file).
+        let saved = app.current_preset("Last used".into());
+        let mut next = launch();
+        next.prefs.current_brush = Some(Box::new(saved));
+        next.status = "Ready".into();
+        next.restore_brush();
+        assert_eq!(next.brushes.selected, "builtin:Leaf");
+        assert_eq!(next.brush.tip.as_ref().map(|t| t.name()), Some("Leaf"));
+        assert_eq!((next.brush.radius, next.brush.angle), (33.0, -40.0));
+        assert!(next.brush.dynamics.scatter_across);
+        assert_eq!(next.brush.dynamics.texture_depth, 0.4);
+        assert_eq!(next.status, "Ready");
     }
 
     #[test]

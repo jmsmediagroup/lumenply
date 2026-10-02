@@ -104,6 +104,9 @@ pub(crate) struct Prefs {
     pub grid_spacing: f32,
     /// ...with this many subdivisions per cell.
     pub grid_subdivisions: u32,
+    /// The brush as it was at the last exit (tip, shape, dynamics),
+    /// restored at launch.
+    pub current_brush: Option<Box<BrushPreset>>,
 }
 
 /// One saved brush setup (the shape parameters; colour stays with the
@@ -163,6 +166,7 @@ impl Default for Prefs {
             snap: true,
             grid_spacing: 100.0,
             grid_subdivisions: 4,
+            current_brush: None,
         }
     }
 }
