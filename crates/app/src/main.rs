@@ -1793,6 +1793,8 @@ pub(crate) mod a11y_tests {
             ("New guide", Dialog::NewGuide(true, 32.0)),
             ("About", Dialog::About),
             ("Save selection", Dialog::SaveSelection("Sky".into())),
+            ("Trim", Dialog::Trim(true)),
+            ("Rotate canvas", Dialog::RotateBy(15.0, true)),
             (
                 "Load selection",
                 Dialog::LoadSelection(0, CombineOp::Replace, false),

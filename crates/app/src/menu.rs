@@ -411,10 +411,13 @@ impl App {
         self.act(ui, "Image size...", "image-size");
         self.act(ui, "Canvas size...", "canvas-size");
         self.act(ui, "Crop to selection", "crop");
+        self.act(ui, "Trim...", "trim");
+        self.act(ui, "Reveal all", "reveal-all");
         menu_separator(ui);
         self.act(ui, "Rotate 90° clockwise", "rot-cw");
         self.act(ui, "Rotate 90° counter-clockwise", "rot-ccw");
         self.act(ui, "Rotate 180°", "rot-180");
+        self.act(ui, "Rotate by angle...", "rot-angle");
         self.act(ui, "Flip image horizontal", "img-flip-h");
         self.act(ui, "Flip image vertical", "img-flip-v");
         menu_separator(ui);

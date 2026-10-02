@@ -26,6 +26,10 @@ pub(crate) enum Dialog {
     Fill(bool, f32, u8),
     /// View ▸ New guide: (vertical, position in pixels).
     NewGuide(bool, f32),
+    /// Image ▸ Trim: cut transparent borders (else top-left-colour ones).
+    Trim(bool),
+    /// Image ▸ Rotate by angle: degrees, clockwise when true.
+    RotateBy(f32, bool),
     /// Select ▸ Save Selection: the name to keep it under.
     SaveSelection(String),
     /// Select ▸ Load Selection: (saved selection, how it combines, invert).
@@ -428,6 +432,8 @@ impl App {
             Dialog::Preferences(..) => "Preferences",
             Dialog::ColorRange(..) => "Colour range",
             Dialog::NewGuide(..) => "New guide",
+            Dialog::Trim(..) => "Trim",
+            Dialog::RotateBy(..) => "Rotate canvas",
             Dialog::SaveSelection(..) => "Save selection",
             Dialog::LoadSelection(..) => "Load selection",
             Dialog::About => "About",
@@ -447,6 +453,8 @@ impl App {
             Dialog::NewGuide(..) => "Add",
             Dialog::SaveSelection(..) => "Save",
             Dialog::LoadSelection(..) => "Load",
+            Dialog::Trim(..) => "Trim",
+            Dialog::RotateBy(..) => "Rotate",
             Dialog::Filter(_) | Dialog::CanvasSize(..) | Dialog::ImageSize(..) => "Apply",
             Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) | Dialog::Recover | Dialog::About => "",
         };
@@ -591,6 +599,30 @@ impl App {
                                     keep = false;
                                 }
                             });
+                        }
+                        Dialog::Trim(transparent) => {
+                            ui.horizontal(|ui| {
+                                row_label(ui, "Based on", LABEL_W);
+                                segmented(
+                                    ui,
+                                    transparent,
+                                    &[(true, "Transparent pixels"), (false, "Top-left colour")],
+                                );
+                            });
+                            note(ui, "Crops away the borders; nothing is deleted, Reveal all brings them back.");
+                        }
+                        Dialog::RotateBy(degrees, clockwise) => {
+                            let r = field_row(
+                                ui,
+                                "Angle",
+                                egui::DragValue::new(degrees).range(-359.9..=359.9).max_decimals(2).suffix("°"),
+                            );
+                            a11y_name(&r, "Rotation angle");
+                            ui.horizontal(|ui| {
+                                row_label(ui, "Direction", LABEL_W);
+                                segmented(ui, clockwise, &[(true, "Clockwise"), (false, "Counter-clockwise")]);
+                            });
+                            note(ui, "The canvas grows to fit; the new corners are transparent.");
                         }
                         Dialog::SaveSelection(name) => {
                             ui.horizontal(|ui| {
@@ -1101,6 +1133,20 @@ impl App {
                 Dialog::SelectEdge(..) => {}
                 Dialog::Fill(..) => self.fill_active(),
                 Dialog::ColorRange(..) => {}
+                Dialog::Trim(transparent) => {
+                    let basis = if *transparent {
+                        lumenply_core::canvas_ops::TrimBasis::Transparent
+                    } else {
+                        lumenply_core::canvas_ops::TrimBasis::TopLeftColor
+                    };
+                    self.run(&lumenply_core::canvas_ops::Trim { basis });
+                    self.view_cmd = Some(ViewCmd::Fit);
+                }
+                Dialog::RotateBy(degrees, clockwise) => {
+                    let degrees = if *clockwise { *degrees } else { -*degrees };
+                    self.run(&lumenply_core::canvas_ops::RotateCanvas { degrees });
+                    self.view_cmd = Some(ViewCmd::Fit);
+                }
                 Dialog::SaveSelection(name) => {
                     self.run(&lumenply_core::channels::SaveSelection { name: name.clone() })
                 }

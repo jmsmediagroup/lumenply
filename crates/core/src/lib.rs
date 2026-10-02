@@ -7,6 +7,7 @@
 //! CLI behave identically.
 
 pub mod align;
+pub mod canvas_ops;
 pub mod channels;
 pub mod commands;
 mod content_aware;

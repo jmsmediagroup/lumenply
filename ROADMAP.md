@@ -275,6 +275,11 @@ None of these could be tested in the container.
       Load selection (New/Add/Subtract/Intersect, Invert, Delete), undoable,
       saved in .lumen (channels/ tiles). Still open: PSD alpha-channel round
       trip, a Channels panel
+- [x] Image ▸ Trim (transparent or top-left-colour borders), Reveal all (grow
+      the canvas to every layer's pixels, e.g. after a non-destructive crop),
+      Rotate by angle (canvas grows to fit, transparent corners) — all through
+      CropCanvas, so masks, guides, paths and smart objects follow. Text
+      layers stay upright when the canvas turns (as in a straightened crop)
 - [ ] Merge selected layers (Cmd+E with a multi-selection)
 - [ ] Lock-aware Properties transform controls
 - [ ] Shape layers (vector shape + fill), pattern fills (PSD imports them as pixels)

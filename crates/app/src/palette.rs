@@ -120,6 +120,9 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Export As...", "export-as"),
     ("Edit smart object contents", "smart-edit"),
     ("Save selection...", "save-selection"),
+    ("Trim...", "trim"),
+    ("Reveal all", "reveal-all"),
+    ("Rotate image by angle...", "rot-angle"),
     ("Load selection...", "load-selection"),
     ("Replace smart object contents...", "smart-replace"),
     ("Duplicate layer", "duplicate-layer"),
@@ -455,6 +458,9 @@ impl App {
             "smart-edit" | "smart-replace" if !smart => Some("Select a smart object first"),
             "save-selection" if !selection => need_selection,
             "load-selection" if doc.saved_selections.is_empty() => Some("No saved selections yet"),
+            "reveal-all" if lumenply_core::canvas_ops::RevealAll::frame(doc) == doc.canvas() => {
+                Some("Everything is already on the canvas")
+            }
             id if id.starts_with("filter-") && !pixel => Some("Filters apply to a pixel layer"),
             "deselect" | "feather" if !selection => need_selection,
             "crop" => {
@@ -692,6 +698,19 @@ impl App {
                 self.dialog = Some(Dialog::SaveSelection(format!("Selection {n}")));
             }
             "load-selection" => self.dialog = Some(Dialog::LoadSelection(0, CombineOp::Replace, false)),
+            "trim" => {
+                // Transparent borders when there are any, else flat colour.
+                let t = lumenply_core::canvas_ops::Trim {
+                    basis: lumenply_core::canvas_ops::TrimBasis::Transparent,
+                };
+                let transparent = t.frame(self.editor.doc()).is_some();
+                self.dialog = Some(Dialog::Trim(transparent));
+            }
+            "reveal-all" => {
+                self.run(&lumenply_core::canvas_ops::RevealAll);
+                self.view_cmd = Some(ViewCmd::Fit);
+            }
+            "rot-angle" => self.dialog = Some(Dialog::RotateBy(15.0, true)),
             "smart-replace" => self.pick_replace_smart_contents(),
             "zoom-in" => self.view_cmd = Some(ViewCmd::ZoomIn),
             "zoom-out" => self.view_cmd = Some(ViewCmd::ZoomOut),
@@ -751,7 +770,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 108); // + save / load selection
+        assert_eq!(n, 111); // + trim, reveal all, rotate by angle
     }
 
     #[test]
