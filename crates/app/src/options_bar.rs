@@ -224,20 +224,7 @@ impl App {
                         }
                         Tool::Text => self.text_options_bar(ui),
                         Tool::Shape => self.shape_options_bar(ui, tier),
-                        Tool::Gradient => {
-                            segmented(
-                                ui,
-                                &mut self.gradient_kind,
-                                &[(GradientKind::Linear, "Linear"), (GradientKind::Radial, "Radial")],
-                            );
-                            ui.separator();
-                            ui.label("From");
-                            crate::color_picker::color_edit_button_rgb(ui, &mut self.brush_rgb);
-                            ui.label("To");
-                            crate::color_picker::color_edit_button_rgb(ui, &mut self.bg_rgb);
-                            check(ui, &mut self.gradient_to_transparent, "To transparent");
-                            hint_label(ui, tier, self.tool);
-                        }
+                        Tool::Gradient => self.gradient_options_bar(ui, tier),
                         Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal => {
                             if self.tool == Tool::Brush {
                                 const MODES: [(BrushMode, &str); 6] = [
@@ -757,7 +744,7 @@ fn tool_hint(tool: Tool) -> Option<&'static str> {
     Some(match tool {
         Tool::Move => "Drag to move the active layer",
         Tool::Eyedropper => "Click to pick the brush colour from the image",
-        Tool::Gradient => "Drag on the canvas",
+        Tool::Gradient => "Drag on the canvas; Shift snaps to 45°",
         Tool::RectSelect | Tool::EllipseSelect | Tool::Lasso => "Shift adds, Alt subtracts",
         Tool::PolyLasso => "Click to add points, double-click to close",
         Tool::Pen => "Click corners, drag curves; click the first point to close",

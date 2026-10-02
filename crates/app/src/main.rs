@@ -33,6 +33,7 @@ mod debug;
 mod demo;
 mod dialogs;
 mod export_as;
+mod gradient_ui;
 mod guides;
 mod histogram;
 mod history;
@@ -284,8 +285,6 @@ struct App {
     tolerance: f32,
     contiguous: bool,
     sample_merged: bool,
-    gradient_kind: GradientKind,
-    gradient_to_transparent: bool,
     text_size: f32,
     text_bold: bool,
     text_italic: bool,
@@ -411,6 +410,8 @@ struct App {
     aids: guides::ViewAids,
     /// The Shape tool's options and drag (shape_tool.rs).
     shape: shape_tool::ShapeTool,
+    /// The Gradient tool's options, popover and drag (gradient_ui.rs).
+    gradient: gradient_ui::GradientTool,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -477,8 +478,6 @@ impl App {
             tolerance: 0.12,
             contiguous: true,
             sample_merged: false,
-            gradient_kind: GradientKind::Linear,
-            gradient_to_transparent: false,
             text_size: 72.0,
             text_bold: false,
             text_italic: false,
@@ -574,6 +573,7 @@ impl App {
             crop: crop::CropTool::default(),
             aids: guides::ViewAids::default(),
             shape: Default::default(),
+            gradient: Default::default(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -931,22 +931,6 @@ impl App {
         }
     }
 
-    fn gradient_command(&self, layer: LayerId, start: (f32, f32), end: (f32, f32)) -> GradientFill {
-        let from = linear_rgba(self.brush_rgb, 1.0);
-        let to = if self.gradient_to_transparent {
-            [from[0], from[1], from[2], 0.0]
-        } else {
-            linear_rgba(self.bg_rgb, 1.0)
-        };
-        GradientFill {
-            layer,
-            start,
-            end,
-            colors: [from, to],
-            kind: self.gradient_kind,
-        }
-    }
-
     /// The command a brush stroke becomes: paint pixels, paint the mask, or clone.
     /// Flip quick-mask mode; the overlay swaps between red coverage and
     /// marching ants on the next refresh.
@@ -1047,6 +1031,7 @@ impl App {
         // free transform consume it first for their own cancel).
         if self.editor.doc().selection.is_some()
             && !color_picker::is_open(ctx)
+            && !self.gradient.open
             && ctx.input_mut(|i| i.consume_key(M::NONE, Key::Escape))
         {
             self.run(&SetSelection { selection: None });
@@ -1704,7 +1689,7 @@ pub(crate) mod a11y_tests {
     /// The app with no dialog up, and no autosave while frames run: a
     /// backup left in the test data folder would greet every later launch
     /// with the Recover dialog.
-    fn launch(args: &[String]) -> App {
+    pub(crate) fn launch(args: &[String]) -> App {
         let mut app = App::launch(args);
         app.dialog = None;
         app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
