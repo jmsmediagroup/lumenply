@@ -821,7 +821,7 @@ fn engine_data(t: &TextLayer) -> Value {
                 ("AlignLineHeightToGridFlags", Value::Bool(false)),
             ]),
         ),
-        ("AntiAlias", Value::Int(4)),
+        ("AntiAlias", Value::Int(3)),
         ("UseFractionalGlyphWidths", Value::Bool(true)),
         (
             "Rendered",
@@ -1024,6 +1024,8 @@ mod tests {
         assert_eq!(data.get("Font"), Some(&Value::Int(2)));
         assert_eq!(data.get("FauxBold"), Some(&Value::Bool(false)));
         assert_eq!(data.at(&["FillColor", "Values"]).unwrap().nums(), vec![1.0; 4]);
+        // Smooth anti-aliasing, the same as the descriptor's `AntA` AnSm.
+        assert_eq!(e.at(&["EngineDict", "AntiAlias"]), Some(&Value::Int(3)));
     }
 
     #[test]

@@ -90,7 +90,8 @@ pub fn is_font_path(font: &str) -> bool {
 
 /// Whether a layer's `font` renders as itself on this machine: the empty
 /// default and DejaVu Sans are bundled, a file must exist, and a family
-/// must be installed (family names match exactly, as fontdb does).
+/// (or a PostScript name, as PSD text names faces) must be installed
+/// (names match exactly, as fontdb does).
 pub fn font_is_available(font: &str) -> bool {
     if font.is_empty() || font == BUNDLED_FAMILY {
         return true;
