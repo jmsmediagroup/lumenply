@@ -1515,7 +1515,7 @@ impl Command for PaintSelection {
             _ => lumenply_doc::adjust::luminance(cr, cg, cb).clamp(0.0, 1.0),
         };
         for d in interpolate_dabs(&self.brush, &self.points) {
-            dab_coverage(&self.brush, &d, canvas, None, |px, py, cover| {
+            dab_coverage(&self.brush, d, canvas, None, |px, py, cover| {
                 let k = (ca * cover).clamp(0.0, 1.0);
                 let v = sel.coverage.value(px, py);
                 sel.coverage.set_value(px, py, v + (target - v) * k);
@@ -1764,7 +1764,7 @@ impl Command for CloneStroke {
         let strength = self.brush.color[3].clamp(0.0, 1.0);
         let (ox, oy) = self.offset;
         for d in interpolate_dabs(&self.brush, &self.points) {
-            dab_coverage(&self.brush, &d, canvas, sel.as_ref(), |px, py, cover| {
+            dab_coverage(&self.brush, d, canvas, sel.as_ref(), |px, py, cover| {
                 let (sx, sy) = (px + ox, py + oy);
                 if !canvas.contains(sx, sy) {
                     return;
@@ -2163,7 +2163,7 @@ fn heal_dab(
             alpha[gy * w + gx] = a;
         }
     }
-    dab_coverage(brush, &p, canvas, sel, |x, y, c| {
+    dab_coverage(brush, p, canvas, sel, |x, y, c| {
         cover[(y - region.y) as usize * w + (x - region.x) as usize] = c;
     });
 
@@ -2763,7 +2763,7 @@ impl Command for PaintStroke {
                             let (gx, gy) = (sx + (i % side) as i32, sy + (i / side) as i32);
                             *q = store.get_pixel(gx, gy);
                         }
-                        dab_coverage(&self.brush, &d, canvas, sel.as_ref(), |px, py, cover| {
+                        dab_coverage(&self.brush, d, canvas, sel.as_ref(), |px, py, cover| {
                             let (lx, ly) = (px - ox - sx, py - oy - sy);
                             if lx < 0 || ly < 0 || lx >= side as i32 || ly >= side as i32 {
                                 return;
@@ -2789,7 +2789,7 @@ impl Command for PaintStroke {
         for d in interpolate_dabs(&self.brush, &self.points) {
             // Colour dynamics give a dab its own colour.
             let [cr, cg, cb] = d.color.unwrap_or([cr, cg, cb]);
-            dab_coverage(&self.brush, &d, canvas, sel.as_ref(), |px, py, cover| {
+            dab_coverage(&self.brush, d, canvas, sel.as_ref(), |px, py, cover| {
                 let dst = store.get_pixel(px, py);
                 let out = match mode {
                     BrushMode::Paint => Rgba::from_straight(cr, cg, cb, ca * cover).over(dst),
@@ -2881,7 +2881,7 @@ impl Command for PaintMask {
             _ => lumenply_doc::adjust::luminance(cr, cg, cb).clamp(0.0, 1.0),
         };
         for d in interpolate_dabs(&self.brush, &self.points) {
-            dab_coverage(&self.brush, &d, canvas, sel.as_ref(), |px, py, cover| {
+            dab_coverage(&self.brush, d, canvas, sel.as_ref(), |px, py, cover| {
                 let k = (ca * cover).clamp(0.0, 1.0);
                 let v = mask.value(px, py);
                 mask.set_value(px, py, v + (target - v) * k);
@@ -2996,13 +2996,14 @@ pub(crate) fn interpolate_dabs(brush: &Brush, points: &[StrokePoint]) -> Vec<Dab
 
 /// Call `f(x, y, coverage)` for every canvas pixel a dab touches, with the
 /// selection and the dab's opacity already applied to the coverage.
-fn dab_coverage(
+pub(crate) fn dab_coverage(
     brush: &Brush,
-    p: &Dab,
+    p: impl std::borrow::Borrow<Dab>,
     canvas: Rect,
     sel: Option<&Selection>,
     mut f: impl FnMut(i32, i32, f32),
 ) {
+    let p: &Dab = p.borrow();
     let r = p.radius;
     if r <= 0.0 {
         return;
