@@ -183,6 +183,16 @@ impl App {
     }
 }
 
+/// What Delete/Backspace does with this tool active: clear the layer's
+/// pixels, except where the tool itself uses the key (the pen deletes the
+/// selected path node), so one keystroke never does both.
+fn delete_key_action(tool: Tool) -> Option<&'static str> {
+    match tool {
+        Tool::Pen => None,
+        _ => Some("clear"),
+    }
+}
+
 /// `--window-size WxH` (debug: check narrow layouts headlessly), else the
 /// default 1600×1000.
 fn window_size(args: &[String]) -> [f32; 2] {
@@ -947,45 +957,25 @@ impl App {
                 fired.push("redo");
             }
         });
-        if self.no_doc {
-            // The welcome screen: only opening a document makes sense.
-            if fired.contains(&"open") {
-                self.pick_open();
-            }
-            return;
-        }
+        // Keys run the same actions as the menus, so a key that can't apply
+        // says why in the status bar instead of silently doing nothing (on
+        // the welcome screen that leaves only Open).
         for id in fired {
-            match id {
-                "undo" => self.undo(),
-                "redo" => self.redo(),
-                "invert-sel" => self.run(&InvertSelection),
-                "select-all" => self.run(&SetSelection {
-                    selection: Some(Selection::all()),
-                }),
-                "deselect" => self.run(&SetSelection { selection: None }),
-                "save" => match self.path.clone() {
-                    Some(p) => self.save_path(&p.to_string_lossy()),
-                    None => self.pick_save(),
-                },
-                "open" => self.pick_open(),
-                "close" => self.close_tab(self.cur_tab),
-                "xform" => self.begin_free_transform(),
-                "group" => self.group_selected(),
-                "layer-via-copy" => self.run_menu_action("layer-via-copy"),
-                _ => {}
-            }
+            self.run_menu_action(id);
         }
-        let (fill, clear) = ctx.input(|i| {
+        let (fill, delete) = ctx.input(|i| {
             (
                 i.modifiers.shift && i.key_pressed(Key::F5),
                 i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace),
             )
         });
-        if fill && self.active_is_pixel() {
-            self.fill_active();
+        if fill {
+            self.run_menu_action("fill");
         }
-        if clear && self.active_is_pixel() {
-            self.clear_active();
+        if delete {
+            if let Some(id) = delete_key_action(self.tool) {
+                self.run_menu_action(id);
+            }
         }
         let (tool, bigger, smaller, fit, actual, swap_colors, default_colors, quick_mask) = ctx.input(|i| {
             if i.modifiers.command || i.modifiers.alt {
@@ -1297,4 +1287,20 @@ fn filter_presets() -> Vec<(&'static str, Filter)> {
         ("Median", Filter::Median { radius: 2.0 }),
         ("High Pass", Filter::HighPass { radius: 4.0 }),
     ]
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    #[test]
+    fn delete_key_never_clears_pixels_while_the_pen_owns_it() {
+        // The pen deletes the selected path node with Delete/Backspace;
+        // clearing the layer as well would erase pixels the user never meant
+        // to touch.
+        assert_eq!(delete_key_action(Tool::Pen), None);
+        assert_eq!(delete_key_action(Tool::Brush), Some("clear"));
+        assert_eq!(delete_key_action(Tool::Move), Some("clear"));
+        assert_eq!(delete_key_action(Tool::RectSelect), Some("clear"));
+    }
 }
