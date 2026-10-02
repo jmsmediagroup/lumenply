@@ -233,19 +233,19 @@ pub fn rasterize(t: &TextLayer) -> TileStore {
         return store;
     }
     let lay = crate::text_layout::layout(t);
-    let font = lay.font.as_ref();
-    let [cr, cg, cb, ca] = t.color;
     for g in &lay.glyphs {
         let line = &lay.lines[g.line];
         if line.hidden {
             continue;
         }
-        let (metrics, bitmap) = font.rasterize_indexed(g.glyph, lay.size);
+        let face = &lay.faces[g.face];
+        let [cr, cg, cb, ca] = face.color;
+        let (metrics, bitmap) = face.font.rasterize_indexed(g.glyph, face.size);
         if metrics.width == 0 || metrics.height == 0 {
             continue;
         }
-        let (width, bitmap) = if lay.bold_px > 0.0 {
-            embolden(&bitmap, metrics.width, metrics.height, lay.bold_px)
+        let (width, bitmap) = if face.bold_px > 0.0 {
+            embolden(&bitmap, metrics.width, metrics.height, face.bold_px)
         } else {
             (metrics.width, bitmap)
         };
@@ -255,7 +255,7 @@ pub fn rasterize(t: &TextLayer) -> TileStore {
         for row in 0..metrics.height {
             let py = gy + row as i32;
             // Synthetic oblique: shear rows around the baseline.
-            let shear = if lay.oblique {
+            let shear = if face.oblique {
                 ((baseline_y - py as f32) * OBLIQUE).round() as i32
             } else {
                 0

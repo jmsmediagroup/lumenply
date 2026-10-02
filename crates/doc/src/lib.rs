@@ -83,6 +83,7 @@ pub mod guides;
 pub mod locks;
 pub mod selection;
 pub mod selection_ops;
+pub mod text_runs;
 
 pub use adjust::{Adjustment, CompiledAdjustment, LevelsChannel};
 pub use fill::{Fill, FillLayer, GradientStyle};
@@ -510,6 +511,9 @@ pub struct TextLayer {
     /// Show every letter as a capital (the stored text keeps its case).
     #[serde(default)]
     pub all_caps: bool,
+    /// Per-character colour, size, bold and italic (see [`text_runs`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<text_runs::TextRun>,
     #[serde(skip)]
     pub cache: Option<TileStore>,
 }
@@ -544,6 +548,7 @@ impl PartialEq for TextLayer {
             && self.box_size == o.box_size
             && self.baseline_shift == o.baseline_shift
             && self.all_caps == o.all_caps
+            && self.runs == o.runs
     }
 }
 
@@ -564,6 +569,7 @@ impl TextLayer {
             box_size: None,
             baseline_shift: 0.0,
             all_caps: false,
+            runs: Vec::new(),
             cache: None,
         }
     }

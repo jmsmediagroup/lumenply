@@ -13,6 +13,7 @@
 use std::sync::Arc;
 
 use fontdue::Font;
+use lumenply_doc::text_runs::ResolvedStyle;
 use lumenply_doc::{TextAlign, TextLayer};
 
 use crate::text::{resolve, EMBOLDEN};
@@ -23,8 +24,10 @@ pub struct PlacedGlyph {
     /// Byte offset in the layer's text of the character this glyph shows
     /// (all caps can show one character as several glyphs).
     pub byte: usize,
-    /// Glyph index in the resolved face.
+    /// Glyph index in its face.
     pub glyph: u16,
+    /// Index into [`TextLayout::faces`]: font, size and colour.
+    pub face: usize,
     /// Pen position: the left edge of the glyph's advance, canvas px.
     pub x: f32,
     /// Advance including tracking, synthetic bold and justification.
@@ -42,6 +45,10 @@ pub struct LayoutLine {
     pub end: usize,
     /// Baseline the glyphs sit on (baseline shift applied), canvas px.
     pub baseline: f32,
+    /// The line's tallest ascent and deepest descent (both positive), from
+    /// the largest characters on it.
+    pub ascent: f32,
+    pub descent: f32,
     /// Caret stops left to right: (byte offset, x) for every character
     /// boundary on the line; the first is `start`, the last `end`.
     pub stops: Vec<(usize, f32)>,
@@ -62,28 +69,45 @@ pub struct Caret {
     pub line: usize,
 }
 
+/// One font at one size and colour, as the glyphs of a style run use it.
+#[derive(Clone)]
+pub struct Face {
+    pub(crate) font: Arc<Font>,
+    pub size: f32,
+    /// Straight linear RGBA.
+    pub color: [f32; 4],
+    pub(crate) bold_px: f32,
+    pub(crate) oblique: bool,
+    bold: bool,
+    italic: bool,
+    ascent: f32,
+    descent: f32,
+}
+
 /// A laid-out text layer. See the module docs.
 #[derive(Clone)]
 pub struct TextLayout {
     pub glyphs: Vec<PlacedGlyph>,
     /// Never empty: empty text still has one line holding the caret.
     pub lines: Vec<LayoutLine>,
-    /// Font ascent and descent at the layer's size, both positive.
+    /// The faces the glyphs use; the first is the layer's own style.
+    pub faces: Vec<Face>,
+    /// Font ascent and descent at the layer's own size, both positive.
     pub ascent: f32,
     pub descent: f32,
-    /// Baseline-to-baseline distance (the leading).
+    /// Baseline-to-baseline distance (the leading) at the layer's size.
     pub line_step: f32,
     pub(crate) size: f32,
-    pub(crate) font: Arc<Font>,
-    pub(crate) bold_px: f32,
-    pub(crate) oblique: bool,
 }
 
 /// A displayed character before line breaking.
 struct Item {
     byte: usize,
     glyph: u16,
+    face: usize,
     advance: f32,
+    /// Tracking inside `advance` (left out when testing a line's fit).
+    track: f32,
     /// Right edge of the glyph's ink relative to its pen position.
     ink_right: f32,
     ink: bool,
@@ -92,62 +116,106 @@ struct Item {
     first: bool,
 }
 
-/// Lay out a text layer. Cheap enough to call on every keystroke.
-pub fn layout(t: &TextLayer) -> TextLayout {
-    let resolved = resolve(t);
-    let font = resolved.font.clone();
-    let size = if t.size.is_finite() { t.size.max(1.0) } else { 12.0 };
-    let (ascent, descent) = font
+/// The face for a resolved character style, added on first use.
+fn face_for(t: &TextLayer, faces: &mut Vec<Face>, st: ResolvedStyle) -> usize {
+    let size = if st.size.is_finite() {
+        st.size.max(1.0)
+    } else {
+        12.0
+    };
+    if let Some(i) = faces
+        .iter()
+        .position(|f| f.size == size && f.color == st.color && f.bold == st.bold && f.italic == st.italic)
+    {
+        return i;
+    }
+    // Fonts resolve by family and style only, so a light key is enough.
+    let key = TextLayer {
+        bold: st.bold,
+        italic: st.italic,
+        ..TextLayer::new("", 0.0, 0.0, size, st.color)
+    };
+    let r = resolve(&TextLayer {
+        font: t.font.clone(),
+        ..key
+    });
+    let (ascent, descent) = r
+        .font
         .horizontal_line_metrics(size)
         .map_or((size * 0.8, size * 0.2), |m| (m.ascent, -m.descent));
-    let line_step = t.line_height.max(0.5) * size;
-    let track = if t.tracking.is_finite() {
-        t.tracking / 1000.0 * size
-    } else {
-        0.0
-    };
-    // Synthetic bold smears each glyph rightwards by `bold_px` and widens
-    // every advance by the same amount so neighbours do not collide.
-    let bold_px = if resolved.synthetic_bold {
-        (size * EMBOLDEN).max(1.0)
-    } else {
-        0.0
-    };
+    faces.push(Face {
+        font: r.font.clone(),
+        size,
+        color: st.color,
+        // Synthetic bold smears each glyph rightwards by `bold_px` and
+        // widens every advance by the same amount so neighbours do not
+        // collide.
+        bold_px: if r.synthetic_bold {
+            (size * EMBOLDEN).max(1.0)
+        } else {
+            0.0
+        },
+        oblique: r.synthetic_oblique,
+        bold: st.bold,
+        italic: st.italic,
+        ascent,
+        descent,
+    });
+    faces.len() - 1
+}
+
+/// Lay out a text layer. Cheap enough to call on every keystroke.
+pub fn layout(t: &TextLayer) -> TextLayout {
+    let mut faces = Vec::new();
+    let base = face_for(
+        t,
+        &mut faces,
+        ResolvedStyle {
+            color: t.color,
+            size: t.size,
+            bold: t.bold,
+            italic: t.italic,
+        },
+    );
+    let (size, ascent, descent) = (faces[base].size, faces[base].ascent, faces[base].descent);
+    let leading = t.line_height.max(0.5);
+    let tracking = if t.tracking.is_finite() { t.tracking } else { 0.0 };
     let shift = if t.baseline_shift.is_finite() {
         t.baseline_shift
     } else {
         0.0
     };
     let wrap = t.box_size.map(|[w, _]| w.max(1.0));
-    let space_advance = font.metrics(' ', size).advance_width.ceil();
+    let styled = !t.runs.is_empty();
 
-    let mut out = TextLayout {
-        glyphs: Vec::new(),
-        lines: Vec::new(),
-        ascent,
-        descent,
-        line_step,
-        size,
-        font: font.clone(),
-        bold_px,
-        oblique: resolved.synthetic_oblique,
-    };
-
+    let mut glyphs = Vec::new();
+    let mut lines: Vec<LayoutLine> = Vec::new();
+    let mut prev_nominal = 0.0f32;
     let mut para_start = 0usize;
     for para in t.text.split('\n') {
         let para_end = para_start + para.len();
         // Shape: one item per displayed character.
         let mut items: Vec<Item> = Vec::with_capacity(para.len());
         for (b, c) in para.char_indices() {
+            let byte = para_start + b;
+            let fi = if styled {
+                face_for(t, &mut faces, t.style_at(byte))
+            } else {
+                base
+            };
+            let f = &faces[fi];
+            let (font, fsize, bold_px) = (f.font.clone(), f.size, f.bold_px);
+            let track = tracking / 1000.0 * fsize;
             let mut first = true;
             let mut push = |d: char, first: bool| {
                 let (glyph, advance, ink_right, ink) = if d == '\t' {
-                    (font.lookup_glyph_index(' '), space_advance * 4.0, 0.0, false)
+                    let space = font.metrics(' ', fsize).advance_width.ceil();
+                    (font.lookup_glyph_index(' '), space * 4.0, 0.0, false)
                 } else if d.is_control() {
                     (0, 0.0, 0.0, false)
                 } else {
                     let g = font.lookup_glyph_index(d);
-                    let m = font.metrics_indexed(g, size);
+                    let m = font.metrics_indexed(g, fsize);
                     let ink = m.width > 0 && m.height > 0;
                     (
                         g,
@@ -157,9 +225,11 @@ pub fn layout(t: &TextLayer) -> TextLayout {
                     )
                 };
                 items.push(Item {
-                    byte: para_start + b,
+                    byte,
                     glyph,
+                    face: fi,
                     advance: advance + track + bold_px,
+                    track,
                     ink_right,
                     ink,
                     space: d.is_whitespace(),
@@ -193,7 +263,7 @@ pub fn layout(t: &TextLayer) -> TextLayout {
                     brk = Some(i + 1);
                     continue;
                 }
-                let fits = |pen: f32| pen + items[i].advance - track <= w + 0.01;
+                let fits = |pen: f32| pen + items[i].advance - items[i].track <= w + 0.01;
                 if !fits(pen) && i > start {
                     let at = match brk {
                         Some(b) if b > start && b <= i => b,
@@ -221,8 +291,10 @@ pub fn layout(t: &TextLayer) -> TextLayout {
         }
 
         for (a, b, wrapped) in ranges {
-            let k = out.lines.len();
+            let k = lines.len();
             let line_items = &items[a..b];
+            let start_byte = line_items.first().map_or(para_start, |it| it.byte);
+            let end_byte = items.get(b).map_or(para_end, |it| it.byte);
             // Ink width from the pen start: what alignment lines up.
             let mut pen = 0.0f32;
             let mut natural = 0.0f32;
@@ -234,6 +306,22 @@ pub fn layout(t: &TextLayer) -> TextLayout {
                 }
                 pen += it.advance;
             }
+            // The line's metrics come from its largest characters; an
+            // empty line takes the style its caret would type in.
+            let (l_size, l_asc, l_desc) = if line_items.is_empty() {
+                let fi = if styled {
+                    face_for(t, &mut faces, t.style_at(start_byte.saturating_sub(1)))
+                } else {
+                    base
+                };
+                let f = &faces[fi];
+                (f.size, f.ascent, f.descent)
+            } else {
+                line_items.iter().fold((0.0f32, 0.0f32, 0.0f32), |acc, it| {
+                    let f = &faces[it.face];
+                    (acc.0.max(f.size), acc.1.max(f.ascent), acc.2.max(f.descent))
+                })
+            };
             let justify = matches!(t.align, TextAlign::Justify) && wrapped && wrap.is_some();
             let mut extra = 0.0;
             if let (true, Some(w), Some(last)) = (justify, wrap, last_ink) {
@@ -250,16 +338,19 @@ pub fn layout(t: &TextLayer) -> TextLayout {
                 (Some(w), TextAlign::Center) => t.x + (w - natural) / 2.0,
                 (Some(w), TextAlign::Right) => t.x + w - natural,
             };
-            let nominal = match wrap {
-                None => t.y + k as f32 * line_step,
-                Some(_) => t.y + ascent + k as f32 * line_step,
+            // Each line sits one leading of its largest size below the
+            // previous; the first sits on the anchor (point text) or one
+            // ascent below the box top.
+            let nominal = match (k, wrap) {
+                (0, None) => t.y,
+                (0, Some(_)) => t.y + l_asc,
+                _ => prev_nominal + leading * l_size,
             };
+            prev_nominal = nominal;
             let hidden = match t.box_size {
-                Some([_, h]) => nominal + descent > t.y + h.max(0.0) + 0.5,
+                Some([_, h]) => nominal + l_desc > t.y + h.max(0.0) + 0.5,
                 None => false,
             };
-            let start_byte = line_items.first().map_or(para_start, |it| it.byte);
-            let end_byte = items.get(b).map_or(para_end, |it| it.byte);
             let mut stops = Vec::with_capacity(line_items.len() + 1);
             let mut x = x0;
             for (j, it) in line_items.iter().enumerate() {
@@ -271,9 +362,10 @@ pub fn layout(t: &TextLayer) -> TextLayout {
                 } else {
                     0.0
                 };
-                out.glyphs.push(PlacedGlyph {
+                glyphs.push(PlacedGlyph {
                     byte: it.byte,
                     glyph: it.glyph,
+                    face: it.face,
                     x,
                     advance: it.advance + widen,
                     line: k,
@@ -281,10 +373,12 @@ pub fn layout(t: &TextLayer) -> TextLayout {
                 x += it.advance + widen;
             }
             stops.push((end_byte, x));
-            out.lines.push(LayoutLine {
+            lines.push(LayoutLine {
                 start: start_byte,
                 end: end_byte,
                 baseline: nominal - shift,
+                ascent: l_asc,
+                descent: l_desc,
                 stops,
                 wrapped,
                 hidden,
@@ -292,7 +386,15 @@ pub fn layout(t: &TextLayer) -> TextLayout {
         }
         para_start = para_end + 1;
     }
-    out
+    TextLayout {
+        glyphs,
+        lines,
+        faces,
+        ascent,
+        descent,
+        line_step: leading * size,
+        size,
+    }
 }
 
 impl TextLayout {
@@ -326,8 +428,8 @@ impl TextLayout {
             .map_or(0.0, |s| s.1);
         Caret {
             x,
-            top: l.baseline - self.ascent,
-            bottom: l.baseline + self.descent,
+            top: l.baseline - l.ascent,
+            bottom: l.baseline + l.descent,
             line: k,
         }
     }
@@ -347,14 +449,18 @@ impl TextLayout {
             .map_or(l.start, |s| s.0)
     }
 
-    /// The visible line whose band (one leading tall, centred on its
-    /// glyphs) holds canvas y; clamped to the first and last lines.
+    /// The visible line whose glyphs' vertical middle is nearest to
+    /// canvas y; clamped to the first and last visible lines.
     pub fn line_at_y(&self, y: f32) -> usize {
         let visible = self.lines.iter().filter(|l| !l.hidden).count().max(1);
-        let mid = |l: &LayoutLine| l.baseline - (self.ascent - self.descent) / 2.0;
-        let first = mid(&self.lines[0]);
-        let k = ((y - first) / self.line_step.max(1e-3)).round();
-        (k.max(0.0) as usize).min(visible - 1)
+        let mid = |l: &LayoutLine| l.baseline + (l.descent - l.ascent) / 2.0;
+        (0..visible)
+            .min_by(|&a, &b| {
+                (mid(&self.lines[a]) - y)
+                    .abs()
+                    .total_cmp(&(mid(&self.lines[b]) - y).abs())
+            })
+            .unwrap_or(0)
     }
 
     /// The character position a click at canvas (x, y) lands on.
@@ -403,7 +509,7 @@ impl TextLayout {
                 x1 += stub;
             }
             if x1 > x0 {
-                rects.push([x0, l.baseline - self.ascent, x1, l.baseline + self.descent]);
+                rects.push([x0, l.baseline - l.ascent, x1, l.baseline + l.descent]);
             }
         }
         rects
@@ -416,14 +522,14 @@ impl TextLayout {
         for l in self.lines.iter().filter(|l| !l.hidden) {
             let (x0, x1) = (l.stops[0].1, l.stops[l.stops.len() - 1].1);
             r[0] = r[0].min(x0);
-            r[1] = r[1].min(l.baseline - self.ascent);
+            r[1] = r[1].min(l.baseline - l.ascent);
             r[2] = r[2].max(x1);
-            r[3] = r[3].max(l.baseline + self.descent);
+            r[3] = r[3].max(l.baseline + l.descent);
         }
         if r[0] > r[2] {
             let l = &self.lines[0];
             let x = l.stops[0].1;
-            return [x, l.baseline - self.ascent, x, l.baseline + self.descent];
+            return [x, l.baseline - l.ascent, x, l.baseline + l.descent];
         }
         r
     }
@@ -451,11 +557,11 @@ pub fn to_paragraph(t: &TextLayer) -> TextLayer {
         TextAlign::Center => t.x - w / 2.0,
         TextAlign::Right => t.x - w,
     };
-    let n = lay.lines.len() as f32;
-    let h = ((n - 1.0) * lay.line_step + lay.ascent + lay.descent).ceil() + 1.0;
+    let (first, last) = (&lay.lines[0], &lay.lines[lay.lines.len() - 1]);
+    let h = (last.baseline + last.descent - (first.baseline - first.ascent)).ceil() + 1.0;
     TextLayer {
         x,
-        y: t.y - lay.ascent,
+        y: t.y - first.ascent,
         box_size: Some([w, h.max(8.0)]),
         align: if t.align == TextAlign::Justify {
             TextAlign::Left
@@ -475,12 +581,26 @@ pub fn to_point(t: &TextLayer) -> TextLayer {
     };
     let lay = layout(t);
     let mut text = String::with_capacity(t.text.len() + lay.lines.len());
+    // (old line start, new line start, bytes kept) to move style runs.
+    let mut spans = Vec::with_capacity(lay.lines.len());
     for (k, l) in lay.lines.iter().enumerate() {
         let slice = &t.text[l.start..l.end];
-        text.push_str(if l.wrapped { slice.trim_end() } else { slice });
+        let kept = if l.wrapped { slice.trim_end() } else { slice };
+        spans.push((l.start, text.len(), kept.len()));
+        text.push_str(kept);
         if k + 1 < lay.lines.len() {
             text.push('\n');
         }
+    }
+    let map = |o: usize| {
+        let i = spans.partition_point(|s| s.0 <= o).saturating_sub(1);
+        let (old, new, kept) = spans[i];
+        new + (o - old).min(kept)
+    };
+    let mut runs = t.runs.clone();
+    for r in &mut runs {
+        r.start = map(r.start);
+        r.end = map(r.end);
     }
     let align = if t.align == TextAlign::Justify {
         TextAlign::Left
@@ -492,14 +612,17 @@ pub fn to_point(t: &TextLayer) -> TextLayer {
         TextAlign::Right => t.x + w,
         _ => t.x,
     };
-    TextLayer {
+    let mut out = TextLayer {
         text,
         x,
-        y: t.y + lay.ascent,
+        y: t.y + lay.lines[0].ascent,
         align,
         box_size: None,
+        runs,
         ..t.clone()
-    }
+    };
+    out.normalize_runs();
+    out
 }
 
 // ---- character and word boundaries ---------------------------------------------------------
@@ -898,6 +1021,52 @@ mod tests {
             .align,
             TextAlign::Left
         );
+    }
+
+    #[test]
+    fn style_runs_set_size_colour_and_line_spacing_per_character() {
+        use lumenply_doc::text_runs::CharStyle;
+        const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+        let big_red = CharStyle {
+            size: Some(40.0),
+            color: Some(RED),
+            ..CharStyle::default()
+        };
+        let mut t = TextLayer::new("ab\ncd", 0.0, 100.0, 20.0, BLACK);
+        t.apply_style(1, 2, big_red);
+        let l = layout(&t);
+        assert_eq!(l.faces.len(), 2, "the layer's face and the run's");
+        let gb = l.glyphs.iter().find(|g| g.byte == 1).unwrap();
+        assert_eq!((l.faces[gb.face].size, l.faces[gb.face].color), (40.0, RED));
+        assert_eq!(gb.advance, adv('b', 40.0));
+        assert_eq!(gb.x, adv('a', 20.0), "after the 20 px a");
+        // Line 1 takes its height from the 40 px b; line 2 (20 px only)
+        // sits one 20 px leading below it.
+        assert!((l.lines[0].ascent - 2.0 * l.ascent).abs() < 0.05);
+        assert_eq!(l.lines[1].ascent, l.ascent);
+        assert_eq!(l.lines[1].baseline, 100.0 + 1.2 * 20.0);
+        // A big character on line 2 pushes that line down: 1.2 × 40.
+        let mut t2 = TextLayer::new("ab\ncd", 0.0, 100.0, 20.0, BLACK);
+        t2.apply_style(3, 4, big_red);
+        assert_eq!(layout(&t2).lines[1].baseline, 100.0 + 1.2 * 40.0);
+        // Rasterised: b is red, a is black.
+        let store = crate::text::rasterize(&t);
+        let ink = |x0: f32, x1: f32| {
+            let mut found = None;
+            for y in 60..100 {
+                for x in x0 as i32..x1 as i32 {
+                    let p = store.get_pixel(x, y);
+                    if p.a > 0.9 {
+                        found = Some(p.to_straight());
+                    }
+                }
+            }
+            found.expect("ink")
+        };
+        let b = ink(gb.x + 2.0, gb.x + gb.advance - 2.0);
+        assert!(b[0] > 0.99 && b[1] < 0.01, "b is red: {b:?}");
+        let a = ink(1.0, adv('a', 20.0) - 1.0);
+        assert!(a[0] < 0.01, "a stays black: {a:?}");
     }
 
     #[test]

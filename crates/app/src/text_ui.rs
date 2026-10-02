@@ -93,8 +93,10 @@ impl App {
         };
         let hint_full;
         let hint_short;
-        if let Some((id, mut t)) = editing {
-            let before = t.clone();
+        if let Some((id, layer_t)) = editing {
+            let before = layer_t.clone();
+            let (shown, sel) = self.text_controls_view(id, &layer_t);
+            let mut t = shown.clone();
             let mut finished = false;
             // On a narrow window Tracking stays in Properties so the hint
             // still fits.
@@ -127,6 +129,7 @@ impl App {
                 ));
             }
             finished |= text_color_button(ui, &mut t.color);
+            let t = crate::text_edit::route_text_edit(&before, &shown, t, sel);
             self.commit_text(id, &before, t, finished);
             bar_separator(ui);
             self.new_text_button(ui);
@@ -191,7 +194,7 @@ impl App {
     /// The Properties text section: content, then font, style (with
     /// alignment and colour), size and tracking as labelled rows. Compact,
     /// so it fits the Properties area without scrolling.
-    pub(crate) fn text_properties(&mut self, ui: &mut egui::Ui, id: LayerId, mut t: TextLayer) {
+    pub(crate) fn text_properties(&mut self, ui: &mut egui::Ui, id: LayerId, layer_t: TextLayer) {
         let mut rasterize = false;
         ui.horizontal(|ui| {
             section_title(ui, "TEXT");
@@ -202,7 +205,9 @@ impl App {
                     .clicked();
             });
         });
-        let before = t.clone();
+        let before = layer_t.clone();
+        let (shown, sel) = self.text_controls_view(id, &layer_t);
+        let mut t = shown.clone();
         let mut finished = false;
         let r = field_style(ui, |ui| {
             ui.add(
@@ -262,14 +267,14 @@ impl App {
                 .clicked()
                 && paragraph
             {
-                convert = Some(lumenply_render::text_layout::to_point(&t));
+                convert = Some(lumenply_render::text_layout::to_point(&before));
             }
             if chip(ui, paragraph, RichText::new("Paragraph"), 0.0)
                 .on_hover_text("Lines wrap inside a box; drag its handles while editing")
                 .clicked()
                 && !paragraph
             {
-                convert = Some(lumenply_render::text_layout::to_paragraph(&t));
+                convert = Some(lumenply_render::text_layout::to_paragraph(&before));
             }
         });
         if let Some([w, h]) = t.box_size.as_mut() {
@@ -280,10 +285,13 @@ impl App {
                 finished |= edit_finished(&rw) || edit_finished(&rh);
             });
         }
-        if let Some(c) = convert {
-            t = c;
-            finished = true;
-        }
+        let t = match convert {
+            Some(c) => {
+                finished = true;
+                c
+            }
+            None => crate::text_edit::route_text_edit(&before, &shown, t, sel),
+        };
         self.commit_text(id, &before, t, finished);
         if rasterize {
             self.run(&RasterizeLayer { layer: id });

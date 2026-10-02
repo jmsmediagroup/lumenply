@@ -14,6 +14,7 @@ use lumenply_render::text_layout::{self as tl, layout, TextLayout};
 
 use super::*;
 use crate::text_ui::{text_click_action, TextClick};
+use lumenply_doc::text_runs::{CharStyle, TextRun};
 
 /// The editable state: text plus caret and selection anchor, as byte
 /// offsets at character boundaries.
@@ -307,8 +308,9 @@ pub(crate) struct TextSession {
     grab: Option<Grab>,
     /// Last press: time, document position, click count.
     last_press: (f64, (f32, f32), u32),
-    undo: Vec<Buffer>,
-    redo: Vec<Buffer>,
+    /// In-session undo: the buffer and the style runs before each change.
+    undo: Vec<(Buffer, Vec<TextRun>)>,
+    redo: Vec<(Buffer, Vec<TextRun>)>,
     /// The last change was typing, so more typing joins its undo entry.
     typing: bool,
     focus_pending: bool,
@@ -583,11 +585,23 @@ impl App {
             return;
         }
         if !(typing && s.typing) {
-            s.undo.push(before);
+            s.undo.push((before.clone(), s.t.runs.clone()));
         }
         s.redo.clear();
         s.typing = typing;
-        s.t.text = s.buf.text.clone();
+        // Every buffer edit replaces one span: from the earlier of the old
+        // selection start and the new caret, `inserted` bytes long. The
+        // style runs follow that span exactly.
+        let a = before.range().0.min(s.buf.caret);
+        let inserted = s.buf.caret - a;
+        let removed = (before.text.len() + inserted).checked_sub(s.buf.text.len());
+        match removed.filter(|r| a + r <= before.text.len() && s.buf.text.is_char_boundary(a + inserted)) {
+            Some(r) => s.t.replace_text(a, a + r, &s.buf.text[a..a + inserted]),
+            None => s.t.set_text_keep_runs(&s.buf.text),
+        }
+        if s.t.text != s.buf.text {
+            s.t.set_text_keep_runs(&s.buf.text);
+        }
         self.text_apply();
     }
 
@@ -596,10 +610,13 @@ impl App {
             return;
         };
         let popped = if redo { s.redo.pop() } else { s.undo.pop() };
-        let Some(b) = popped else {
+        let Some((b, runs)) = popped else {
             return;
         };
-        let current = std::mem::replace(&mut s.buf, b);
+        let current = (
+            std::mem::replace(&mut s.buf, b),
+            std::mem::replace(&mut s.t.runs, runs),
+        );
         if redo {
             s.undo.push(current);
         } else {
@@ -608,6 +625,7 @@ impl App {
         s.typing = false;
         s.moved_at = now;
         s.t.text = s.buf.text.clone();
+        s.t.normalize_runs();
         self.text_apply();
     }
 
@@ -1041,8 +1059,10 @@ impl App {
     /// paragraph box, `text:edit` edits the active text layer (caret at the
     /// end), `text:select=A:B` selects byte range A..B, `text:caret=I`
     /// places the caret, `text:commit` ends the session, `text:leading=N`,
-    /// `text:size=N`, `text:shift=N`, `text:caps`, `text:justify` restyle the
-    /// active text (`size` also sets the size for new text).
+    /// `text:size=N`, `text:color=R:G:B`, `text:strong` (bold), `text:shift=N`,
+    /// `text:caps`, `text:justify` restyle the active text like its
+    /// controls do (character styles go to a canvas selection when there
+    /// is one; `size` also sets the size for new text).
     pub(crate) fn debug_text_edit(&mut self, ctx: &egui::Context, rest: &str) -> bool {
         let nums = |s: &str| -> Vec<f32> { s.split(':').filter_map(|v| v.trim().parse().ok()).collect() };
         if let Some(arg) = rest.strip_prefix("box=") {
@@ -1075,6 +1095,13 @@ impl App {
                     t.size = v;
                 } else if let Some(v) = num("shift=", 0.0) {
                     t.baseline_shift = v;
+                } else if let Some(v) = rest.strip_prefix("color=") {
+                    let c: Vec<f32> = v.split(':').filter_map(|n| n.parse().ok()).collect();
+                    if let [r, g, b] = c[..] {
+                        t.color = linear_rgba([r / 255.0, g / 255.0, b / 255.0], 1.0);
+                    }
+                } else if rest == "strong" {
+                    t.bold = !t.bold;
                 } else if rest == "caps" {
                     t.all_caps = !t.all_caps;
                 } else if rest == "justify" {
@@ -1091,9 +1118,14 @@ impl App {
             if let Some(v) = num("size=", 72.0) {
                 self.text_size = v;
             }
-            if let (Some(id), Some(mut t)) = (self.active, self.active_text()) {
-                restyle(&mut t);
-                self.run(&SetText { layer: id, text: t });
+            // Through the controls' routing: with a selection on the
+            // canvas, character styles go to the selection.
+            if let (Some(id), Some(before)) = (self.active, self.active_text()) {
+                let (shown, sel) = self.text_controls_view(id, &before);
+                let mut edited = shown.clone();
+                restyle(&mut edited);
+                let text = route_text_edit(&before, &shown, edited, sel);
+                self.run(&SetText { layer: id, text });
                 self.text_edit_guard(ctx);
             }
         }
@@ -1106,6 +1138,73 @@ impl App {
 /// screenshot run shows the caret too (no keys arrive unfocused anyway).
 fn holds_keys(resp: &egui::Response) -> bool {
     resp.ctx.memory(|m| m.has_focus(resp.id))
+}
+
+/// Turn a frame of text-control edits into the layer to store. `shown` is
+/// what the controls displayed (the layer, with colour, size, bold and
+/// italic taken from the selection's first character when there is a
+/// selection), `edited` what they hold now. Character fields that changed
+/// style the selection only, or with no selection the whole text (run
+/// overrides of that field go); a changed text keeps its runs in place;
+/// every other field (font, alignment, tracking...) applies to the layer.
+pub(crate) fn route_text_edit(
+    before: &TextLayer,
+    shown: &TextLayer,
+    edited: TextLayer,
+    sel: Option<(usize, usize)>,
+) -> TextLayer {
+    let patch = CharStyle {
+        color: (edited.color != shown.color).then_some(edited.color),
+        size: (edited.size != shown.size).then_some(edited.size),
+        bold: (edited.bold != shown.bold).then_some(edited.bold),
+        italic: (edited.italic != shown.italic).then_some(edited.italic),
+    };
+    let mut out = TextLayer {
+        color: before.color,
+        size: before.size,
+        bold: before.bold,
+        italic: before.italic,
+        text: before.text.clone(),
+        runs: before.runs.clone(),
+        ..edited.clone()
+    };
+    if edited.text != shown.text {
+        out.set_text_keep_runs(&edited.text);
+    }
+    if !patch.is_empty() {
+        match sel {
+            Some((a, b)) if a < b => out.apply_style(a, b, patch),
+            _ => out.set_base_style(patch),
+        }
+    }
+    out
+}
+
+impl App {
+    /// The text controls' view of layer `id`: its style, or with a text
+    /// selection on the canvas the style of the selection's first
+    /// character. Returns the shown layer and the selection.
+    pub(crate) fn text_controls_view(
+        &self,
+        id: LayerId,
+        t: &TextLayer,
+    ) -> (TextLayer, Option<(usize, usize)>) {
+        let sel = self
+            .typer
+            .session
+            .as_ref()
+            .filter(|s| s.layer == id && s.buf.has_selection())
+            .map(|s| s.buf.range());
+        let mut shown = t.clone();
+        if let Some((a, _)) = sel {
+            let st = t.style_at(a);
+            shown.color = st.color;
+            shown.size = st.size;
+            shown.bold = st.bold;
+            shown.italic = st.italic;
+        }
+        (shown, sel)
+    }
 }
 
 /// The paragraph-box handle within `r` (doc px) of document point p.
@@ -1262,6 +1361,44 @@ mod tests {
         // The goal x survives a short line in between.
         let (up, _) = nav_target(text, &lay, 13, Nav::Up, Some(x));
         assert_eq!(up, 5);
+    }
+
+    #[test]
+    fn style_edits_go_to_the_selection_or_the_whole_text() {
+        const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+        let before = TextLayer::new("Hello world", 0.0, 50.0, 20.0, BLACK);
+        // With "world" selected, a colour and size change style it alone.
+        let shown = before.clone();
+        let edited = TextLayer {
+            color: RED,
+            size: 30.0,
+            tracking: 50.0,
+            ..shown.clone()
+        };
+        let out = route_text_edit(&before, &shown, edited, Some((6, 11)));
+        assert_eq!((out.color, out.size), (BLACK, 20.0), "the layer keeps its style");
+        assert_eq!(out.tracking, 50.0, "layer-wide fields still apply");
+        assert_eq!(out.style_at(7).color, RED);
+        assert_eq!(out.style_at(7).size, 30.0);
+        assert_eq!(out.style_at(2).color, BLACK);
+        // Without a selection the change reaches every character, runs too.
+        let blue = [0.0, 0.0, 1.0, 1.0];
+        let shown2 = out.clone();
+        let edited2 = TextLayer {
+            color: blue,
+            ..shown2.clone()
+        };
+        let all = route_text_edit(&out, &shown2, edited2, None);
+        assert_eq!((all.style_at(2).color, all.style_at(7).color), (blue, blue));
+        assert_eq!(all.style_at(7).size, 30.0, "the size run stays");
+        // Editing the text in a field keeps the runs on their characters.
+        let edited3 = TextLayer {
+            text: "Hi, Hello world".into(),
+            ..out.clone()
+        };
+        let moved = route_text_edit(&out, &out, edited3, None);
+        assert_eq!(moved.style_at(11).color, RED);
+        assert_eq!(moved.style_at(6).color, BLACK);
     }
 
     #[test]
@@ -1592,6 +1729,57 @@ mod tests {
         assert!(!app.text_press(&ctx, (235.0, 10.0), none, 50.0, 4.0));
         assert!(!app.text_editing());
         assert_eq!(app.editor.history().len(), steps + 1, "the move is one step");
+    }
+
+    #[test]
+    fn typing_continues_a_styled_run_and_session_undo_restores_runs() {
+        const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+        let (mut app, ctx, id) = app();
+        let mut t = app.editor.doc().layer(id).unwrap().text_layer().unwrap().clone();
+        t.apply_style(
+            0,
+            5,
+            CharStyle {
+                color: Some(RED),
+                ..CharStyle::default()
+            },
+        );
+        app.run(&SetText { layer: id, text: t });
+        app.begin_text_edit(&ctx, id, EditStart::End);
+        app.text_change(1.0, true, |b| b.insert("!!"));
+        let doc_t = app.editor.doc().layer(id).unwrap().text_layer().unwrap().clone();
+        assert_eq!(doc_t.text, "Hello!!");
+        assert_eq!(doc_t.style_at(6).color, RED, "typed after red, still red");
+        // Select "ll" and colour it through the controls' routing.
+        if let Some(s) = app.typer.session.as_mut() {
+            s.buf.select(2, 4);
+        }
+        let (shown, sel) = app.text_controls_view(id, &doc_t);
+        assert_eq!(
+            (shown.color, sel),
+            (RED, Some((2, 4))),
+            "controls show the selection's colour"
+        );
+        let blue = [0.0, 0.0, 1.0, 1.0];
+        let edited = TextLayer {
+            color: blue,
+            ..shown.clone()
+        };
+        let routed = route_text_edit(&doc_t, &shown, edited, sel);
+        app.run(&SetText {
+            layer: id,
+            text: routed,
+        });
+        app.text_edit_guard(&ctx);
+        let s = app.typer.session.as_ref().unwrap();
+        let colors: Vec<[f32; 4]> = (0..7).map(|i| s.t.style_at(i).color).collect();
+        assert_eq!(colors, vec![RED, RED, blue, blue, RED, RED, RED]);
+        // Undo inside the session puts back the text and its runs.
+        app.text_key(2.0, KeyAction::Undo);
+        let back = app.editor.doc().layer(id).unwrap().text_layer().unwrap().clone();
+        assert_eq!(back.text, "Hello");
+        assert_eq!(back.runs.len(), 1);
+        assert_eq!((back.runs[0].start, back.runs[0].end), (0, 5));
     }
 
     #[test]
