@@ -77,6 +77,17 @@ impl App {
                     "Could not open /Users/me/Desktop/broken.psd: unsupported colour mode (CMYK)".into();
             }
             "start:recover" => self.dialog = Some(Dialog::Recover),
+            // Write the demo as a crash backup, then recover it, to check
+            // the recovery path end to end.
+            "start:write-autosave" => {
+                if let (Ok(ed), Some(file)) = (demo::build(), session::autosave_file()) {
+                    if let Some(dir) = file.parent() {
+                        let _ = std::fs::create_dir_all(dir);
+                    }
+                    let _ = project::save(&file, ed.doc());
+                }
+            }
+            "start:recover-now" => self.recover_autosave(),
             "start:new" => self.dialog = Some(Dialog::New(1920, 1080)),
             _ => return false,
         }

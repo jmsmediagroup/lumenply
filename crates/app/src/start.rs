@@ -157,6 +157,29 @@ impl App {
         self.recent = session::load_recent();
     }
 
+    /// Crash recovery: open the autosave backup in a new tab (from the
+    /// welcome screen it becomes the first one), marked unsaved, with the
+    /// path it came from so Save goes back to the original file.
+    pub(crate) fn recover_autosave(&mut self) {
+        let Some(file) = session::autosave_file() else {
+            return;
+        };
+        let source = session::autosave_source();
+        match project::load(&file) {
+            Ok(doc) => {
+                let had_path = source.is_some();
+                self.open_in_new_tab(Editor::new(doc), source);
+                if !had_path {
+                    self.untitled = "Recovered".into();
+                }
+                // Recovered work is unsaved by definition.
+                self.saved_rev = usize::MAX;
+                self.status = "Recovered the autosaved document".into();
+            }
+            Err(e) => self.status = format!("Could not recover the backup: {e}"),
+        }
+    }
+
     /// Open the photo demo in a new tab.
     pub(crate) fn open_demo(&mut self) {
         match demo::build() {
@@ -854,8 +877,39 @@ mod tests {
         assert!(a.demo && a.places.is_empty());
     }
 
+    /// App-level tests share the (test-only) data dir and its autosave
+    /// file: run them one at a time.
+    static APP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn app_lock() -> std::sync::MutexGuard<'static, ()> {
+        APP_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn a_crash_backup_is_offered_and_recovers_into_a_tab() {
+        let _g = app_lock();
+        let dir = session::data_dir().unwrap();
+        let file = session::autosave_file().unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        project::save(&file, blank(40, 30).doc()).unwrap();
+        std::fs::write(session::autosave_source_file().unwrap(), "/work/poster.lumen").unwrap();
+
+        let mut app = App::launch(&[]);
+        assert!(app.no_doc, "the prompt shows over the welcome screen");
+        assert!(matches!(app.dialog, Some(Dialog::Recover)));
+        app.recover_autosave();
+        assert!(!app.no_doc);
+        assert_eq!((app.editor.doc().width, app.editor.doc().height), (40, 30));
+        assert_eq!(app.path, Some(PathBuf::from("/work/poster.lumen")));
+        assert!(app.any_unsaved(), "recovered work counts as unsaved");
+        assert_eq!(app.tab_infos().len(), 1);
+        session::remove_autosave();
+        assert!(!file.exists());
+    }
+
     #[test]
     fn a_plain_launch_is_the_welcome_screen_and_edits_nothing() {
+        let _g = app_lock();
         let mut app = App::launch(&[]);
         assert!(app.no_doc);
         assert!(app.tab_infos().is_empty(), "no tabs on the welcome screen");
@@ -873,6 +927,7 @@ mod tests {
 
     #[test]
     fn closing_the_last_tab_returns_to_the_welcome_screen() {
+        let _g = app_lock();
         let mut app = App::launch(&args(&["--demo"]));
         assert!(!app.no_doc);
         assert_eq!(app.tab_infos(), [("Aoraki demo".to_string(), false)]);
@@ -910,6 +965,7 @@ mod tests {
             .unwrap();
         // (Under test, session::data_dir is a temp dir, so the recent list
         // this open writes is not the user's.)
+        let _g = app_lock();
         let app = App::launch(&args(&["--place", &png.to_string_lossy()]));
         assert!(!app.no_doc);
         assert_eq!((app.editor.doc().width, app.editor.doc().height), (5, 3));
@@ -926,6 +982,7 @@ mod tests {
         let missing = std::env::temp_dir()
             .join("lumenply-no-such-dir")
             .join("gone.lumen");
+        let _g = app_lock();
         let app = App::launch(&args(&[&missing.to_string_lossy()]));
         assert!(app.no_doc);
         assert!(app.status.starts_with("Could not open"), "{}", app.status);

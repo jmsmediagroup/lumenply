@@ -568,18 +568,7 @@ impl App {
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             if ui.button("Recover").clicked() {
-                                if let Some(file) = session::autosave_file() {
-                                    let source = session::autosave_source();
-                                    match project::load(&file) {
-                                        Ok(doc) => {
-                                            self.open_in_new_tab(Editor::new(doc), source);
-                                            // Recovered work is unsaved by definition.
-                                            self.saved_rev = usize::MAX;
-                                            self.status = "Recovered the autosaved document".into();
-                                        }
-                                        Err(e) => self.status = format!("Could not recover: {e}"),
-                                    }
-                                }
+                                self.recover_autosave();
                                 keep = false;
                             }
                             if ui.button("Discard backup").clicked() {
