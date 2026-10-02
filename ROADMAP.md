@@ -136,7 +136,9 @@ None of these could be tested in the container.
 - [x] Skew and non-uniform scale in free transform (edge handles stretch one
       axis, mirror across the centre; W/H/Rotate/Skew fields in the options bar)
 - [ ] Perspective and warp transforms (non-affine; needs a mesh resampler)
-- [ ] Brush engine: presets, textures, spacing jitter, smudge, dodge/burn, sponge
+- [~] Brush engine: spacing jitter, dodge/burn, smudge (drags pixels along
+      the stroke from a per-dab snapshot) and sponge (Sat+/Sat− scale chroma
+      around gamma luminance) are in. Still to do: presets, textures
 - [x] Layer styles: drop shadow, outer glow and stroke as non-destructive
       per-layer effects (EFFECTS section in Properties, tile-seam-safe,
       saved in .nge; PSD/ORA warn instead of silently dropping)

@@ -163,6 +163,9 @@ impl App {
                                     (BrushMode::Paint, "Paint"),
                                     (BrushMode::Dodge, "Dodge"),
                                     (BrushMode::Burn, "Burn"),
+                                    (BrushMode::Smudge, "Smudge"),
+                                    (BrushMode::Saturate, "Sat+"),
+                                    (BrushMode::Desaturate, "Sat−"),
                                 ] {
                                     if ui.selectable_label(self.brush.mode == m, label).clicked() {
                                         self.brush.mode = m;

@@ -1262,10 +1262,8 @@ impl Command for PaintSelection {
         let mut sel = doc.selection.take().unwrap_or_else(Selection::none);
         let [cr, cg, cb, ca] = self.brush.color;
         let target = match self.brush.mode {
-            BrushMode::Paint | BrushMode::Dodge => {
-                lumenply_doc::adjust::luminance(cr, cg, cb).clamp(0.0, 1.0)
-            }
-            BrushMode::Erase | BrushMode::Burn => 0.0,
+            BrushMode::Erase | BrushMode::Burn | BrushMode::Desaturate => 0.0,
+            _ => lumenply_doc::adjust::luminance(cr, cg, cb).clamp(0.0, 1.0),
         };
         for d in interpolate_dabs(&self.brush, &self.points) {
             dab_coverage(&self.brush, d, canvas, None, |px, py, cover| {
@@ -2242,6 +2240,12 @@ pub enum BrushMode {
     Dodge,
     /// Darken what is there; `color[3]` acts as strength.
     Burn,
+    /// Drag pixels along the stroke; `color[3]` acts as strength.
+    Smudge,
+    /// Boost saturation (the sponge); `color[3]` acts as strength.
+    Saturate,
+    /// Drain saturation; `color[3]` acts as strength.
+    Desaturate,
 }
 
 /// A round brush. Pressure scales the radius; `hardness` 1.0 is a crisp
@@ -2321,6 +2325,9 @@ impl Command for PaintStroke {
             BrushMode::Erase => "Erase".into(),
             BrushMode::Dodge => "Dodge".into(),
             BrushMode::Burn => "Burn".into(),
+            BrushMode::Smudge => "Smudge".into(),
+            BrushMode::Saturate => "Sponge (saturate)".into(),
+            BrushMode::Desaturate => "Sponge (desaturate)".into(),
         }
     }
 
@@ -2338,6 +2345,45 @@ impl Command for PaintStroke {
         let store = layer.pixels_mut().ok_or(EditError::NotPixel(self.layer))?;
         let [cr, cg, cb, ca] = self.brush.color;
         let mode = self.brush.mode;
+        if mode == BrushMode::Smudge {
+            // Each dab stamps the pixels from under the previous dab,
+            // sampled from a snapshot so a dab never reads its own writes.
+            let mut prev: Option<StrokePoint> = None;
+            for d in interpolate_dabs(&self.brush, &self.points) {
+                if let Some(p) = prev {
+                    let (ox, oy) = ((d.x - p.x).round() as i32, (d.y - p.y).round() as i32);
+                    if ox != 0 || oy != 0 {
+                        let r = (self.brush.radius.ceil() as i32 + 2).max(1);
+                        let (sx, sy) = (d.x.round() as i32 - ox - r, d.y.round() as i32 - oy - r);
+                        let side = (2 * r + 1) as usize;
+                        let mut snap = vec![Rgba::TRANSPARENT; side * side];
+                        for (i, q) in snap.iter_mut().enumerate() {
+                            let (gx, gy) = (sx + (i % side) as i32, sy + (i / side) as i32);
+                            *q = store.get_pixel(gx, gy);
+                        }
+                        dab_coverage(&self.brush, d, canvas, sel.as_ref(), |px, py, cover| {
+                            let (lx, ly) = (px - ox - sx, py - oy - sy);
+                            if lx < 0 || ly < 0 || lx >= side as i32 || ly >= side as i32 {
+                                return;
+                            }
+                            let src = snap[ly as usize * side + lx as usize];
+                            let dst = store.get_pixel(px, py);
+                            let k = (ca * cover).clamp(0.0, 1.0);
+                            // Premultiplied pixels lerp component-wise.
+                            let mix = Rgba::new(
+                                dst.r + (src.r - dst.r) * k,
+                                dst.g + (src.g - dst.g) * k,
+                                dst.b + (src.b - dst.b) * k,
+                                dst.a + (src.a - dst.a) * k,
+                            );
+                            store.set_pixel(px, py, mix);
+                        });
+                    }
+                }
+                prev = Some(d);
+            }
+            return Ok(());
+        }
         for d in interpolate_dabs(&self.brush, &self.points) {
             dab_coverage(&self.brush, d, canvas, sel.as_ref(), |px, py, cover| {
                 let dst = store.get_pixel(px, py);
@@ -2361,6 +2407,27 @@ impl Command for PaintStroke {
                         };
                         Rgba::from_straight(tone(r), tone(g), tone(b), a)
                     }
+                    BrushMode::Saturate | BrushMode::Desaturate => {
+                        if dst.a <= 0.0 {
+                            return;
+                        }
+                        let k = (ca * cover).clamp(0.0, 1.0);
+                        // Scale chroma around the gamma-domain luminance,
+                        // like the sponge tool's perceptual behaviour.
+                        let scale = if mode == BrushMode::Saturate {
+                            1.0 + k
+                        } else {
+                            1.0 - k
+                        };
+                        let [r, g, b, a] = dst.to_straight();
+                        let enc = lumenply_doc::adjust::srgb_encode;
+                        let dec = lumenply_doc::adjust::srgb_decode;
+                        let (er, eg, eb) = (enc(r), enc(g), enc(b));
+                        let y = 0.2126 * er + 0.7152 * eg + 0.0722 * eb;
+                        let sat = |c: f32| dec((y + (c - y) * scale).clamp(0.0, 1.0));
+                        Rgba::from_straight(sat(er), sat(eg), sat(eb), a)
+                    }
+                    BrushMode::Smudge => unreachable!("handled above"),
                 };
                 store.set_pixel(px, py, out);
             });
@@ -2403,9 +2470,11 @@ impl Command for PaintMask {
             .ok_or_else(|| EditError::Invalid(format!("layer {} has no mask", self.layer)))?;
         let [cr, cg, cb, ca] = self.brush.color;
         let target = match self.brush.mode {
-            BrushMode::Paint => lumenply_doc::adjust::luminance(cr, cg, cb).clamp(0.0, 1.0),
-            BrushMode::Erase | BrushMode::Burn => 0.0,
-            BrushMode::Dodge => 1.0,
+            BrushMode::Erase | BrushMode::Burn | BrushMode::Desaturate => 0.0,
+            BrushMode::Dodge | BrushMode::Saturate => 1.0,
+            // Paint (and modes with no mask meaning) write the colour's
+            // luminance: white reveals, black hides.
+            _ => lumenply_doc::adjust::luminance(cr, cg, cb).clamp(0.0, 1.0),
         };
         for d in interpolate_dabs(&self.brush, &self.points) {
             dab_coverage(&self.brush, d, canvas, sel.as_ref(), |px, py, cover| {
@@ -3699,6 +3768,106 @@ mod tests {
             }
         }
         assert!(scattered, "jitter actually scattered dabs");
+    }
+
+    #[test]
+    fn smudge_drags_colour_and_sponge_scales_saturation() {
+        // Left half red, right half white; a rightward smudge across the
+        // boundary drags red into the white side.
+        let mut doc = Document::new(64, 32);
+        let id = doc.add_pixel_layer("L");
+        for y in 0..32 {
+            for x in 0..64 {
+                let c = if x < 32 {
+                    Rgba::from_straight(1.0, 0.0, 0.0, 1.0)
+                } else {
+                    Rgba::from_straight(1.0, 1.0, 1.0, 1.0)
+                };
+                doc.layer_mut(id)
+                    .unwrap()
+                    .pixels_mut()
+                    .unwrap()
+                    .set_pixel(x, y, c);
+            }
+        }
+        let mut d = doc.clone();
+        PaintStroke {
+            layer: id,
+            brush: Brush {
+                radius: 5.0,
+                hardness: 1.0,
+                color: [0.0, 0.0, 0.0, 0.9],
+                spacing: 0.4,
+                mode: BrushMode::Smudge,
+                ..Brush::default()
+            },
+            points: (0..=24)
+                .map(|i| StrokePoint::new(20.0 + i as f32, 16.0, 1.0))
+                .collect(),
+        }
+        .apply(&mut d)
+        .unwrap();
+        let px = d.layer(id).unwrap().pixels().unwrap();
+        let dragged = px.get_pixel(36, 16).to_straight();
+        assert!(
+            dragged[1] < 0.6,
+            "red dragged past the boundary (green sank): {dragged:?}"
+        );
+        let untouched = px.get_pixel(36, 2).to_straight();
+        assert!(untouched[1] > 0.99, "off the stroke stays white: {untouched:?}");
+        let alpha_kept = px.get_pixel(30, 16);
+        assert!((alpha_kept.a - 1.0).abs() < 1e-4, "opaque stays opaque");
+
+        // Sponge: desaturate pulls a saturated red toward grey; saturate
+        // pushes a muted tone away from it. Both leave alpha alone.
+        let enc = lumenply_doc::adjust::srgb_encode;
+        let dec = lumenply_doc::adjust::srgb_decode;
+        let mut doc = Document::new(16, 16);
+        let id = doc.add_pixel_layer("L");
+        let muted = Rgba::from_straight(dec(0.6), dec(0.4), dec(0.4), 1.0);
+        for y in 0..16 {
+            for x in 0..16 {
+                doc.layer_mut(id)
+                    .unwrap()
+                    .pixels_mut()
+                    .unwrap()
+                    .set_pixel(x, y, muted);
+            }
+        }
+        let sponge = |mode, doc: &Document| {
+            let mut d = doc.clone();
+            PaintStroke {
+                layer: id,
+                brush: Brush {
+                    radius: 4.0,
+                    hardness: 1.0,
+                    color: [0.0, 0.0, 0.0, 1.0],
+                    mode,
+                    ..Brush::default()
+                },
+                points: vec![StrokePoint::new(8.0, 8.0, 1.0)],
+            }
+            .apply(&mut d)
+            .unwrap();
+            d.layer(id)
+                .unwrap()
+                .pixels()
+                .unwrap()
+                .get_pixel(8, 8)
+                .to_straight()
+        };
+        let y = 0.2126 * 0.6 + 0.7152 * 0.4 + 0.0722 * 0.4;
+        let de = sponge(BrushMode::Desaturate, &doc);
+        assert!(
+            (enc(de[0]) - y).abs() < 2e-3 && (enc(de[1]) - y).abs() < 2e-3,
+            "full-strength desaturate reaches grey y={y}: {de:?}"
+        );
+        let sa = sponge(BrushMode::Saturate, &doc);
+        assert!(
+            (enc(sa[0]) - (y + (0.6 - y) * 2.0)).abs() < 2e-3,
+            "saturate doubles the chroma: {sa:?}"
+        );
+        assert!((sa[3] - 1.0).abs() < 1e-5);
     }
 
     #[test]
