@@ -587,6 +587,18 @@ impl App {
         if resp.hovered() {
             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
         }
+        // Esc drops the drag in progress (shortcuts stand down mid-drag,
+        // so the key is still there).
+        if self.drag == Some(DragKind::Gradient)
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
+        {
+            self.drag = None;
+            self.gradient.drag = None;
+            let area = self.gradient.last_area.take();
+            self.mark(area);
+            self.status = "Gradient cancelled".into();
+            return;
+        }
         if self.gradient.swallow {
             if !ctx.input(|i| i.pointer.any_down()) {
                 self.gradient.swallow = false;
@@ -1014,6 +1026,33 @@ mod tests {
         assert_eq!(back.gradient_presets, app.prefs.gradient_presets);
         let old: session::Prefs = serde_json::from_str(r#"{"undo_steps": 50}"#).unwrap();
         assert!(old.gradient_presets.is_empty());
+    }
+
+    #[test]
+    fn esc_cancels_a_drag_without_an_undo_step() {
+        let mut app = small_app();
+        let ctx = crate::a11y_tests::ctx();
+        let bg = app.editor.doc().layers().last().unwrap().id;
+        app.set_active(Some(bg));
+        app.debug_gradient(&ctx, "gradient:drag=0:0:64:0");
+        assert!(app.gradient.last_area.is_some(), "previewed");
+        let steps = app.editor.history().len();
+        let esc = [true, false].map(|pressed| egui::Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+            events: esc.to_vec(),
+            ..Default::default()
+        };
+        let _ = ctx.run(raw, |ctx| app.frame(ctx));
+        assert!(app.drag.is_none() && app.gradient.drag.is_none());
+        assert_eq!(app.status, "Gradient cancelled");
+        assert_eq!(app.editor.history().len(), steps, "nothing committed");
     }
 
     #[test]
