@@ -778,6 +778,16 @@ impl App {
             }
         }
 
+        // Screen readers hear a text field holding the layer's text.
+        if let Some(s) = &self.typer.session {
+            let text = s.t.text.clone();
+            resp.widget_info(|| {
+                let mut info = egui::WidgetInfo::text_edit(true, "", &text);
+                info.label = Some("Text on canvas".into());
+                info
+            });
+        }
+
         // The pointer.
         let hover = resp.hover_pos().map(to_doc);
         let grab_r = 6.0 / self.zoom.max(0.01);
@@ -1426,7 +1436,7 @@ mod tests {
         let mut app = App::launch(&[]);
         app.dialog = None;
         app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
-        app.set_doc(blank(240, 160), None);
+        app.open_in_new_tab(blank(240, 160), None);
         let id = app.editor.doc().next_id();
         app.run(&AddTextLayer {
             text: TextLayer::new("Hello", 20.0, 80.0, 24.0, BLACK),
@@ -1780,6 +1790,28 @@ mod tests {
         assert_eq!(back.text, "Hello");
         assert_eq!(back.runs.len(), 1);
         assert_eq!((back.runs[0].start, back.runs[0].end), (0, 5));
+    }
+
+    #[test]
+    fn screen_readers_hear_the_canvas_text_and_every_control_is_named() {
+        let (mut app, ctx, id) = app();
+        app.begin_text_edit(&ctx, id, EditStart::End);
+        let mut nodes = Vec::new();
+        for _ in 0..2 {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                ..Default::default()
+            };
+            let out = ctx.run(raw, |ctx| app.frame(ctx));
+            nodes = out.platform_output.accesskit_update.expect("accesskit").nodes;
+        }
+        let canvas = nodes
+            .iter()
+            .map(|(_, n)| n)
+            .find(|n| n.name() == Some("Text on canvas"))
+            .expect("the canvas announces the text field");
+        assert_eq!(canvas.value(), Some("Hello"));
+        assert_eq!(crate::a11y_tests::nameless(&mut app, &ctx), Vec::<String>::new());
     }
 
     #[test]
