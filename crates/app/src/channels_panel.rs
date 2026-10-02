@@ -7,12 +7,25 @@
 use super::*;
 use crate::layers::IconButton;
 use crate::panels::{channel_gray, panel_row, rename_field, ChannelView, REBUILD_EVERY, ROW_H};
+use lumenply_core::channels::{ColourChannel, SelectionFromChannel};
+
+/// The composite channel a colour view reads (RGB loads luminosity).
+pub(crate) fn colour_channel(v: ChannelView) -> Option<ColourChannel> {
+    match v {
+        ChannelView::Composite => Some(ColourChannel::Luminosity),
+        ChannelView::Red => Some(ColourChannel::Red),
+        ChannelView::Green => Some(ColourChannel::Green),
+        ChannelView::Blue => Some(ColourChannel::Blue),
+        ChannelView::Alpha(_) => None,
+    }
+}
 
 /// What a click in the Channels panel asks for.
 enum ChanAct {
     View(ChannelView),
     Overlay(usize),
     Load(usize, CombineOp),
+    LoadColour(ColourChannel, CombineOp),
     Rename(usize),
     Delete(usize),
     Save,
@@ -175,9 +188,17 @@ impl App {
                         FontId::proportional(14.0),
                         TEXT,
                     );
-                    let resp = resp.on_hover_text(format!("Show the {name} channel alone"));
+                    let tip = if *v == ChannelView::Composite {
+                        "Show all channels · Cmd-click to load luminosity as a selection".to_string()
+                    } else {
+                        format!("Show the {name} channel alone · Cmd-click to load it as a selection")
+                    };
+                    let resp = resp.on_hover_text(tip);
                     if resp.clicked() {
-                        act = Some(ChanAct::View(*v));
+                        act = Some(match colour_channel(*v) {
+                            Some(c) if mods.command => ChanAct::LoadColour(c, load_op(mods)),
+                            _ => ChanAct::View(*v),
+                        });
                     }
                 }
                 if alphas.is_empty() {
@@ -291,16 +312,17 @@ impl App {
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
+            // Loads the alpha channel in view (or overlaid), else the
+            // colour channel in view, else the luminosity.
             if ui
-                .add_enabled(
-                    target.is_some(),
-                    IconButton::new(icon_load_selection, "Load channel as selection"),
-                )
+                .add(IconButton::new(icon_load_selection, "Load channel as selection"))
                 .clicked()
             {
-                if let Some(i) = target {
-                    act = Some(ChanAct::Load(i, load_op(mods)));
-                }
+                act = Some(match (target, colour_channel(view)) {
+                    (Some(i), _) => ChanAct::Load(i, load_op(mods)),
+                    (None, Some(c)) => ChanAct::LoadColour(c, load_op(mods)),
+                    (None, None) => ChanAct::LoadColour(ColourChannel::Luminosity, load_op(mods)),
+                });
             }
             if ui
                 .add_enabled(
@@ -344,6 +366,11 @@ impl App {
             Some(ChanAct::View(v)) => self.set_channel_view(v),
             Some(ChanAct::Overlay(i)) => {
                 self.panels.overlay = if overlay == Some(i) { None } else { Some(i) };
+            }
+            Some(ChanAct::LoadColour(channel, op)) => {
+                self.run(&SelectionFromChannel { channel, op });
+                self.status = format!("Loaded the {channel:?} channel as the selection")
+                    .replace("Luminosity channel", "luminosity");
             }
             Some(ChanAct::Load(index, op)) => {
                 self.run(&lumenply_core::channels::LoadSelection {
@@ -427,6 +454,18 @@ pub(crate) fn icon_trash(p: &egui::Painter, r: egui::Rect, c: Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colour_rows_load_their_channel_and_rgb_loads_luminosity() {
+        assert_eq!(
+            colour_channel(ChannelView::Composite),
+            Some(ColourChannel::Luminosity)
+        );
+        assert_eq!(colour_channel(ChannelView::Red), Some(ColourChannel::Red));
+        assert_eq!(colour_channel(ChannelView::Green), Some(ColourChannel::Green));
+        assert_eq!(colour_channel(ChannelView::Blue), Some(ColourChannel::Blue));
+        assert_eq!(colour_channel(ChannelView::Alpha(0)), None);
+    }
 
     #[test]
     fn cmd_click_modifiers_pick_the_load_operation() {
