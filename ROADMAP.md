@@ -285,7 +285,14 @@ None of these could be tested in the container.
       layers"): the selected visible siblings composite into the topmost
       one's slot and name; hidden ones stay; picture unchanged (tested)
 - [x] Lock-aware Properties transform controls (dimmed with the reason)
-- [ ] Shape layers (vector shape + fill), pattern fills (PSD imports them as pixels)
+- [x] Shape layers + Shape tool (U): rectangle, rounded rectangle, ellipse,
+      polygon, line with arrowheads, star/arrow/heart/speech bubble; fill
+      none/solid/gradient, stroke colour/width/inside-centre-outside/dashes;
+      live drag preview, Shift/Alt, snapping; Properties edits; transforms stay
+      vector; Rasterize, Make work path, New shape from path; .lumen; PSD as
+      Photoshop shape layers (SoCo/GdFl + vstk + vmsk) both ways,
+      psd-tools-verified; ORA bakes (ADR 0010)
+- [ ] Pattern fills (PSD imports them as pixels)
 - [~] Text: searchable font picker (system fonts via fontdb, .ttc face index
       honoured), bold/italic/bold-italic (real faces, else synthetic oblique
       and synthetic bold), alignment (left/centre/right), tracking in em/1000;
@@ -406,7 +413,8 @@ None of these could be tested in the container.
   on a real tablet.
 - Gradient midpoints/smoothness are not modelled; Selective Color approximates
   Photoshop's undocumented maths; fill layers can't be scaled or rotated
-  without rasterizing; vector shape layers import as pixels.
+  without rasterizing; shapes re-import from PSD as path shapes (radius/sides
+  not editable after); centre/outside strokes have round joins.
 - Dust & Scratches radius is capped at 8 (per-pixel median).
 
 - Text layers cannot be scaled or rotated without rasterizing.
