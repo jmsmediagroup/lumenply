@@ -335,6 +335,11 @@ impl App {
 
     /// Upload a preview of `doc` for the given area (or the whole canvas).
     pub(crate) fn preview(&mut self, ctx: &egui::Context, doc: &Document, area: Option<Rect>) {
+        // Smart filters re-render over the previewed pixels, and reach
+        // past the edited area (see smart_filters_ui).
+        let fresh = crate::smart_filters_ui::refreshed_preview(doc);
+        let doc = fresh.as_ref().unwrap_or(doc);
+        let area = lumenply_core::smart_filter_cmds::widen_affected(doc, area);
         // Previews change only the active layer, so the cached backdrop
         // below it applies to the preview document too.
         let mut below = std::mem::take(&mut self.below);

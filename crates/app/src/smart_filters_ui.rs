@@ -37,6 +37,22 @@ pub(crate) fn set_sf_focus(ctx: &egui::Context, v: Option<(LayerId, usize)>) {
     });
 }
 
+/// A preview document (built by applying a command outside the editor)
+/// with its smart-filter caches brought up to date, or `None` when it has
+/// no smart filters. Only the changed tiles' neighbourhood re-filters: the
+/// editor's document still holds the old tiles, so changed ones always
+/// have new addresses (ADR 0011).
+pub(crate) fn refreshed_preview(doc: &Document) -> Option<Document> {
+    let mut any = false;
+    doc.for_each_layer(|l| any |= l.smart_filters.is_active());
+    if !any {
+        return None;
+    }
+    let mut d = doc.clone();
+    lumenply_render::smart_filters::refresh_stale(&mut d);
+    Some(d)
+}
+
 fn blend_title(m: BlendMode) -> String {
     let n = m.name().replace('-', " ");
     let mut c = n.chars();
@@ -719,6 +735,32 @@ mod tests {
             .source
             .get_pixel(32, 16);
         assert_eq!(source.r, 0.0, "the smart object's pixels stay untouched");
+    }
+
+    #[test]
+    fn canvas_previews_re_filter_the_previewed_pixels() {
+        let (mut app, id) = step_app();
+        app.run_menu_action(SF_CONVERT);
+        app.run(&AddSmartFilter::new(id, Filter::BoxBlur { radius: 2.0 }));
+        // A move preview (as the Move tool builds it, outside the editor).
+        let mut preview = app.editor.doc().clone();
+        MoveLayer {
+            layer: id,
+            dx: 10,
+            dy: 0,
+        }
+        .apply(&mut preview)
+        .unwrap();
+        let fresh = refreshed_preview(&preview).expect("the document has smart filters");
+        let at = |d: &Document, x| d.layer(id).unwrap().raster_store().unwrap().get_pixel(x, 16).r;
+        // The ramp follows the edge from x = 32 to x = 42.
+        assert!((at(&fresh, 42) - 0.4).abs() < 1e-4, "{}", at(&fresh, 42));
+        assert!((at(&fresh, 32) - 1.0).abs() < 1e-4);
+        // Without the refresh the stale ramp would still sit at x = 32.
+        assert!((at(&preview, 32) - 0.4).abs() < 1e-4);
+        // A document without smart filters needs no copy.
+        app.run(&RemoveSmartFilter { layer: id, index: 0 });
+        assert!(refreshed_preview(app.editor.doc()).is_none());
     }
 
     #[test]
