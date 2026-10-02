@@ -1794,6 +1794,7 @@ pub(crate) mod a11y_tests {
             ("About", Dialog::About),
             ("Save selection", Dialog::SaveSelection("Sky".into())),
             ("Trim", Dialog::Trim(true)),
+            ("Keyboard shortcuts", Dialog::Shortcuts),
             ("Rotate canvas", Dialog::RotateBy(15.0, true)),
             (
                 "Load selection",

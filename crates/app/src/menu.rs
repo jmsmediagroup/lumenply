@@ -631,6 +631,7 @@ impl App {
 
     fn help_menu(&mut self, ui: &mut egui::Ui) {
         self.act(ui, "Search commands...", "palette");
+        self.act(ui, "Keyboard shortcuts", "shortcuts");
         menu_separator(ui);
         self.act(ui, "About Lumenply", "about");
     }

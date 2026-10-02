@@ -121,6 +121,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Edit smart object contents", "smart-edit"),
     ("Save selection...", "save-selection"),
     ("Trim...", "trim"),
+    ("Keyboard shortcuts", "shortcuts"),
     ("Reveal all", "reveal-all"),
     ("Rotate image by angle...", "rot-angle"),
     ("Load selection...", "load-selection"),
@@ -164,6 +165,68 @@ const ACTIONS: &[(&str, &str)] = &[
     ("New fill layer: solid color", "fill-solid"),
     ("New fill layer: gradient", "fill-gradient"),
 ];
+
+impl App {
+    /// Help ▸ Keyboard shortcuts: every tool key, every command with a
+    /// shortcut (as currently bound), and the keys that are not commands.
+    pub(crate) fn shortcuts_reference(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let row = |ui: &mut egui::Ui, what: &str, keys: &str| {
+            ui.horizontal(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(230.0, 18.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.set_min_width(230.0);
+                        ui.add(egui::Label::new(RichText::new(what).color(TEXT)).truncate());
+                    },
+                );
+                ui.label(RichText::new(keys).monospace().color(MUTED));
+            });
+        };
+        let list_h = (ctx.screen_rect().height() - 220.0).clamp(160.0, 560.0);
+        let scroll = egui::ScrollArea::vertical()
+            .id_salt("shortcuts-reference")
+            .max_height(list_h)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.set_min_width(380.0);
+                section_title(ui, "TOOLS");
+                for t in Tool::ALL {
+                    // The second tool of a pair takes Shift with the key.
+                    let shifted = matches!(t, Tool::EllipseSelect | Tool::PolyLasso | Tool::Gradient);
+                    let keys = if shifted {
+                        format!("Shift+{}", t.key())
+                    } else {
+                        t.key().to_string()
+                    };
+                    row(ui, t.name(), &keys);
+                }
+                row(ui, "Quick selection (Wand sibling)", "Shift+W");
+                section_title(ui, "COMMANDS");
+                for (label, id) in ACTIONS {
+                    let keys = self.action_keys(&ctx, id);
+                    if !keys.is_empty() {
+                        row(ui, label, &keys);
+                    }
+                }
+                section_title(ui, "CANVAS");
+                for (what, keys) in [
+                    ("Brush size", "[  ]"),
+                    ("Swap / default colours", "X  /  D"),
+                    ("Quick mask", "Q"),
+                    ("Pan", "Space + drag, scroll"),
+                    ("Zoom at the pointer", "Alt + scroll, pinch"),
+                    ("Commit / cancel (crop, transform, text)", "Enter  /  Esc"),
+                    ("Add to / subtract from a selection", "Shift  /  Alt"),
+                ] {
+                    row(ui, what, keys);
+                }
+            });
+        a11y_scroll(ui.ctx(), &scroll, "Keyboard shortcuts");
+        crate::dialogs::note(ui, "Command shortcuts can be changed in Preferences.");
+    }
+}
 
 /// The id of the destructive filter dialog for a filter kind.
 pub(crate) fn filter_id(f: &Filter) -> &'static str {
@@ -690,6 +753,7 @@ impl App {
             }
             "prefs" => self.dialog = Some(Dialog::Preferences(self.prefs.clone(), None)),
             "about" => self.dialog = Some(Dialog::About),
+            "shortcuts" => self.dialog = Some(Dialog::Shortcuts),
             "liquify" => self.open_liquify(),
             "export-as" => self.open_export_as(),
             "smart-edit" => self.edit_smart_contents(),
@@ -770,7 +834,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 111); // + trim, reveal all, rotate by angle
+        assert_eq!(n, 112); // + keyboard shortcuts
     }
 
     #[test]

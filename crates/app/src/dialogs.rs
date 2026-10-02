@@ -26,6 +26,8 @@ pub(crate) enum Dialog {
     Fill(bool, f32, u8),
     /// View ▸ New guide: (vertical, position in pixels).
     NewGuide(bool, f32),
+    /// Help ▸ Keyboard shortcuts.
+    Shortcuts,
     /// Image ▸ Trim: cut transparent borders (else top-left-colour ones).
     Trim(bool),
     /// Image ▸ Rotate by angle: degrees, clockwise when true.
@@ -434,6 +436,7 @@ impl App {
             Dialog::NewGuide(..) => "New guide",
             Dialog::Trim(..) => "Trim",
             Dialog::RotateBy(..) => "Rotate canvas",
+            Dialog::Shortcuts => "Keyboard shortcuts",
             Dialog::SaveSelection(..) => "Save selection",
             Dialog::LoadSelection(..) => "Load selection",
             Dialog::About => "About",
@@ -455,6 +458,7 @@ impl App {
             Dialog::LoadSelection(..) => "Load",
             Dialog::Trim(..) => "Trim",
             Dialog::RotateBy(..) => "Rotate",
+            Dialog::Shortcuts => "Close",
             Dialog::Filter(_) | Dialog::CanvasSize(..) | Dialog::ImageSize(..) => "Apply",
             Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) | Dialog::Recover | Dialog::About => "",
         };
@@ -600,6 +604,7 @@ impl App {
                                 }
                             });
                         }
+                        Dialog::Shortcuts => self.shortcuts_reference(ui),
                         Dialog::Trim(transparent) => {
                             ui.horizontal(|ui| {
                                 row_label(ui, "Based on", LABEL_W);
@@ -1079,11 +1084,13 @@ impl App {
                         }
                     }
                     if !primary.is_empty() {
+                        // A reference page has nothing to cancel.
+                        let info_only = primary == "Close";
                         footer(ui, |ui| {
                             if ui.add(primary_button(primary)).clicked() || enter {
                                 confirmed = true;
                             }
-                            if ui.add(footer_button("Cancel")).clicked() || esc {
+                            if esc || (!info_only && ui.add(footer_button("Cancel")).clicked()) {
                                 keep = false;
                             }
                         });
@@ -1133,6 +1140,7 @@ impl App {
                 Dialog::SelectEdge(..) => {}
                 Dialog::Fill(..) => self.fill_active(),
                 Dialog::ColorRange(..) => {}
+                Dialog::Shortcuts => {}
                 Dialog::Trim(transparent) => {
                     let basis = if *transparent {
                         lumenply_core::canvas_ops::TrimBasis::Transparent
@@ -1313,7 +1321,7 @@ fn titled<R>(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui) ->
 }
 
 /// A muted explanatory line, wrapped to the dialog width.
-fn note(ui: &mut egui::Ui, text: &str) {
+pub(crate) fn note(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(RichText::new(text).color(MUTED)).wrap());
 }
 
