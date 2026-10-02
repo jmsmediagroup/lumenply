@@ -194,16 +194,28 @@ fn write_layer<W: Write + std::io::Seek>(
     })
 }
 
+/// Largest canvas side a manifest may declare.
+const MAX_CANVAS: u32 = 1_000_000;
+/// Largest manifest the loader will read (decompressed).
+const MAX_MANIFEST: u64 = 64 << 20;
+/// Tile coordinates must survive `x * 256` pixel arithmetic.
+const MAX_TILE_COORD: i32 = i32::MAX / 256;
+
 /// Read a document from `path`.
 pub fn load(path: impl AsRef<Path>) -> Result<Document, ProjectError> {
     let file = File::open(path)?;
     let mut zip = ZipArchive::new(BufReader::new(file))?;
     let manifest: Manifest = {
-        let mut f = zip
+        let f = zip
             .by_name("manifest.json")
             .map_err(|_| ProjectError::NotAProject("missing manifest.json".into()))?;
         let mut buf = String::new();
-        f.read_to_string(&mut buf)?;
+        // The declared size in the zip is attacker-controlled; cap what we
+        // actually decompress.
+        f.take(MAX_MANIFEST + 1).read_to_string(&mut buf)?;
+        if buf.len() as u64 > MAX_MANIFEST {
+            return Err(ProjectError::Corrupt("manifest is implausibly large".into()));
+        }
         serde_json::from_str(&buf)?
     };
     if manifest.format != "nge" {
@@ -215,13 +227,33 @@ pub fn load(path: impl AsRef<Path>) -> Result<Document, ProjectError> {
     if manifest.version > FORMAT_VERSION {
         return Err(ProjectError::TooNew(manifest.version));
     }
+    if manifest.width == 0
+        || manifest.height == 0
+        || manifest.width > MAX_CANVAS
+        || manifest.height > MAX_CANVAS
+    {
+        return Err(ProjectError::Corrupt(format!(
+            "canvas {}×{} is not a sane size",
+            manifest.width, manifest.height
+        )));
+    }
     let mut layers = Vec::new();
     for r in &manifest.layers {
         layers.push(read_layer(&mut zip, r)?);
     }
     let mut max_id = 0;
+    let mut seen = std::collections::HashSet::new();
+    let mut dup = None;
     let doc = Document::from_parts(manifest.width, manifest.height, layers, manifest.next_id);
-    doc.for_each_layer(|l| max_id = max_id.max(l.id));
+    doc.for_each_layer(|l| {
+        max_id = max_id.max(l.id);
+        if !seen.insert(l.id) {
+            dup = Some(l.id);
+        }
+    });
+    if let Some(id) = dup {
+        return Err(ProjectError::Corrupt(format!("layer id {id} appears twice")));
+    }
     if manifest.next_id <= max_id {
         return Err(ProjectError::Corrupt(format!(
             "next_id {} is not above the highest layer id {max_id}",
@@ -229,6 +261,15 @@ pub fn load(path: impl AsRef<Path>) -> Result<Document, ProjectError> {
         )));
     }
     Ok(doc)
+}
+
+fn checked_coord(x: i32, y: i32) -> Result<TileCoord, ProjectError> {
+    if x.abs() > MAX_TILE_COORD || y.abs() > MAX_TILE_COORD {
+        return Err(ProjectError::Corrupt(format!(
+            "tile coordinate ({x}, {y}) is out of range"
+        )));
+    }
+    Ok(TileCoord::new(x, y))
 }
 
 fn read_layer<R: Read + std::io::Seek>(
@@ -239,8 +280,9 @@ fn read_layer<R: Read + std::io::Seek>(
         ContentRecord::Pixel { tiles } => {
             let mut store = TileStore::new();
             for &(x, y) in tiles {
+                let c = checked_coord(x, y)?;
                 let bytes = read_entry(zip, &format!("tiles/{}/{}_{}.rgba", r.id, x, y))?;
-                store.insert(TileCoord::new(x, y), Arc::new(tile_from_bytes(&bytes)?));
+                store.insert(c, Arc::new(tile_from_bytes(&bytes)?));
             }
             LayerContent::Pixel(store)
         }
@@ -255,6 +297,9 @@ fn read_layer<R: Read + std::io::Seek>(
         ContentRecord::Filter { filter } => LayerContent::Filter(filter.clone()),
         ContentRecord::Text { text } => {
             let mut t = text.clone();
+            if !(0.0..=10_000.0).contains(&t.size) {
+                return Err(ProjectError::Corrupt(format!("text size {} is not sane", t.size)));
+            }
             nge_render::text::refresh_cache(&mut t);
             LayerContent::Text(t)
         }
@@ -264,8 +309,9 @@ fn read_layer<R: Read + std::io::Seek>(
         Some(m) => {
             let mut tiles = TileStore::new();
             for &(x, y) in &m.tiles {
+                let c = checked_coord(x, y)?;
                 let bytes = read_entry(zip, &format!("masks/{}/{}_{}.a", r.id, x, y))?;
-                tiles.insert(TileCoord::new(x, y), Arc::new(mask_from_bytes(&bytes)?));
+                tiles.insert(c, Arc::new(mask_from_bytes(&bytes)?));
             }
             Some(Mask {
                 tiles,
@@ -286,11 +332,20 @@ fn read_layer<R: Read + std::io::Seek>(
 }
 
 fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<Vec<u8>, ProjectError> {
-    let mut f = zip
+    // The largest legitimate entry is a pixel tile. The declared size and
+    // the decompressed stream are both attacker-controlled, so cap the
+    // allocation and the read rather than trusting either.
+    const MAX_ENTRY: usize = TILE_PIXELS * 16;
+    let f = zip
         .by_name(name)
         .map_err(|_| ProjectError::Corrupt(format!("manifest references missing entry {name}")))?;
-    let mut buf = Vec::with_capacity(f.size() as usize);
-    f.read_to_end(&mut buf)?;
+    let mut buf = Vec::with_capacity((f.size() as usize).min(MAX_ENTRY));
+    f.take(MAX_ENTRY as u64 + 1).read_to_end(&mut buf)?;
+    if buf.len() > MAX_ENTRY {
+        return Err(ProjectError::Corrupt(format!(
+            "entry {name} is implausibly large"
+        )));
+    }
     Ok(buf)
 }
 
@@ -359,6 +414,49 @@ mod tests {
         let dir = std::env::temp_dir().join("nge-project-test");
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(name)
+    }
+
+    /// Build a .nge zip by hand with the given manifest and extra entries.
+    fn craft_project(name: &str, manifest: &str, entries: &[(&str, Vec<u8>)]) -> std::path::PathBuf {
+        let path = temp(name);
+        let mut zip = ZipWriter::new(BufWriter::new(File::create(&path).unwrap()));
+        let opts: FileOptions = FileOptions::default().compression_method(CompressionMethod::Stored);
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(manifest.as_bytes()).unwrap();
+        for (ename, data) in entries {
+            zip.start_file(*ename, opts).unwrap();
+            zip.write_all(data).unwrap();
+        }
+        zip.finish().unwrap();
+        path
+    }
+
+    #[test]
+    fn corrupt_manifests_error_instead_of_panicking() {
+        // Duplicate layer ids: every id-addressed command would resolve to
+        // the first layer only.
+        let dup = r#"{"format":"nge","version":1,"width":10,"height":10,"next_id":5,
+            "layers":[{"id":1,"name":"a","visible":true,"opacity":1.0,"blend":"normal",
+                       "kind":"pixel","tiles":[]},
+                      {"id":1,"name":"b","visible":true,"opacity":1.0,"blend":"normal",
+                       "kind":"pixel","tiles":[]}]}"#;
+        assert!(load(craft_project("dup-id.nge", dup, &[])).is_err());
+
+        // A tile coordinate that would overflow pixel arithmetic (x * 256).
+        let far = format!(
+            r#"{{"format":"nge","version":1,"width":10,"height":10,"next_id":2,
+            "layers":[{{"id":1,"name":"a","visible":true,"opacity":1.0,"blend":"normal",
+                       "kind":"pixel","tiles":[[{},0]]}}]}}"#,
+            i32::MAX
+        );
+        let entry_name = format!("tiles/1/{}_0.rgba", i32::MAX);
+        let entries = [(entry_name.as_str(), vec![0u8; TILE_PIXELS * 16])];
+        assert!(load(craft_project("far-tile.nge", &far, &entries)).is_err());
+
+        // An absurd canvas size.
+        let huge = r#"{"format":"nge","version":1,"width":4000000000,"height":10,
+            "next_id":1,"layers":[]}"#;
+        assert!(load(craft_project("huge-canvas.nge", huge, &[])).is_err());
     }
 
     #[test]
