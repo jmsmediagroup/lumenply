@@ -590,6 +590,15 @@ impl App {
     }
 
     fn filter_menu(&mut self, ui: &mut egui::Ui) {
+        self.act(
+            ui,
+            "Convert for smart filters",
+            crate::smart_filters_ui::SF_CONVERT,
+        );
+        if self.filters_go_smart() {
+            menu_note(ui, "Filters below are added as smart filters");
+        }
+        menu_separator(ui);
         self.act(ui, "Liquify...", "liquify");
         menu_separator(ui);
         // Photoshop's grouping: a submenu per kind of filter.

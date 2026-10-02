@@ -166,6 +166,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("New fill layer: solid color", "fill-solid"),
     ("New fill layer: gradient", "fill-gradient"),
     ("New shape layer from path", "shape-from-path"),
+    ("Convert for smart filters", "sf-convert"),
 ];
 
 impl App {
@@ -510,6 +511,9 @@ impl App {
         if let Some(block) = self.layer_action_block(id) {
             return block;
         }
+        if let Some(block) = self.smart_filter_action_block(id) {
+            return block;
+        }
         match id {
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
             "redo" if !self.editor.can_redo() => Some("Nothing to redo"),
@@ -635,7 +639,7 @@ impl App {
             self.status = why.into();
             return;
         }
-        if self.run_layer_action(id) {
+        if self.run_layer_action(id) || self.run_smart_filter_action(id) {
             return;
         }
         match id {
@@ -850,7 +854,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 113); // + shape from path
+        assert_eq!(n, 114); // + convert for smart filters
     }
 
     #[test]
