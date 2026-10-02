@@ -80,16 +80,16 @@ impl App {
         egui::SidePanel::left("tools")
             .exact_width(58.0)
             .resizable(false)
-            .frame(egui::Frame::none().fill(Color32::from_gray(28)).inner_margin(9.0))
+            .frame(egui::Frame::none().fill(PANEL).inner_margin(9.0))
             .show(ctx, |ui| {
                 for tool in Tool::ALL {
                     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(40.0), Sense::click());
                     let bg = if self.tool == tool {
                         ACCENT
                     } else if resp.hovered() {
-                        Color32::from_gray(64)
+                        Color32::from_rgb(0x32, 0x38, 0x3F)
                     } else {
-                        Color32::from_gray(44)
+                        RAISED
                     };
                     ui.painter().rect_filled(rect, 6.0, bg);
                     draw_icon(ui.painter(), rect.shrink(10.0), tool);

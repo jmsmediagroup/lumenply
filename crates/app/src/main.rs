@@ -128,16 +128,7 @@ struct App {
 impl App {
     /// `nge-app [--demo | file.nge | image.png] [--place image.png]...`
     fn new(cc: &eframe::CreationContext<'_>, args: &[String]) -> Self {
-        let mut v = egui::Visuals::dark();
-        v.panel_fill = Color32::from_gray(33);
-        v.window_fill = Color32::from_gray(38);
-        v.selection.bg_fill = ACCENT;
-        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_gray(52));
-        cc.egui_ctx.set_visuals(v);
-        let mut style = (*cc.egui_ctx.style()).clone();
-        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        style.spacing.button_padding = egui::vec2(8.0, 4.0);
-        cc.egui_ctx.set_style(style);
+        theme::install(&cc.egui_ctx);
 
         let mut status = String::from("Ready");
         let first = args.first().filter(|a| *a != "--place").map(String::as_str);

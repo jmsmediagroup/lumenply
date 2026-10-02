@@ -201,7 +201,7 @@ impl App {
                                     let a = (col as f32 * 0.5, row as f32 * 0.5);
                                     let on = (anchor.0 - a.0).abs() < 1e-3 && (anchor.1 - a.1).abs() < 1e-3;
                                     let (r, resp) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
-                                    let fill = if on { ACCENT } else { Color32::from_gray(60) };
+                                    let fill = if on { ACCENT } else { RAISED };
                                     ui.painter().rect_filled(r.shrink(3.0), 3.0, fill);
                                     if on {
                                         ui.painter().circle_filled(r.center(), 4.0, Color32::WHITE);

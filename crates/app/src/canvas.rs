@@ -226,7 +226,7 @@ impl App {
 
     pub(crate) fn canvas(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(Color32::from_gray(45)))
+            .frame(egui::Frame::none().fill(GROUND))
             .show(ctx, |ui| {
                 let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
                 let rect = resp.rect;
@@ -280,7 +280,7 @@ impl App {
                 if let Some(tex) = &self.overlay_tex {
                     painter.image(tex.id(), doc_rect, uv, Color32::WHITE);
                 }
-                painter.rect_stroke(doc_rect, 0.0, Stroke::new(1.0, Color32::from_gray(90)));
+                painter.rect_stroke(doc_rect, 0.0, Stroke::new(1.0, LINE));
 
                 if let Some(x) = &self.xform {
                     paint_xform_box(&painter, x, to_screen);

@@ -252,12 +252,12 @@ pub(crate) fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<[f32; 2]>, drag: 
     let size = Vec2::splat(210.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let p = ui.painter_at(rect);
-    p.rect_filled(rect, 4.0, Color32::from_gray(22));
+    p.rect_filled(rect, 4.0, GROUND);
     for i in 1..4 {
         let t = i as f32 / 4.0;
         let gx = rect.min.x + t * rect.width();
         let gy = rect.min.y + t * rect.height();
-        let grid = Stroke::new(1.0, Color32::from_gray(44));
+        let grid = Stroke::new(1.0, LINE);
         p.line_segment([egui::pos2(gx, rect.min.y), egui::pos2(gx, rect.max.y)], grid);
         p.line_segment([egui::pos2(rect.min.x, gy), egui::pos2(rect.max.x, gy)], grid);
     }
@@ -271,7 +271,7 @@ pub(crate) fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<[f32; 2]>, drag: 
     };
     p.line_segment(
         [to_screen(0.0, 0.0), to_screen(1.0, 1.0)],
-        Stroke::new(1.0, Color32::from_gray(70)),
+        Stroke::new(1.0, MUTED),
     );
     let nearest = |pts: &[[f32; 2]], q: Pos2| -> Option<usize> {
         pts.iter()
@@ -344,7 +344,7 @@ pub(crate) fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<[f32; 2]>, drag: 
         p.circle_filled(c, 5.0, Color32::WHITE);
         p.circle_stroke(c, 5.0, Stroke::new(1.5, ACCENT));
     }
-    p.rect_stroke(rect, 4.0, Stroke::new(1.0, Color32::from_gray(70)));
+    p.rect_stroke(rect, 4.0, Stroke::new(1.0, MUTED));
     ui.horizontal(|ui| {
         let mut preset = None;
         if ui.small_button("Linear").clicked() {

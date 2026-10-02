@@ -83,14 +83,14 @@ impl App {
                     } else if selected {
                         p.rect_filled(rect, 4.0, Color32::from_rgb(45, 70, 115));
                     } else if resp.hovered() {
-                        p.rect_filled(rect, 4.0, Color32::from_gray(50));
+                        p.rect_filled(rect, 4.0, RAISED);
                     }
                     let mut x = rect.min.x + 6.0 + row.depth as f32 * 16.0;
                     let cy = rect.center().y;
 
                     // visibility checkbox
                     let vis_rect = egui::Rect::from_center_size(egui::pos2(x + 8.0, cy), Vec2::splat(14.0));
-                    p.rect_stroke(vis_rect, 2.0, Stroke::new(1.0, Color32::from_gray(150)));
+                    p.rect_stroke(vis_rect, 2.0, Stroke::new(1.0, MUTED));
                     if row.visible {
                         p.circle_filled(vis_rect.center(), 4.0, Color32::WHITE);
                     }
@@ -107,7 +107,7 @@ impl App {
                     if row.kind == Kind::Group {
                         let tri_rect =
                             egui::Rect::from_center_size(egui::pos2(x + 6.0, cy), Vec2::splat(12.0));
-                        let c = Color32::from_gray(210);
+                        let c = TEXT;
                         let pts = if row.collapsed {
                             vec![
                                 egui::pos2(tri_rect.min.x + 2.0, tri_rect.min.y),
@@ -148,7 +148,7 @@ impl App {
                     } else {
                         badge(p, t_rect, row.kind);
                     }
-                    p.rect_stroke(t_rect, 2.0, Stroke::new(1.0, Color32::from_gray(90)));
+                    p.rect_stroke(t_rect, 2.0, Stroke::new(1.0, LINE));
                     x += THUMB.0 as f32 + 6.0;
 
                     // mask thumbnail
@@ -169,7 +169,7 @@ impl App {
                         let col = if editing {
                             Color32::from_rgb(230, 200, 90)
                         } else if row.mask_enabled {
-                            Color32::from_gray(90)
+                            LINE
                         } else {
                             Color32::from_rgb(200, 70, 70)
                         };
@@ -210,11 +210,7 @@ impl App {
                             continue;
                         }
                     }
-                    let text_col = if is_active {
-                        Color32::WHITE
-                    } else {
-                        Color32::from_gray(215)
-                    };
+                    let text_col = if is_active { Color32::WHITE } else { TEXT };
                     p.text(
                         egui::pos2(x, cy),
                         Align2::LEFT_CENTER,
@@ -241,11 +237,7 @@ impl App {
                             Align2::RIGHT_CENTER,
                             extra.trim_end(),
                             FontId::proportional(11.5),
-                            if is_active {
-                                Color32::from_gray(225)
-                            } else {
-                                Color32::from_gray(140)
-                            },
+                            if is_active { TEXT } else { MUTED },
                         );
                     }
                     if resp.double_clicked() {
@@ -416,12 +408,12 @@ impl App {
 }
 
 pub(crate) fn badge(p: &egui::Painter, rect: egui::Rect, kind: Kind) {
-    let (col, txt) = match kind {
-        Kind::Pixel => (Color32::from_rgb(70, 130, 200), "P"),
-        Kind::Adjustment => (Color32::from_rgb(205, 140, 45), "A"),
-        Kind::Group => (Color32::from_rgb(90, 170, 110), "G"),
-        Kind::Filter => (Color32::from_rgb(150, 90, 190), "F"),
-        Kind::Text => (Color32::from_rgb(60, 150, 150), "T"),
+    let (col, ink, txt) = match kind {
+        Kind::Pixel => (RAISED, TEXT, "P"),
+        Kind::Adjustment => (ACCENT, ACCENT_INK, "A"),
+        Kind::Group => (RAISED, TEXT, "G"),
+        Kind::Filter => (LIVE_FILTER, ACCENT_INK, "F"),
+        Kind::Text => (RAISED, TEXT, "T"),
     };
     p.rect_filled(rect, 2.0, col);
     p.text(
@@ -429,6 +421,6 @@ pub(crate) fn badge(p: &egui::Painter, rect: egui::Rect, kind: Kind) {
         Align2::CENTER_CENTER,
         txt,
         FontId::proportional(13.0),
-        Color32::WHITE,
+        ink,
     );
 }

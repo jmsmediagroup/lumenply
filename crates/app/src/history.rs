@@ -14,12 +14,12 @@ impl App {
                 ui.painter()
                     .rect_filled(rect, 3.0, Color32::from_rgb(40, 62, 100));
             } else if resp.hovered() {
-                ui.painter().rect_filled(rect, 3.0, Color32::from_gray(50));
+                ui.painter().rect_filled(rect, 3.0, RAISED);
             }
             let col = match state {
                 1 => Color32::from_rgb(170, 205, 255),
-                2 => Color32::from_gray(95),
-                _ => Color32::from_gray(160),
+                2 => LINE,
+                _ => MUTED,
             };
             ui.painter().text(
                 rect.left_center() + egui::vec2(6.0, 0.0),
