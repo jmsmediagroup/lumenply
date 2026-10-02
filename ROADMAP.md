@@ -276,6 +276,13 @@ None of these could be tested in the container.
       saved in .lumen (channels/ tiles) and PSD (named alpha channels after
       RGB + transparency, resources 1006/1045; psd-tools-verified both
       depths). Still open: a Channels panel
+- [x] Edit ▸ Cut / Copy / Copy merged / Paste / Paste in place (Cmd+X/C/
+      Shift+Cmd+C/V/Shift+Cmd+V): the selection's pixels (soft edges kept) or
+      the layer, pasted as a new layer above the active one in place; copies
+      also go to the system clipboard as an image and images from other apps
+      paste centred (arboard). macOS catches Cmd+V with an image-only
+      clipboard via a key monitor; elsewhere use Edit ▸ Paste for that.
+      Not exercised live tonight (would overwrite the user's clipboard)
 - [x] Image ▸ Trim (transparent or top-left-colour borders), Reveal all (grow
       the canvas to every layer's pixels, e.g. after a non-destructive crop),
       Rotate by angle (canvas grows to fit, transparent corners) — all through

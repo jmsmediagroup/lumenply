@@ -396,6 +396,12 @@ impl App {
         self.act(ui, &undo, "undo");
         self.act(ui, &redo, "redo");
         menu_separator(ui);
+        self.act(ui, "Cut", "cut");
+        self.act(ui, "Copy", "copy");
+        self.act(ui, "Copy merged", "copy-merged");
+        self.act(ui, "Paste", "paste");
+        self.act(ui, "Paste in place", "paste-in-place");
+        menu_separator(ui);
         self.act(ui, "Free transform", "xform");
         self.act(ui, "Perspective", "perspective");
         self.act(ui, "Warp", "warp");

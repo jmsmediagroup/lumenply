@@ -122,6 +122,11 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Edit smart object contents", "smart-edit"),
     ("Save selection...", "save-selection"),
     ("Trim...", "trim"),
+    ("Cut", "cut"),
+    ("Copy", "copy"),
+    ("Copy merged", "copy-merged"),
+    ("Paste", "paste"),
+    ("Paste in place", "paste-in-place"),
     ("Keyboard shortcuts", "shortcuts"),
     ("Reveal all", "reveal-all"),
     ("Rotate image by angle...", "rot-angle"),
@@ -529,6 +534,8 @@ impl App {
             "liquify" if !pixel => need_pixel,
             "smart-edit" | "smart-replace" if !smart => Some("Select a smart object first"),
             "save-selection" if !selection => need_selection,
+            "cut" if !pixel => need_pixel,
+            "copy" if layer.and_then(|l| l.raster_store()).is_none() => Some("Select a layer with pixels"),
             "load-selection" if doc.saved_selections.is_empty() => Some("No saved selections yet"),
             "reveal-all" if lumenply_core::canvas_ops::RevealAll::frame(doc) == doc.canvas() => {
                 Some("Everything is already on the canvas")
@@ -601,6 +608,11 @@ impl App {
         }
         let (m, k) = match id {
             "fill" => (M::SHIFT, Key::F5),
+            "cut" => (M::COMMAND, Key::X),
+            "copy" => (M::COMMAND, Key::C),
+            "copy-merged" => (M::COMMAND | M::SHIFT, Key::C),
+            "paste" => (M::COMMAND, Key::V),
+            "paste-in-place" => (M::COMMAND | M::SHIFT, Key::V),
             "fill-dialog" => (M::SHIFT, Key::Backspace),
             "clear" => return "Delete".into(),
             // egui spells these keys "Equals"/"Minus"; show the symbols.
@@ -770,6 +782,15 @@ impl App {
             "prefs" => self.dialog = Some(Dialog::Preferences(self.prefs.clone(), None)),
             "about" => self.dialog = Some(Dialog::About),
             "shortcuts" => self.dialog = Some(Dialog::Shortcuts),
+            "cut" => self.cut_pixels(),
+            "copy" => {
+                self.copy_pixels(false);
+            }
+            "copy-merged" => {
+                self.copy_pixels(true);
+            }
+            "paste" => self.paste_pixels(false),
+            "paste-in-place" => self.paste_pixels(true),
             "liquify" => self.open_liquify(),
             "export-as" => self.open_export_as(),
             "smart-edit" => self.edit_smart_contents(),
@@ -850,7 +871,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 113); // + shape from path
+        assert_eq!(n, 118); // + cut, copy, copy merged, paste, paste in place
     }
 
     #[test]

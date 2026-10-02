@@ -18,6 +18,7 @@ pub mod guides;
 pub mod layer_ops;
 pub mod liquify;
 pub mod locks;
+pub mod paste;
 pub mod quick_select;
 mod select_ops;
 pub mod shape_cmds;

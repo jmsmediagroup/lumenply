@@ -26,6 +26,7 @@ mod adjust_ui;
 mod brand;
 mod camera_raw;
 mod canvas;
+mod clipboard;
 mod color_picker;
 mod crop;
 mod debug;
@@ -292,6 +293,8 @@ struct App {
     text_align: TextAlign,
     /// "New text" pressed: the next Text-tool click starts a new layer.
     text_new_armed: bool,
+    /// Edit ▸ Copy's pixels at full precision.
+    clip: Option<clipboard::Clip>,
     /// Quick Selection (the Wand tool's sibling mode) and its stroke.
     quick: quick_select_tool::QuickSelectState,
     /// Identifies the live document across tab switches (contents tabs
@@ -444,6 +447,7 @@ impl App {
     fn new(cc: &eframe::CreationContext<'_>, args: &[String]) -> Self {
         theme::install(&cc.egui_ctx);
         pen::install();
+        clipboard::install();
         macos_open::set_waker(&cc.egui_ctx);
         Self::launch(args)
     }
@@ -487,6 +491,7 @@ impl App {
             smart_link: None,
             export_as: None,
             quick: Default::default(),
+            clip: None,
             camera_raw: None,
             clone_source: None,
             clone_picking: true,
@@ -1349,6 +1354,9 @@ impl App {
         // Files opened from Finder (or the Dock) while running or at launch.
         for path in macos_open::take_pending() {
             self.open_path(&path);
+        }
+        if !self.no_doc {
+            self.clipboard_keys(ctx);
         }
         self.handle_file_drop(ctx);
         // Intercept closing the window while there are unsaved changes.
