@@ -861,6 +861,19 @@ mod tests {
 
     #[test]
     fn static_dynamics_pass_stations_through() {
+        // Floors, grain size and the background colour vary nothing alone.
+        let calm = BrushDynamics {
+            min_roundness: 0.9,
+            texture_scale: 3.0,
+            background: [0.0; 3],
+            ..BrushDynamics::default()
+        };
+        assert!(calm.is_static());
+        let busy = BrushDynamics {
+            count: 2,
+            ..BrushDynamics::default()
+        };
+        assert!(!busy.is_static());
         let s = Station {
             x: 3.5,
             y: 4.5,

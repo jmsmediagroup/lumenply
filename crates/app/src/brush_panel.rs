@@ -634,9 +634,13 @@ impl App {
         let ctx = ui.ctx().clone();
         let open = ctx.memory(|m| m.is_popup_open(panel_id()));
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(44.0, 26.0), Sense::click());
-        resp.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, "Brush settings")
-        });
+        let dynamic = !self.brush.dynamics.is_static() || self.brush.jitter > 0.0;
+        let name = if dynamic {
+            "Brush settings (dynamics on)"
+        } else {
+            "Brush settings"
+        };
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, name));
         theme::note_target(&ctx, "brush-settings", rect);
         let fill = if open {
             ACCENT_TINT
@@ -663,6 +667,11 @@ impl App {
             MUTED,
             Stroke::NONE,
         ));
+        // A dot while dynamics vary the dabs, so a jittery brush is no
+        // surprise.
+        if dynamic {
+            p.circle_filled(rect.right_top() + egui::vec2(-4.0, 4.0), 2.5, ACCENT);
+        }
         focus_ring(ui, &resp, rect, RADIUS);
         let resp = resp.on_hover_text("Brush settings: tip, shape dynamics, scattering and transfer");
         if resp.clicked() {
