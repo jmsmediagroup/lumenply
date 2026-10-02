@@ -216,6 +216,8 @@ struct App {
     histogram: [u32; histogram::BINS],
     /// User preferences (undo caps, canvas colour, autosave interval).
     prefs: session::Prefs,
+    /// Selection boundary pixels for the animated marching ants.
+    sel_points: Vec<(i32, i32)>,
     /// Layer row being dragged to a new position in the panel.
     layer_drag: Option<LayerId>,
     /// Last window title pushed to the OS, to avoid resending each frame.
@@ -327,6 +329,7 @@ impl App {
             recent: session::load_recent(),
             histogram: [0; histogram::BINS],
             prefs: session::Prefs::load(),
+            sel_points: Vec::new(),
             layer_drag: None,
             last_title: String::new(),
             shot: args

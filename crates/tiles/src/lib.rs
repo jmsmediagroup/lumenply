@@ -216,6 +216,14 @@ impl Affine {
         }
     }
 
+    /// Horizontal shear: x' = x + k·y. `k = tan(angle)` skews by `angle`.
+    pub fn shear_x(k: f32) -> Self {
+        Affine {
+            c: k,
+            ..Affine::IDENTITY
+        }
+    }
+
     /// Counter-clockwise rotation (in screen coordinates, y down) by `radians`.
     pub fn rotate(radians: f32) -> Self {
         let (s, c) = radians.sin_cos();
@@ -746,6 +754,15 @@ mod tests {
         s.set_pixel(-5, 40, Rgba::WHITE);
         assert_eq!(s.content_bounds(), Some(Rect::new(-5, 10, 306, 31)));
         assert_eq!(s.bounds(), Some(Rect::new(-256, 0, 768, 256)));
+    }
+
+    #[test]
+    fn shear_moves_x_by_ky_and_inverts() {
+        let t = Affine::shear_x(0.5);
+        assert_eq!(t.apply(10.0, 4.0), (12.0, 4.0));
+        let inv = t.inverse().unwrap();
+        let (x, y) = inv.apply(12.0, 4.0);
+        assert!((x - 10.0).abs() < 1e-5 && (y - 4.0).abs() < 1e-5);
     }
 
     #[test]

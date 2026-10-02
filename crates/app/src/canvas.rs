@@ -1,5 +1,8 @@
 use super::*;
 
+/// Outlines longer than this animate as a static texture instead.
+const ANTS_MAX: usize = 20_000;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ViewCmd {
     Fit,
@@ -8,6 +11,8 @@ pub(crate) enum ViewCmd {
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Handle {
+    /// Edge midpoints: 0 top, 1 right, 2 bottom, 3 left — one-axis scale.
+    Edge(usize),
     Corner(usize),
     Inside,
     Rotate,
@@ -28,12 +33,15 @@ pub(crate) enum DragKind {
 pub(crate) struct Xform {
     pub(crate) layer: LayerId,
     pub(crate) bounds: Rect,
-    pub(crate) scale: f32,
+    pub(crate) sx: f32,
+    pub(crate) sy: f32,
+    /// Horizontal shear factor (tan of the skew angle).
+    pub(crate) shear: f32,
     pub(crate) angle: f32,
     pub(crate) dx: f32,
     pub(crate) dy: f32,
-    // values at the start of the current drag
-    pub(crate) base: (f32, f32, f32, f32),
+    // (sx, sy, angle, dx, dy) at the start of the current drag
+    pub(crate) base: (f32, f32, f32, f32, f32),
     pub(crate) last_preview: Rect,
 }
 
@@ -47,7 +55,11 @@ impl Xform {
 
     pub(crate) fn affine(&self) -> Affine {
         let (cx, cy) = self.center();
-        Affine::around(cx, cy, self.scale, self.scale, self.angle).then(&Affine::translate(self.dx, self.dy))
+        Affine::translate(-cx, -cy)
+            .then(&Affine::scale(self.sx, self.sy))
+            .then(&Affine::shear_x(self.shear))
+            .then(&Affine::rotate(self.angle))
+            .then(&Affine::translate(cx + self.dx, cy + self.dy))
     }
 
     /// Transformed corners, in document space.
@@ -106,15 +118,22 @@ impl App {
                 let img = raster_to_image(&flat);
                 self.last_flat = Some(flat);
                 upload(&mut self.canvas_tex, ctx, "canvas", img, nearest_when_zoomed());
-                match selection_overlay(self.editor.doc()) {
-                    Some(img) => upload(
-                        &mut self.overlay_tex,
-                        ctx,
-                        "selection",
-                        img,
-                        egui::TextureOptions::NEAREST,
-                    ),
-                    None => self.overlay_tex = None,
+                self.sel_points = selection_outline_points(self.editor.doc()).unwrap_or_default();
+                // The static texture stays as the fallback for outlines too
+                // big to animate shape-by-shape.
+                if self.sel_points.len() > ANTS_MAX {
+                    match selection_overlay(self.editor.doc()) {
+                        Some(img) => upload(
+                            &mut self.overlay_tex,
+                            ctx,
+                            "selection",
+                            img,
+                            egui::TextureOptions::NEAREST,
+                        ),
+                        None => self.overlay_tex = None,
+                    }
+                } else {
+                    self.overlay_tex = None;
                 }
                 self.refresh_thumbs(ctx, None);
             }
@@ -315,6 +334,19 @@ impl App {
                 }
                 if let Some(tex) = &self.overlay_tex {
                     painter.image(tex.id(), doc_rect, uv, Color32::WHITE);
+                } else if !self.sel_points.is_empty() {
+                    // Marching ants: 4-pixel dashes whose phase walks along
+                    // the outline over time.
+                    let phase = (ui.input(|i| i.time) * 12.0) as i32;
+                    let px = zoom.max(1.0);
+                    for &(x, y) in &self.sel_points {
+                        let on = ((x + y + phase) / 4) % 2 == 0;
+                        let c = if on { Color32::BLACK } else { Color32::WHITE };
+                        let min = to_screen(x as f32, y as f32);
+                        painter.rect_filled(egui::Rect::from_min_size(min, Vec2::splat(px)), 0.0, c);
+                    }
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(90));
                 }
                 painter.rect_stroke(doc_rect, 0.0, Stroke::new(1.0, LINE));
 
@@ -452,6 +484,15 @@ impl App {
                     return Handle::Corner(i);
                 }
             }
+            let cs = x.corners();
+            for i in 0..4 {
+                let (ax, ay) = cs[i];
+                let (bx, by) = cs[(i + 1) % 4];
+                let m = to_screen((ax + bx) / 2.0, (ay + by) / 2.0);
+                if m.distance(q) <= 9.0 {
+                    return Handle::Edge(i);
+                }
+            }
             let poly: Vec<Pos2> = x.corners().iter().map(|(px, py)| to_screen(*px, *py)).collect();
             if point_in_convex(&poly, q) {
                 Handle::Inside
@@ -462,6 +503,8 @@ impl App {
         if let Some(q) = resp.hover_pos() {
             ctx.set_cursor_icon(match hit(q) {
                 Handle::Corner(_) => egui::CursorIcon::ResizeNwSe,
+                Handle::Edge(1) | Handle::Edge(3) => egui::CursorIcon::ResizeHorizontal,
+                Handle::Edge(_) => egui::CursorIcon::ResizeVertical,
                 Handle::Inside => egui::CursorIcon::Move,
                 Handle::Rotate => egui::CursorIcon::Alias,
             });
@@ -470,7 +513,7 @@ impl App {
             if let Some(q) = ctx.input(|i| i.pointer.press_origin()) {
                 self.drag = Some(DragKind::Xform(hit(q)));
                 self.drag_start = Some(q);
-                x.base = (x.scale, x.angle, x.dx, x.dy);
+                x.base = (x.sx, x.sy, x.angle, x.dx, x.dy);
             }
         }
         let mut changed = false;
@@ -478,20 +521,41 @@ impl App {
             if let (Some(a), Some(b)) = (self.drag_start, resp.interact_pointer_pos()) {
                 match h {
                     Handle::Corner(_) => {
+                        // Corners scale both axes by the same ratio.
                         let d0 = a.distance(centre_s).max(1.0);
                         let d1 = b.distance(centre_s);
-                        x.scale = (x.base.0 * d1 / d0).clamp(0.02, 50.0);
+                        let k = d1 / d0;
+                        x.sx = (x.base.0 * k).clamp(-50.0, 50.0);
+                        x.sy = (x.base.1 * k).clamp(-50.0, 50.0);
+                    }
+                    Handle::Edge(i) => {
+                        // One axis only: measure the pointer in the box's
+                        // un-rotated frame; crossing the centre mirrors.
+                        let (px, py) = to_doc(b);
+                        let v = (px - (cx + x.dx), py - (cy + x.dy));
+                        let (s, c) = (-x.angle).sin_cos();
+                        let local = (v.0 * c - v.1 * s, v.0 * s + v.1 * c);
+                        let clamp = |v: f32| {
+                            let m = v.abs().clamp(0.02, 50.0);
+                            m * v.signum()
+                        };
+                        match i {
+                            1 => x.sx = clamp(local.0 / (x.bounds.w as f32 / 2.0)),
+                            3 => x.sx = clamp(-local.0 / (x.bounds.w as f32 / 2.0)),
+                            0 => x.sy = clamp(-local.1 / (x.bounds.h as f32 / 2.0)),
+                            _ => x.sy = clamp(local.1 / (x.bounds.h as f32 / 2.0)),
+                        }
                     }
                     Handle::Inside => {
                         let (ax, ay) = to_doc(a);
                         let (bx, by) = to_doc(b);
-                        x.dx = x.base.2 + (bx - ax);
-                        x.dy = x.base.3 + (by - ay);
+                        x.dx = x.base.3 + (bx - ax);
+                        x.dy = x.base.4 + (by - ay);
                     }
                     Handle::Rotate => {
                         let a0 = (a.y - centre_s.y).atan2(a.x - centre_s.x);
                         let a1 = (b.y - centre_s.y).atan2(b.x - centre_s.x);
-                        x.angle = x.base.1 + (a1 - a0);
+                        x.angle = x.base.2 + (a1 - a0);
                     }
                 }
                 changed = true;
@@ -504,20 +568,25 @@ impl App {
             }
         }
         if changed {
-            // Preview: transform a copy-on-write clone and redraw the union of the old and new boxes.
-            let mut preview = self.editor.doc().clone();
-            let cmd = TransformLayer {
-                layer: x.layer,
-                transform: x.affine(),
-            };
-            if cmd.apply(&mut preview).is_ok() {
-                let area = x.last_preview.union(&x.bbox());
-                let pad = Rect::new(area.x - 2, area.y - 2, area.w + 4, area.h + 4);
-                self.preview(ctx, &preview, Some(pad));
-                x.last_preview = x.bbox();
-            }
+            self.preview_xform(ctx, &mut x);
         }
         self.xform = Some(x);
+    }
+
+    /// Redraw the live transform preview after its numbers changed (canvas
+    /// drag or options-bar fields).
+    pub(crate) fn preview_xform(&mut self, ctx: &egui::Context, x: &mut Xform) {
+        let mut preview = self.editor.doc().clone();
+        let cmd = TransformLayer {
+            layer: x.layer,
+            transform: x.affine(),
+        };
+        if cmd.apply(&mut preview).is_ok() {
+            let area = x.last_preview.union(&x.bbox());
+            let pad = Rect::new(area.x - 2, area.y - 2, area.w + 4, area.h + 4);
+            self.preview(ctx, &preview, Some(pad));
+            x.last_preview = x.bbox();
+        }
     }
 
     pub(crate) fn handle_tool(
@@ -1137,6 +1206,42 @@ pub(crate) fn paint_thumb_bg(p: &egui::Painter, r: egui::Rect) {
 
 /// Selection outline overlay: pixels on the 50% coverage boundary alternate
 /// black and white.
+/// Boundary pixels of the selection (the 50% coverage edge), for the
+/// animated marching ants. `None` when there is no selection.
+pub(crate) fn selection_outline_points(doc: &Document) -> Option<Vec<(i32, i32)>> {
+    let sel = doc.selection.as_ref()?;
+    let (w, h) = (doc.width as i32, doc.height as i32);
+    let area = sel.bounds_within(doc.canvas());
+    if area.is_empty() {
+        return Some(Vec::new());
+    }
+    let (x0, y0) = ((area.x - 1).max(0), (area.y - 1).max(0));
+    let (x1, y1) = ((area.right() + 1).min(w), (area.bottom() + 1).min(h));
+    let (gw, gh) = ((x1 - x0) as usize, (y1 - y0) as usize);
+    let mut inside = vec![false; gw * gh];
+    for gy in 0..gh {
+        for gx in 0..gw {
+            inside[gy * gw + gx] = sel.value(x0 + gx as i32, y0 + gy as i32) >= 0.5;
+        }
+    }
+    let at = |gx: i32, gy: i32| {
+        gx >= 0
+            && gy >= 0
+            && (gx as usize) < gw
+            && (gy as usize) < gh
+            && inside[gy as usize * gw + gx as usize]
+    };
+    let mut pts = Vec::new();
+    for gy in 0..gh as i32 {
+        for gx in 0..gw as i32 {
+            if at(gx, gy) && !(at(gx - 1, gy) && at(gx + 1, gy) && at(gx, gy - 1) && at(gx, gy + 1)) {
+                pts.push((x0 + gx, y0 + gy));
+            }
+        }
+    }
+    Some(pts)
+}
+
 pub(crate) fn selection_overlay(doc: &Document) -> Option<egui::ColorImage> {
     let sel = doc.selection.as_ref()?;
     let (w, h) = (doc.width as i32, doc.height as i32);

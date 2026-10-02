@@ -119,7 +119,9 @@ None of these could be tested in the container.
 
 - [ ] Healing brush and spot healing
 - [ ] Paths / pen tool (vector), stroke and fill paths, selection from path
-- [ ] Perspective, skew and warp transforms; non-uniform scale in free transform
+- [x] Skew and non-uniform scale in free transform (edge handles stretch one
+      axis, mirror across the centre; W/H/Rotate/Skew fields in the options bar)
+- [ ] Perspective and warp transforms (non-affine; needs a mesh resampler)
 - [ ] Brush engine: presets, textures, spacing jitter, smudge, dodge/burn, sponge
 - [ ] Layer styles (drop shadow, stroke, glow) as non-destructive effects
 - [ ] Smart objects (embedded documents with transforms)
@@ -131,7 +133,10 @@ None of these could be tested in the container.
 - [x] More filters: noise (position-seeded), motion blur, median, high pass —
       destructive or live, with dialog previews and palette entries
 - [ ] Text: font picker (system fonts), italic, alignment, kerning/tracking, text on canvas
-- [ ] Animated marching ants; quick-mask mode; select by colour range
+- [x] Animated marching ants (boundary dashes march; huge outlines fall back
+      to the static texture)
+- [ ] Quick-mask mode; select by colour range dialog (wand already offers
+      non-contiguous selection)
 - [ ] AI tools (local ONNX): subject select, object removal, upscaling — see project overview
 
 ## 6. Usability
@@ -183,7 +188,7 @@ None of these could be tested in the container.
 ## Known limitations and debts
 
 - Pressure is fixed at 1.0 in the app (engine supports it).
-- Free transform scales uniformly only.
+
 - Text layers cannot be scaled or rotated without rasterizing.
 - The selection outline is static, not animated.
 - `LICENSE` is a placeholder pointing to the GPLv3 text.

@@ -130,14 +130,17 @@ impl App {
         self.xform = Some(Xform {
             layer: id,
             bounds: b,
-            scale: 1.0,
+            sx: 1.0,
+            sy: 1.0,
+            shear: 0.0,
             angle: 0.0,
             dx: 0.0,
             dy: 0.0,
-            base: (1.0, 0.0, 0.0, 0.0),
+            base: (1.0, 1.0, 0.0, 0.0, 0.0),
             last_preview: b,
         });
-        self.status = "Free transform: drag corners to scale, outside to rotate, inside to move".into();
+        self.status =
+            "Free transform: corners scale, edges stretch one axis, outside rotates, inside moves".into();
     }
 
     pub(crate) fn commit_free_transform(&mut self) {
