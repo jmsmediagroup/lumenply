@@ -20,6 +20,7 @@ use lumenply_tiles::{Raster, Rect, Rgba, TileStore};
 use crate::{linear_to_srgb, IoError};
 
 mod extra;
+mod masks;
 mod shape;
 
 #[derive(Debug, thiserror::Error)]
@@ -1374,7 +1375,8 @@ struct RawLayer {
     clip: bool,
     opacity: f32,
     visible: bool,
-    mask: Option<(Rect, Vec<u16>, u8, bool)>,
+    /// The pixel and vector masks as stored (combined by `build_mask`).
+    masks: masks::LayerMasks,
     section: u32, // 0 none, 1/2 group open, 3 close
     is_adjustment: bool,
     adjustment: Option<Adjustment>,
@@ -1499,20 +1501,14 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let extra_end = rd.pos + extra_len;
 
                 let mask_len = rd.u32()? as usize;
-                let mut mask = None;
-                if mask_len >= 20 {
-                    let mt = rd.i32()?;
-                    let ml = rd.i32()?;
-                    let mb = rd.i32()?;
-                    let mr = rd.i32()?;
-                    let default = rd.u8()?;
-                    let mflags = rd.u8()?;
-                    rd.skip(mask_len - 18)?;
-                    let r = checked_rect(ml, mt, mr, mb, max_dim, "mask")?;
-                    mask = Some((r, Vec::new(), default, mflags & 0x02 == 0));
-                } else {
-                    rd.skip(mask_len)?;
-                }
+                // The "real" pixel-mask fields are there only with a −3 channel.
+                let has_real = chans.iter().any(|&(id, _)| id == -3);
+                let mut layer_masks = masks::LayerMasks {
+                    record: masks::read_record(rd.bytes(mask_len)?, has_real, |l, t, r, b| {
+                        checked_rect(l, t, r, b, max_dim, "mask").ok()
+                    }),
+                    ..Default::default()
+                };
                 let ranges_len = rd.u32()? as usize;
                 rd.skip(ranges_len)?;
                 let plen = rd.u8()? as usize;
@@ -1576,19 +1572,27 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                             let mut d = Rd::new(data);
                             locks = locks_from_flags(d.u32()?);
                         }
-                        b"SoCo" | b"GdFl" => match extra::parse_fill(&k, data) {
-                            Some(f) => fill = Some(f),
-                            // An unreadable fill keeps its rendered pixels.
-                            None => warnings.push(format!("fill layer '{name}': settings not readable")),
-                        },
+                        b"SoCo" | b"GdFl" => {
+                            layer_masks.shaped = true;
+                            match extra::parse_fill(&k, data) {
+                                Some(f) => fill = Some(f),
+                                // An unreadable fill keeps its rendered pixels.
+                                None => warnings.push(format!("fill layer '{name}': settings not readable")),
+                            }
+                        }
                         // A vector mask makes a fill a shape layer.
                         b"vmsk" | b"vsms" => {
                             vector_mask = true;
                             vmsk = Some(data.to_vec());
                         }
                         b"vstk" => vstk = Some(data.to_vec()),
+                        // Shape content in newer files: pixels come clipped.
+                        b"vscg" => layer_masks.shaped = true,
                         // Pattern fills keep their rendered pixels.
-                        b"PtFl" => pattern = true,
+                        b"PtFl" => {
+                            pattern = true;
+                            layer_masks.shaped = true;
+                        }
                         b"levl" | b"curv" | b"brit" | b"CgEd" | b"hue2" | b"hue " | b"blnc" | b"blwh"
                         | b"expA" | b"vibA" | b"thrs" | b"post" | b"nvrt" | b"phfl" | b"mixr" | b"clrL"
                         | b"grdm" | b"selc" => {
@@ -1604,13 +1608,15 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 // Shape layers (a fill clipped by vector paths) and pattern
                 // fills come in as the pixels Photoshop rendered for them.
                 let mut shape_layer = None;
+                layer_masks.vector = vmsk.clone();
+                layer_masks.shaped &= vector_mask;
                 if let Some(f) = fill.take_if(|_| vector_mask) {
                     shape_layer = vmsk
                         .as_deref()
                         .and_then(|m| shape::parse_shape(f, m, vstk.as_deref(), width, height));
                     if shape_layer.is_none() {
                         warnings.push(format!(
-                            "shape layer '{name}' was imported as pixels (its vector mask is not readable)"
+                            "shape layer '{name}' was imported as pixels (its outline uses path operations a Lumenply shape can't hold yet)"
                         ));
                     }
                 }
@@ -1629,7 +1635,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         blend_known: known,
                         opacity,
                         visible: flags & 0x02 == 0,
-                        mask,
+                        masks: layer_masks,
                         section,
                         is_adjustment,
                         adjustment,
@@ -1646,26 +1652,22 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     // Bounds-checked: a declared length past the end of the
                     // file is an error, not a slice panic.
                     let data = rd.bytes(len)?;
-                    let (w, h) = if id == -2 {
-                        layer
-                            .mask
-                            .as_ref()
-                            .map_or((0, 0), |m| (m.0.w as usize, m.0.h as usize))
-                    } else {
-                        (layer.bounds.w as usize, layer.bounds.h as usize)
+                    let rec = layer.masks.record.as_ref();
+                    let (w, h) = match id {
+                        -2 => rec.map_or((0, 0), |m| (m.rect.w as usize, m.rect.h as usize)),
+                        -3 => rec
+                            .and_then(|m| m.real)
+                            .map_or((0, 0), |(r, ..)| (r.w as usize, r.h as usize)),
+                        _ => (layer.bounds.w as usize, layer.bounds.h as usize),
                     };
                     if w > 0 && h > 0 && len >= 2 {
                         let mut sub = Rd::new(data);
                         match decode_channel(&mut sub, w, h, depth_bytes, psb) {
-                            Ok(plane) => {
-                                if id == -2 {
-                                    if let Some(m) = layer.mask.as_mut() {
-                                        m.1 = plane;
-                                    }
-                                } else {
-                                    layer.channels.push((id, plane));
-                                }
-                            }
+                            Ok(plane) => match id {
+                                -2 => layer.masks.minus2 = Some(plane),
+                                -3 => layer.masks.minus3 = Some(plane),
+                                _ => layer.channels.push((id, plane)),
+                            },
                             Err(e) => warnings.push(format!("layer '{}' channel {id}: {e}", layer.name)),
                         }
                     }
@@ -1784,7 +1786,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 g.opacity = rl.opacity;
                 g.visible = rl.visible;
                 g.collapsed = rl.section == 2;
-                g.mask = build_mask(&rl);
+                g.mask = build_mask(&rl, width, height);
                 g.locks = rl.locks;
                 if !rl.blend_known {
                     warnings.push(format!(
@@ -1805,7 +1807,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                             l.clip = rl.clip;
                             l.opacity = rl.opacity;
                             l.visible = rl.visible;
-                            l.mask = build_mask(&rl);
+                            l.mask = build_mask(&rl, width, height);
                             l.locks = rl.locks;
                             stack.last_mut().expect("root").push(l);
                         }
@@ -1825,7 +1827,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     l.clip = rl.clip;
                     l.opacity = rl.opacity;
                     l.visible = rl.visible;
-                    l.mask = build_mask(&rl);
+                    l.mask = build_mask(&rl, width, height);
                     l.locks = rl.locks;
                     stack.last_mut().expect("root").push(l);
                     continue;
@@ -1839,7 +1841,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     l.clip = rl.clip;
                     l.opacity = rl.opacity;
                     l.visible = rl.visible;
-                    l.mask = build_mask(&rl);
+                    l.mask = build_mask(&rl, width, height);
                     stack.last_mut().expect("root").push(l);
                     continue;
                 }
@@ -1880,7 +1882,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     }
                     *l.pixels_mut().expect("pixel") = TileStore::from_raster(&raster, b.x, b.y);
                 }
-                l.mask = build_mask(&rl);
+                l.mask = build_mask(&rl, width, height);
                 stack.last_mut().expect("root").push(l);
             }
         }
@@ -1899,23 +1901,8 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     Ok(Report { value: doc, warnings })
 }
 
-fn build_mask(rl: &RawLayer) -> Option<Mask> {
-    let (r, plane, default, enabled) = rl.mask.as_ref()?;
-    let mut m = Mask {
-        tiles: TileStore::new(),
-        default: *default as f32 / 255.0,
-        enabled: *enabled,
-    };
-    if r.w > 0 && r.h > 0 && plane.len() == (r.w * r.h) as usize {
-        for y in 0..r.h as i32 {
-            for x in 0..r.w as i32 {
-                let v = plane[(y as u32 * r.w + x as u32) as usize] as f32 / 65535.0;
-                m.set_value(r.x + x, r.y + y, v);
-            }
-        }
-        m.prune_uniform();
-    }
-    Some(m)
+fn build_mask(rl: &RawLayer, width: u32, height: u32) -> Option<Mask> {
+    rl.masks.build(width, height, rl.shape.is_some())
 }
 
 /// Convenience for callers that only need a flat raster of a PSD.

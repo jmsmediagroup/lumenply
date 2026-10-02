@@ -81,11 +81,24 @@ pub(super) fn parse_vector_mask(data: &[u8], w: u32, h: u32) -> Option<VectorPat
         let sel = d.u16().ok()?;
         match sel {
             0 | 3 => {
+                let _count = d.u16().ok()?;
+                let op = d.i16().ok()?;
+                // One component filled even-odd is all a shape layer holds:
+                // later subpaths must merge into the first (−1), and the
+                // first must not cut from everything (subtract/intersect).
+                let merged = if path.subpaths.is_empty() {
+                    op == 0 || op == 1
+                } else {
+                    op == -1
+                };
+                if !merged {
+                    return None;
+                }
                 path.subpaths.push(SubPath {
                     nodes: Vec::new(),
                     closed: sel == 0,
                 });
-                d.skip(24).ok()?;
+                d.skip(20).ok()?;
             }
             1 | 2 | 4 | 5 => {
                 let mut pts = [(0.0f32, 0.0f32); 3];
