@@ -40,10 +40,13 @@ pub(crate) struct InfoCache {
 }
 
 impl App {
-    fn info_selection(&mut self, ctx: &egui::Context) -> Option<Rect> {
+    pub(crate) fn info_selection(&mut self, ctx: &egui::Context) -> Option<Rect> {
         let c = &mut self.panels.info_cache;
-        if c.at.is_none() || c.stale {
-            if c.at.is_some_and(|t| t.elapsed() < REBUILD_EVERY) {
+        // A selection that just appeared is measured at once; changes to
+        // one already shown wait for the next rebuild slot.
+        let fresh = c.sel.is_none() && self.editor.doc().selection.is_some();
+        if c.at.is_none() || c.stale || fresh {
+            if !fresh && c.at.is_some_and(|t| t.elapsed() < REBUILD_EVERY) {
                 ctx.request_repaint_after(REBUILD_EVERY);
                 return c.sel;
             }

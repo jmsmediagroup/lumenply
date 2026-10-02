@@ -302,7 +302,8 @@ impl App {
                     self.status = if n == 0 {
                         format!("Imported {path}")
                     } else {
-                        format!("Imported {path} ({n} items skipped: {})", rep.warnings.join("; "))
+                        let notes = if n == 1 { "1 note" } else { "notes" };
+                        format!("Imported {path} ({notes}: {})", rep.warnings.join("; "))
                     };
                     // Photoshop type layers name their fonts too.
                     self.note_missing_fonts();
