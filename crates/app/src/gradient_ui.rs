@@ -386,11 +386,27 @@ impl App {
             self.gradient.opacity = op / 100.0;
         }
         ui.separator();
-        check(ui, &mut self.gradient.reverse, "Reverse").on_hover_text("Run the gradient the other way");
-        check(ui, &mut self.gradient.dither, "Dither")
-            .on_hover_text("Fine noise that keeps smooth ramps from banding in 8-bit exports");
-        check(ui, &mut self.gradient.transparency, "Transparency")
-            .on_hover_text("Use the stops' opacity; off paints every stop opaque");
+        let g = &mut self.gradient;
+        let on = [g.reverse, g.dither, g.transparency]
+            .iter()
+            .filter(|v| **v)
+            .count();
+        let mut checks = |ui: &mut egui::Ui| {
+            check(ui, &mut g.reverse, "Reverse").on_hover_text("Run the gradient the other way");
+            check(ui, &mut g.dither, "Dither")
+                .on_hover_text("Fine noise that keeps smooth ramps from banding in 8-bit exports");
+            check(ui, &mut g.transparency, "Transparency")
+                .on_hover_text("Use the stops' opacity; off paints every stop opaque");
+        };
+        if tier == Tier::Tight {
+            // A tight bar folds the three switches into a menu.
+            let r = ui
+                .button(format!("Options ({on})"))
+                .on_hover_text("Reverse, Dither, Transparency");
+            button_menu(&r, checks);
+        } else {
+            checks(ui);
+        }
         ui.separator();
         segmented(
             ui,
@@ -500,26 +516,11 @@ impl App {
             self.gradient.pick(&n, src);
         }
         if save {
-            let name = match self.gradient.preset_name.trim() {
-                "" => format!("Gradient {}", self.prefs.gradient_presets.len() + 1),
-                n => n.to_string(),
-            };
-            let gradient = self.gradient.gradient(fg, bg);
-            self.prefs.gradient_presets.retain(|p| p.name != name);
-            self.prefs.gradient_presets.push(GradientPreset {
-                name: name.clone(),
-                gradient: gradient.clone(),
-            });
-            self.prefs.save();
-            self.gradient.pick(&name, GradSource::Custom(gradient));
-            self.gradient.preset_name.clear();
-            self.status = format!("Gradient preset \"{name}\" saved");
+            let name = std::mem::take(&mut self.gradient.preset_name);
+            self.save_gradient_preset(&name);
         }
         if let Some(i) = delete {
-            let gone = self.prefs.gradient_presets.remove(i);
-            self.prefs.save();
-            self.gradient.name = "Custom".into();
-            self.status = format!("Gradient preset \"{}\" deleted", gone.name);
+            self.delete_gradient_preset(i);
         }
 
         // Esc or a press outside closes it (a press on the canvas is then
@@ -541,6 +542,37 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Keep the current gradient as a user preset named `name` (a blank
+    /// name numbers it; an existing preset of that name is replaced).
+    pub(crate) fn save_gradient_preset(&mut self, name: &str) {
+        let name = match name.trim() {
+            "" => format!("Gradient {}", self.prefs.gradient_presets.len() + 1),
+            n => n.to_string(),
+        };
+        let gradient = self.gradient.gradient(self.brush_rgb, self.bg_rgb);
+        self.prefs.gradient_presets.retain(|p| p.name != name);
+        self.prefs.gradient_presets.push(GradientPreset {
+            name: name.clone(),
+            gradient: gradient.clone(),
+        });
+        self.prefs.save();
+        self.gradient.pick(&name, GradSource::Custom(gradient));
+        self.status = format!("Gradient preset \"{name}\" saved");
+    }
+
+    /// Forget user preset `i`; the current gradient stays as it is.
+    pub(crate) fn delete_gradient_preset(&mut self, i: usize) {
+        if i >= self.prefs.gradient_presets.len() {
+            return;
+        }
+        let gone = self.prefs.gradient_presets.remove(i);
+        self.prefs.save();
+        if self.gradient.name == gone.name {
+            self.gradient.name = "Custom".into();
+        }
+        self.status = format!("Gradient preset \"{}\" deleted", gone.name);
     }
 
     /// Canvas input for the Gradient tool: press, drag (live preview),
@@ -672,8 +704,9 @@ impl App {
         }
     }
 
-    /// Paint the drag's result over the canvas: the real command on a copy
-    /// of the document, recomposited over the part of the canvas on screen.
+    /// Paint the drag's result over the canvas: the command's own pixel
+    /// work on a copy of the document, limited to the part of the canvas
+    /// on screen, with the layer's locks applied as the editor would.
     /// Previews that take long are spaced out (`force` skips that).
     pub(crate) fn preview_gradient(&mut self, ctx: &egui::Context, force: bool) {
         let Some((a, b)) = self.gradient.drag else { return };
@@ -694,7 +727,31 @@ impl App {
         if let Some(v) = self.gradient.view {
             area = area.intersect(&v);
         }
-        if (b.0 - a.0).hypot(b.1 - a.1) < 1e-3 || cmd.apply(&mut preview).is_err() {
+        if (b.0 - a.0).hypot(b.1 - a.1) < 1e-3 || area.is_empty() {
+            return;
+        }
+        let paint = self.gradient.paint(self.brush_rgb, self.bg_rgb, a, b);
+        let sel = preview.selection.clone();
+        let target = match (self.gradient.fill_layer, self.active) {
+            (false, Some(id)) => preview.layer_mut(id),
+            _ => None,
+        };
+        let done = match target {
+            // Pixels and masks: only the visible area.
+            Some(l) if self.editing_mask => l.mask.as_mut().map(|m| {
+                lumenply_render::gradient_draw::paint_mask(m, area, sel.as_ref(), &paint);
+            }),
+            Some(l) => l.pixels_mut().map(|s| {
+                lumenply_render::gradient_draw::paint_pixels(s, area, sel.as_ref(), &paint);
+            }),
+            // A fill layer renders over the canvas either way.
+            None => cmd.apply(&mut preview).ok(),
+        };
+        if done.is_none() {
+            return;
+        }
+        if let Err(e) = lumenply_core::locks::enforce(doc, &mut preview, cmd.as_ref()) {
+            self.status = e.to_string();
             return;
         }
         let paint = match self.gradient.last_area {
@@ -922,6 +979,59 @@ mod tests {
         let mut app = crate::a11y_tests::launch(&[]);
         app.open_in_new_tab(blank(64, 48), None);
         app
+    }
+
+    #[test]
+    fn presets_save_replace_and_delete() {
+        let mut app = small_app();
+        app.prefs.gradient_presets.clear();
+        app.brush_rgb = [1.0, 0.0, 0.0];
+        app.bg_rgb = [0.0, 0.0, 1.0];
+        app.save_gradient_preset("  ");
+        app.save_gradient_preset("Mine");
+        let names: Vec<&str> = app
+            .prefs
+            .gradient_presets
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Gradient 1", "Mine"]);
+        assert_eq!(app.gradient.name, "Mine");
+        // Saved ramps are fixed: changing the wells no longer changes them.
+        app.brush_rgb = [0.0; 3];
+        let g = app.gradient.gradient(app.brush_rgb, app.bg_rgb);
+        assert_eq!(g.stops[0].color, [1.0, 0.0, 0.0]);
+        // The same name replaces; deleting the current one leaves "Custom".
+        app.save_gradient_preset("Mine");
+        assert_eq!(app.prefs.gradient_presets.len(), 2);
+        app.delete_gradient_preset(1);
+        app.delete_gradient_preset(9);
+        assert_eq!(app.prefs.gradient_presets.len(), 1);
+        assert_eq!(app.gradient.name, "Custom");
+        // Presets survive the prefs round trip; older prefs files lack them.
+        let json = serde_json::to_string(&app.prefs).unwrap();
+        let back: session::Prefs = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.gradient_presets, app.prefs.gradient_presets);
+        let old: session::Prefs = serde_json::from_str(r#"{"undo_steps": 50}"#).unwrap();
+        assert!(old.gradient_presets.is_empty());
+    }
+
+    #[test]
+    fn the_preview_follows_the_layer_locks() {
+        let mut app = small_app();
+        let ctx = crate::a11y_tests::ctx();
+        let bg = app.editor.doc().layers().last().unwrap().id;
+        app.set_active(Some(bg));
+        app.run(&lumenply_core::locks::SetLayerLocks {
+            layer: bg,
+            locks: lumenply_doc::LayerLocks {
+                pixels: true,
+                ..lumenply_doc::LayerLocks::NONE
+            },
+        });
+        app.debug_gradient(&ctx, "gradient:drag=0:0:64:0");
+        assert!(app.status.contains("locked"), "{}", app.status);
+        assert!(app.gradient.last_area.is_none(), "nothing previewed");
     }
 
     #[test]
