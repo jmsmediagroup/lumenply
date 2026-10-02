@@ -7,7 +7,10 @@
 //! CLI behave identically.
 
 pub mod commands;
+pub mod crop;
 pub mod demo;
+pub mod guides;
+pub mod snap;
 
 use lumenply_doc::{Document, LayerId};
 

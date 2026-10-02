@@ -9,6 +9,11 @@ use lumenply_tiles::{Affine, Raster, Rect, Rgba, TileStore};
 
 use crate::{Command, EditError, EditResult};
 
+// Commands that live in their own modules, re-exported so
+// `commands::*` stays the one import for every edit.
+pub use crate::crop::CropCanvas;
+pub use crate::guides::{AddGuide, ClearGuides, MoveGuide, RemoveGuide};
+
 /// Add an empty pixel layer (or one filled from a raster) on top of the stack.
 pub struct AddPixelLayer {
     pub name: String,

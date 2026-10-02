@@ -77,9 +77,11 @@ impl FromStr for BlendMode {
 }
 
 pub mod adjust;
+pub mod guides;
 pub mod selection;
 
 pub use adjust::{Adjustment, CompiledAdjustment, LevelsChannel};
+pub use guides::{Guide, Orientation};
 pub use selection::{CombineOp, Selection};
 
 /// A pixel filter: destructive when applied to a layer, live when it is a
@@ -648,6 +650,8 @@ pub struct Document {
     /// 32-bit float mode: tiles never compact to 16-bit, so values outside
     /// [0, 1] survive (HDR; see ADR 0004). Saved with projects.
     pub float_mode: bool,
+    /// Ruler guides; covered by undo, saved with projects and PSDs.
+    pub guides: Vec<Guide>,
     /// Bottom-to-top.
     layers: Vec<Layer>,
     next_id: LayerId,
@@ -745,6 +749,7 @@ impl Document {
             work_path: None,
             saved_paths: Vec::new(),
             float_mode: false,
+            guides: Vec::new(),
             layers: Vec::new(),
             next_id: 1,
         }
@@ -759,6 +764,7 @@ impl Document {
             work_path: None,
             saved_paths: Vec::new(),
             float_mode: false,
+            guides: Vec::new(),
             layers,
             next_id,
         }
