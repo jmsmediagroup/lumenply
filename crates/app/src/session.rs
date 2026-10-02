@@ -32,6 +32,8 @@ pub(crate) const SHORTCUTS: &[(&str, &str, bool, bool, &str)] = &[
     ("xform", "Free transform", true, false, "T"),
     ("group", "Group layers", true, false, "G"),
     ("layer-via-copy", "Layer via copy", true, false, "J"),
+    ("merge-visible", "Merge visible", true, true, "E"),
+    ("merge-down", "Merge down", true, false, "E"),
 ];
 
 /// The effective chord for an action: the user's binding when it parses,

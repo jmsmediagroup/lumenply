@@ -429,6 +429,7 @@ impl App {
                             .unwrap_or((0, 1));
                         let pixel = row.kind == Kind::Pixel && row.chip.is_none();
                         let smart = row.chip == Some("Smart");
+                        let merge = lumenply_core::layer_ops::merge_down_kind(doc, row.id);
                         if menu_item(ui, "Rename", "") {
                             rename_start = Some((row.id, row.name.clone()));
                         }
@@ -439,6 +440,15 @@ impl App {
                             }
                             r
                         };
+                        act(ui, true, "Duplicate layer", "dup");
+                        match merge {
+                            Ok(kind) => {
+                                act(ui, true, kind.label(), "merge");
+                            }
+                            Err(why) => {
+                                act(ui, false, "Merge down", "merge").on_disabled_hover_text(why);
+                            }
+                        }
                         menu_separator(ui);
                         act(ui, pos + 1 < count, "Move up", "up")
                             .on_disabled_hover_text("Already at the top");
@@ -593,6 +603,8 @@ impl App {
                 "fliph" => self.flip_active(true),
                 "flipv" => self.flip_active(false),
                 "delete" => self.delete_active(),
+                "dup" => self.duplicate_active(),
+                "merge" => self.merge_down_active(),
                 "ungroup" => self.ungroup_active(),
                 "smart" => self.run(&ConvertToSmartObject { layer: id }),
                 "rasterize" => self.run(&RasterizeLayer { layer: id }),

@@ -30,6 +30,7 @@ mod demo;
 mod dialogs;
 mod histogram;
 mod history;
+mod layer_actions;
 mod layers;
 mod menu;
 mod options_bar;
@@ -968,6 +969,11 @@ impl App {
         // redo alias.
         let mut fired: Vec<&'static str> = Vec::new();
         ctx.input_mut(|i| {
+            // Stamp visible (Shift+Alt+Cmd+E) holds the merge chords, so
+            // it goes first.
+            if i.consume_key(M::COMMAND | M::SHIFT | M::ALT, Key::E) {
+                fired.push("stamp-visible");
+            }
             for (id, ..) in session::SHORTCUTS {
                 if let Some((m, k)) = session::resolve_chord(&self.prefs, id) {
                     if i.consume_key(m, k) {
@@ -983,6 +989,13 @@ impl App {
         // says why in the status bar instead of silently doing nothing (on
         // the welcome screen that leaves only Open).
         for id in fired {
+            // Cmd+J is "layer via copy" with a selection and "duplicate
+            // layer" without one, as in Photoshop.
+            let id = if id == "layer-via-copy" {
+                self.cmd_j_action()
+            } else {
+                id
+            };
             self.run_menu_action(id);
         }
         // Canvas zoom: Cmd+= / Cmd+−, and Cmd+0 / Cmd+1 alongside the plain

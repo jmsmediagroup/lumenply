@@ -309,7 +309,7 @@ impl App {
     /// A menu item bound to a shared action (see palette.rs): enabled only
     /// when the action can run, with the real key and, when greyed out, a
     /// tooltip saying why.
-    fn act(&mut self, ui: &mut egui::Ui, label: &str, id: &str) {
+    pub(crate) fn act(&mut self, ui: &mut egui::Ui, label: &str, id: &str) {
         let ctx = ui.ctx().clone();
         let block = self.action_block(id);
         let keys = self.action_keys(&ctx, id);
@@ -443,6 +443,7 @@ impl App {
 
     fn layer_menu(&mut self, ui: &mut egui::Ui) {
         self.act(ui, "New pixel layer", "new-layer");
+        self.act(ui, "Duplicate layer", "duplicate-layer");
         self.act(ui, "Layer via copy", "layer-via-copy");
         menu(ui, "New adjustment layer", |ui| {
             for (name, adj) in adjustment_presets() {
@@ -467,6 +468,8 @@ impl App {
         menu_separator(ui);
         self.act(ui, "Move up", "layer-up");
         self.act(ui, "Move down", "layer-down");
+        menu_separator(ui);
+        self.merge_menu_items(ui);
         menu_separator(ui);
         let mask = self
             .active_layer()
@@ -510,6 +513,9 @@ impl App {
         let clip = l.clip;
         let mask = l.mask.as_ref().map(|m| m.enabled);
         self.act(ui, "Rename", "rename");
+        self.act(ui, "Duplicate layer", "duplicate-layer");
+        let merge = self.merge_label();
+        self.act(ui, merge, "merge-down");
         menu_separator(ui);
         if clip {
             self.act(ui, "Release clip", "unclip");

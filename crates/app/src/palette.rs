@@ -115,6 +115,11 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Actual pixels", "actual"),
     ("Show or hide the history strip", "toggle-history"),
     ("About Lumenply", "about"),
+    ("Duplicate layer", "duplicate-layer"),
+    ("Merge down (group, clipping mask)", "merge-down"),
+    ("Merge visible", "merge-visible"),
+    ("Flatten image", "flatten"),
+    ("Stamp visible to a new layer", "stamp-visible"),
 ];
 
 /// The id of the destructive filter dialog for a filter kind.
@@ -386,6 +391,9 @@ impl App {
         {
             return Some("Open or create a document first");
         }
+        if let Some(block) = self.layer_action_block(id) {
+            return block;
+        }
         match id {
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
             "redo" if !self.editor.can_redo() => Some("Nothing to redo"),
@@ -439,6 +447,9 @@ impl App {
         if let Some((m, k)) = session::resolve_chord(&self.prefs, id) {
             return shortcut_text(ctx, m, k);
         }
+        if let Some(keys) = self.layer_action_keys(ctx, id) {
+            return keys;
+        }
         let (m, k) = match id {
             "fill" => (M::SHIFT, Key::F5),
             "clear" => return "Delete".into(),
@@ -472,6 +483,9 @@ impl App {
     pub(crate) fn run_menu_action(&mut self, id: &str) {
         if let Some(why) = self.action_block(id) {
             self.status = why.into();
+            return;
+        }
+        if self.run_layer_action(id) {
             return;
         }
         match id {
@@ -641,7 +655,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 64); // + zoom in, zoom out, history strip
+        assert_eq!(n, 69); // + duplicate, merge down / visible, flatten, stamp
     }
 
     #[test]
