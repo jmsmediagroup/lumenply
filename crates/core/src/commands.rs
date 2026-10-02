@@ -2787,6 +2787,8 @@ impl Command for PaintStroke {
             return Ok(());
         }
         for d in interpolate_dabs(&self.brush, &self.points) {
+            // Colour dynamics give a dab its own colour.
+            let [cr, cg, cb] = d.color.unwrap_or([cr, cg, cb]);
             dab_coverage(&self.brush, &d, canvas, sel.as_ref(), |px, py, cover| {
                 let dst = store.get_pixel(px, py);
                 let out = match mode {
@@ -2979,14 +2981,17 @@ pub(crate) fn interpolate_dabs(brush: &Brush, points: &[StrokePoint]) -> Vec<Dab
         }
         carry = len - (t - step);
     }
-    crate::brush_tip::apply_dynamics(
+    let mut dabs = crate::brush_tip::apply_dynamics(
         brush.radius,
         brush.jitter,
         brush.angle,
         brush.roundness,
         &brush.dynamics,
         &stations,
-    )
+    );
+    let [r, g, b, _] = brush.color;
+    crate::brush_tip::apply_color_dynamics(&mut dabs, [r, g, b], &brush.dynamics);
+    dabs
 }
 
 /// Call `f(x, y, coverage)` for every canvas pixel a dab touches, with the

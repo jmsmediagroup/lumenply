@@ -254,6 +254,10 @@ pub(crate) struct PresetDynamics {
     pub flow_jitter: f32,
     pub texture_depth: f32,
     pub texture_scale: f32,
+    pub fg_bg_jitter: f32,
+    pub hue_jitter: f32,
+    pub saturation_jitter: f32,
+    pub brightness_jitter: f32,
 }
 
 impl From<BrushDynamics> for PresetDynamics {
@@ -274,6 +278,10 @@ impl From<BrushDynamics> for PresetDynamics {
             flow_jitter: d.flow_jitter,
             texture_depth: d.texture_depth,
             texture_scale: d.texture_scale,
+            fg_bg_jitter: d.fg_bg_jitter,
+            hue_jitter: d.hue_jitter,
+            saturation_jitter: d.saturation_jitter,
+            brightness_jitter: d.brightness_jitter,
         }
     }
 }
@@ -297,6 +305,11 @@ impl From<&PresetDynamics> for BrushDynamics {
             flow_jitter: unit(p.flow_jitter),
             texture_depth: unit(p.texture_depth),
             texture_scale: p.texture_scale.clamp(0.25, 4.0),
+            fg_bg_jitter: unit(p.fg_bg_jitter),
+            hue_jitter: unit(p.hue_jitter),
+            saturation_jitter: unit(p.saturation_jitter),
+            brightness_jitter: unit(p.brightness_jitter),
+            background: BrushDynamics::default().background,
         }
     }
 }
@@ -785,6 +798,16 @@ impl App {
                 .small()
                 .color(MUTED),
         );
+        section_title(ui, "COLOUR DYNAMICS");
+        let d = &mut self.brush.dynamics;
+        for (label, v) in [
+            ("Fg/bg jitter", &mut d.fg_bg_jitter),
+            ("Hue jitter", &mut d.hue_jitter),
+            ("Saturation jitter", &mut d.saturation_jitter),
+            ("Brightness jitter", &mut d.brightness_jitter),
+        ] {
+            slider_row_scaled_w(ui, label, v, 0.0..=1.0, 100.0, "%", LABEL);
+        }
     }
 
     fn dynamics_column(&mut self, ui: &mut egui::Ui) {
@@ -977,6 +1000,10 @@ impl App {
                     "flip" => d.flip_x_jitter = v != 0.0,
                     "grain" => d.texture_depth = v / 100.0,
                     "grain-scale" => d.texture_scale = v / 100.0,
+                    "fgbg" => d.fg_bg_jitter = v / 100.0,
+                    "hue-jitter" => d.hue_jitter = v / 100.0,
+                    "sat-jitter" => d.saturation_jitter = v / 100.0,
+                    "bri-jitter" => d.brightness_jitter = v / 100.0,
                     _ => return false,
                 }
             }

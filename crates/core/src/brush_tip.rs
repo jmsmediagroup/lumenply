@@ -286,6 +286,18 @@ pub struct BrushDynamics {
     pub texture_depth: f32,
     /// Grain size: 1 is the default ~6 px tooth.
     pub texture_scale: f32,
+    /// Colour dynamics (painting only): each dab mixes up to this far
+    /// from the brush colour toward `background`...
+    pub fg_bg_jitter: f32,
+    /// ...turns its hue by up to ± this half of the colour wheel...
+    pub hue_jitter: f32,
+    /// ...and shifts saturation and brightness by up to ± this much
+    /// (gamma-encoded HSL, as Photoshop does).
+    pub saturation_jitter: f32,
+    pub brightness_jitter: f32,
+    /// The second colour for `fg_bg_jitter`: straight linear RGB (the
+    /// app passes its background colour).
+    pub background: [f32; 3],
 }
 
 impl Default for BrushDynamics {
@@ -306,6 +318,11 @@ impl Default for BrushDynamics {
             flow_jitter: 0.0,
             texture_depth: 0.0,
             texture_scale: 1.0,
+            fg_bg_jitter: 0.0,
+            hue_jitter: 0.0,
+            saturation_jitter: 0.0,
+            brightness_jitter: 0.0,
+            background: [1.0, 1.0, 1.0],
         }
     }
 }
@@ -316,6 +333,7 @@ impl BrushDynamics {
         let d = BrushDynamics {
             min_roundness: self.min_roundness,
             texture_scale: self.texture_scale,
+            background: self.background,
             ..BrushDynamics::default()
         };
         *self == d
@@ -340,6 +358,9 @@ pub struct Dab {
     pub roundness: f32,
     pub flip_x: bool,
     pub flip_y: bool,
+    /// This dab's paint colour (straight linear RGB) when colour
+    /// dynamics vary it; `None` paints the brush colour.
+    pub color: Option<[f32; 3]>,
 }
 
 /// Deterministic hash of `(n, salt)` onto `[0, 1)`.
@@ -507,11 +528,54 @@ pub(crate) fn apply_dynamics(
                 roundness: round,
                 flip_x: d.flip_x_jitter && hash01(k, SALT_FLIP_X) < 0.5,
                 flip_y: d.flip_y_jitter && hash01(k, SALT_FLIP_Y) < 0.5,
+                color: None,
             });
             k += 1;
         }
     }
     dabs
+}
+
+const SALT_FG_BG: u32 = 0x3C6E_F372;
+const SALT_HUE: u32 = 0xA54F_F53A;
+const SALT_SAT: u32 = 0x510E_527F;
+const SALT_BRI: u32 = 0x9B05_688C;
+
+/// Give each dab its own colour from the colour dynamics: a mix toward
+/// the background colour, then hue, saturation and brightness shifts in
+/// gamma-encoded HSL. Hashed from the dab index like every dynamic; a
+/// no-op (dabs keep `color: None`) when no colour dynamic is on.
+pub(crate) fn apply_color_dynamics(dabs: &mut [Dab], base: [f32; 3], d: &BrushDynamics) {
+    use lumenply_doc::adjust::{hsl_to_rgb, rgb_to_hsl, srgb_decode, srgb_encode};
+    let unit = |v: f32| v.clamp(0.0, 1.0);
+    let (fg_bg, hue, sat, bri) = (
+        unit(d.fg_bg_jitter),
+        unit(d.hue_jitter),
+        unit(d.saturation_jitter),
+        unit(d.brightness_jitter),
+    );
+    if fg_bg + hue + sat + bri <= 0.0 {
+        return;
+    }
+    let enc = |c: [f32; 3]| c.map(|v| srgb_encode(v.clamp(0.0, 1.0)));
+    let (fg, bg) = (enc(base), enc(d.background));
+    for (k, dab) in dabs.iter_mut().enumerate() {
+        let k = k as u32;
+        let t = fg_bg * hash01(k, SALT_FG_BG);
+        let mut c = [0.0; 3];
+        for i in 0..3 {
+            c[i] = fg[i] + (bg[i] - fg[i]) * t;
+        }
+        if hue + sat + bri > 0.0 {
+            let swing = |salt: u32| hash01(k, salt) * 2.0 - 1.0;
+            let (h, s, l) = rgb_to_hsl(c[0], c[1], c[2]);
+            let h = h + swing(SALT_HUE) * hue * 0.5;
+            let s = (s + swing(SALT_SAT) * sat).clamp(0.0, 1.0);
+            let l = (l + swing(SALT_BRI) * bri * 0.5).clamp(0.0, 1.0);
+            c = hsl_to_rgb(h, s, l);
+        }
+        dab.color = Some(c.map(srgb_decode));
+    }
 }
 
 /// Call `f(x, y, coverage)` for every canvas pixel under a dab of a
@@ -816,6 +880,7 @@ mod tests {
                 roundness: 1.0,
                 flip_x: false,
                 flip_y: false,
+                color: None,
             }]
         );
         // Minimum diameter lifts pressure 0 to the floor: 8 × 0.5 = 4.
@@ -1131,6 +1196,60 @@ mod stroke_tests {
                 px(&d, x, y).a
             );
         }
+    }
+
+    #[test]
+    fn colour_dynamics_give_each_dab_its_own_colour() {
+        use lumenply_doc::adjust::{rgb_to_hsl, srgb_decode, srgb_encode};
+        // Black toward a white background: the one dab's colour is the
+        // gamma-space mix at its hashed amount.
+        let brush = Brush {
+            radius: 4.0,
+            hardness: 1.0,
+            dynamics: BrushDynamics {
+                fg_bg_jitter: 1.0,
+                ..BrushDynamics::default()
+            },
+            ..Brush::default()
+        };
+        let d = paint(brush, vec![StrokePoint::new(10.5, 10.5, 1.0)]);
+        let want = srgb_decode(hash01(0, SALT_FG_BG));
+        let p = px(&d, 10, 10);
+        assert_eq!(p.a, 1.0);
+        assert!(
+            (p.r - want).abs() < 1e-5 && p.r == p.g && p.g == p.b,
+            "{p:?} vs {want}"
+        );
+        // No colour dynamic: dabs carry no colour of their own.
+        let line = [StrokePoint::new(0.0, 0.0, 1.0), StrokePoint::new(40.0, 0.0, 1.0)];
+        let plain = crate::commands::interpolate_dabs(&Brush::default(), &line);
+        assert!(plain.len() > 5 && plain.iter().all(|d| d.color.is_none()));
+        // Hue jitter on red: hues spread within ±90° (50 % = a quarter
+        // turn each way), lightness and saturation untouched.
+        let red = Brush {
+            color: [1.0, 0.0, 0.0, 1.0],
+            dynamics: BrushDynamics {
+                hue_jitter: 0.5,
+                ..BrushDynamics::default()
+            },
+            ..Brush::default()
+        };
+        let dabs = crate::commands::interpolate_dabs(&red, &line);
+        let mut hues = Vec::new();
+        for d in &dabs {
+            let c = d.color.expect("coloured").map(srgb_encode);
+            let (h, s, l) = rgb_to_hsl(c[0], c[1], c[2]);
+            assert!((s - 1.0).abs() < 1e-3 && (l - 0.5).abs() < 1e-3, "{s} {l}");
+            let turn = if h > 0.5 { h - 1.0 } else { h };
+            assert!(turn.abs() <= 0.25 + 1e-4, "{turn}");
+            hues.push(turn);
+        }
+        assert!(hues.iter().any(|&h| h > 0.1) && hues.iter().any(|&h| h < -0.1));
+        assert_eq!(
+            dabs,
+            crate::commands::interpolate_dabs(&red, &line),
+            "replays match"
+        );
     }
 
     #[test]

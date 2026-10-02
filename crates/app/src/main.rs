@@ -838,6 +838,9 @@ impl App {
     fn make_brush(&self) -> Brush {
         let mut b = self.brush.clone();
         b.color = linear_rgba(self.brush_rgb, self.brush.color[3].max(0.0));
+        // Colour dynamics mix toward the background colour.
+        let [br, bg, bb, _] = linear_rgba(self.bg_rgb, 1.0);
+        b.dynamics.background = [br, bg, bb];
         b.mode = match self.tool {
             Tool::Eraser => BrushMode::Erase,
             // The Brush tool keeps its chosen mode (Paint / Dodge / Burn).
