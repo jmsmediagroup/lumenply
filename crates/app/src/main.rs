@@ -133,6 +133,8 @@ struct App {
     hist_thumbs: Vec<egui::TextureHandle>,
     /// Open command palette (Ctrl+K).
     palette: Option<Palette>,
+    /// Set once the user confirms quitting with unsaved changes.
+    allow_close: bool,
 }
 
 impl App {
@@ -231,6 +233,7 @@ impl App {
             saved_rev: 0,
             hist_thumbs: Vec::new(),
             palette: None,
+            allow_close: false,
             filter_previewed: false,
             status,
         };
@@ -544,11 +547,11 @@ impl App {
         if save {
             match self.path.clone() {
                 Some(p) => self.save_path(&p.to_string_lossy()),
-                None => self.dialog = Some(Dialog::Save("untitled.nge".into())),
+                None => self.pick_save(),
             }
         }
         if open {
-            self.dialog = Some(Dialog::Open(String::new()));
+            self.pick_open();
         }
         if xform {
             self.begin_free_transform();
@@ -654,6 +657,14 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Intercept closing the window while there are unsaved changes.
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.allow_close
+            && self.editor.history().len() != self.saved_rev
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.dialog = Some(Dialog::ConfirmClose);
+        }
         self.shortcuts(ctx);
         self.menu_bar(ctx);
         self.options_bar(ctx);

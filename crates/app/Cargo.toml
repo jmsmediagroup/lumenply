@@ -19,3 +19,4 @@ nge-render.workspace = true
 nge-io.workspace = true
 nge-core.workspace = true
 eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts", "x11"] }
+rfd = "0.15"

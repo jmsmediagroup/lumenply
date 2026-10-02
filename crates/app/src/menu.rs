@@ -173,15 +173,15 @@ impl App {
                         .on_hover_text(".nge project, .psd, .png, .jpg")
                         .clicked()
                     {
-                        self.dialog = Some(Dialog::Open(String::new()));
+                        self.pick_open();
                         ui.close_menu();
                     }
                     if ui.button("Open image (PNG/JPEG)...").clicked() {
-                        self.dialog = Some(Dialog::OpenImage(String::new()));
+                        self.pick_open_image();
                         ui.close_menu();
                     }
                     if ui.button("Place image as layer...").clicked() {
-                        self.dialog = Some(Dialog::PlaceImage(String::new()));
+                        self.pick_place();
                         ui.close_menu();
                     }
                     if ui.button("Open demo document").clicked() {
@@ -192,24 +192,27 @@ impl App {
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("Save project...   Ctrl+S").clicked() {
-                        let p = self
-                            .path
-                            .as_ref()
-                            .map_or("untitled.nge".to_string(), |p| p.to_string_lossy().into_owned());
-                        self.dialog = Some(Dialog::Save(p));
+                    if ui.button("Save   Ctrl+S").clicked() {
+                        match self.path.clone() {
+                            Some(p) => self.save_path(&p.to_string_lossy()),
+                            None => self.pick_save(),
+                        }
+                        ui.close_menu();
+                    }
+                    if ui.button("Save as...").clicked() {
+                        self.pick_save();
                         ui.close_menu();
                     }
                     if ui.button("Export PNG...").clicked() {
-                        self.dialog = Some(Dialog::Export("export.png".into()));
+                        self.pick_export_png();
                         ui.close_menu();
                     }
                     if ui.button("Export JPEG...").clicked() {
-                        self.dialog = Some(Dialog::ExportJpeg("export.jpg".into(), 90));
+                        self.pick_export_jpeg();
                         ui.close_menu();
                     }
                     if ui.button("Export Photoshop PSD...").clicked() {
-                        self.dialog = Some(Dialog::ExportPsd("export.psd".into()));
+                        self.pick_export_psd();
                         ui.close_menu();
                     }
                 });
@@ -471,15 +474,15 @@ impl App {
                         egui::Button::new(RichText::new("Export").color(ACCENT_INK).strong()).fill(ACCENT);
                     egui::menu::menu_custom_button(ui, export, |ui| {
                         if ui.button("PNG...").clicked() {
-                            self.dialog = Some(Dialog::Export(self.suggest_path("png")));
+                            self.pick_export_png();
                             ui.close_menu();
                         }
                         if ui.button("JPEG...").clicked() {
-                            self.dialog = Some(Dialog::ExportJpeg(self.suggest_path("jpg"), 90));
+                            self.pick_export_jpeg();
                             ui.close_menu();
                         }
                         if ui.button("PSD...").clicked() {
-                            self.dialog = Some(Dialog::ExportPsd(self.suggest_path("psd")));
+                            self.pick_export_psd();
                             ui.close_menu();
                         }
                     });
@@ -519,14 +522,6 @@ impl App {
         let resp = resp.on_hover_text(if unsaved { "Unsaved changes" } else { "Saved" });
         if resp.clicked() {
             // Nothing to switch to yet; keep the click harmless.
-        }
-    }
-
-    /// A sensible default path for an export dialog, next to the project.
-    pub(crate) fn suggest_path(&self, ext: &str) -> String {
-        match &self.path {
-            Some(p) => p.with_extension(ext).to_string_lossy().into_owned(),
-            None => format!("untitled.{ext}"),
         }
     }
 }

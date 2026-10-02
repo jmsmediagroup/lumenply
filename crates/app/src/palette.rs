@@ -225,16 +225,16 @@ impl App {
     pub(crate) fn run_menu_action(&mut self, id: &str) {
         match id {
             "new" => self.dialog = Some(Dialog::New(1200, 800)),
-            "open" => self.dialog = Some(Dialog::Open(String::new())),
-            "place" => self.dialog = Some(Dialog::PlaceImage(String::new())),
+            "open" => self.pick_open(),
+            "place" => self.pick_place(),
             "save" => match self.path.clone() {
                 Some(p) => self.save_path(&p.to_string_lossy()),
-                None => self.dialog = Some(Dialog::Save("untitled.nge".into())),
+                None => self.pick_save(),
             },
-            "saveas" => self.dialog = Some(Dialog::Save("untitled.nge".into())),
-            "export-png" => self.dialog = Some(Dialog::Export(self.suggest_path("png"))),
-            "export-jpeg" => self.dialog = Some(Dialog::ExportJpeg(self.suggest_path("jpg"), 90)),
-            "export-psd" => self.dialog = Some(Dialog::ExportPsd(self.suggest_path("psd"))),
+            "saveas" => self.pick_save(),
+            "export-png" => self.pick_export_png(),
+            "export-jpeg" => self.pick_export_jpeg(),
+            "export-psd" => self.pick_export_psd(),
             "undo" => self.undo(),
             "redo" => self.redo(),
             "fill" => self.fill_active(),

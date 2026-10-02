@@ -84,10 +84,11 @@ None of these could be tested in the container.
 - [ ] GPU compositor with wgpu: blend modes and adjustments in WGSL, CPU path as reference,
       equality tests between the two
 - [ ] Per-layer composite caching so editing a top layer doesn't recomposite everything below
-- [ ] Faster thumbnails (currently recomputed for every layer on full refreshes)
+- [x] Faster thumbnails (group composites only rebuild when the change touches them)
 - [ ] Multithreaded filters inside a tile; SIMD for blend loops
-- [ ] Memory: cap undo history by bytes, not step count; optional 8-bit storage mode
-- [ ] Incremental brush rendering (only new dabs per frame, not the whole stroke)
+- [x] Memory: cap undo history by bytes (Editor::history_memory_limit, default 1 GiB)
+- [ ] Optional 8-bit storage mode
+- [x] Incremental brush rendering (only the smoothing window repaints per frame)
 
 ## 3. Input
 
@@ -129,11 +130,13 @@ None of these could be tested in the container.
       needs a new engine command in crates/core)
 
 
-- [ ] Native file dialogs (`rfd`) instead of typed paths
-- [ ] Autosave and crash recovery; recent files; unsaved-changes prompt on close
+- [x] Native file dialogs (`rfd`) instead of typed paths
+- [ ] Autosave and crash recovery; recent files
+- [x] Unsaved-changes prompt on close
 - [ ] Docking panels (egui_dock); drag-to-reorder layers; layer context menu
 - [ ] Preferences: theme, canvas colour, undo limit, memory limit
-- [ ] Split `crates/app/src/main.rs` (~3,900 lines) into modules: tools, panels, dialogs, canvas
+- [x] Split `crates/app/src/main.rs` into modules (theme, tools, menu, options bar,
+      canvas, layers, properties, history, status, dialogs, palette)
 - [ ] Accessibility (AccessKit labels), translations
 
 ## 7. Ecosystem and release

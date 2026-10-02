@@ -1,17 +1,98 @@
 use super::*;
 
 pub(crate) enum Dialog {
-    Open(String),
-    OpenImage(String),
-    PlaceImage(String),
-    Save(String),
-    Export(String),
     ExportJpeg(String, u8),
-    ExportPsd(String),
     New(u32, u32),
     Filter(Filter),
     CanvasSize(u32, u32, (f32, f32)),
     ImageSize(u32, u32, bool),
+    /// The window close was intercepted because of unsaved changes.
+    ConfirmClose,
+}
+
+impl App {
+    fn file_dialog(&self) -> rfd::FileDialog {
+        let mut d = rfd::FileDialog::new();
+        if let Some(dir) = self.path.as_ref().and_then(|p| p.parent()) {
+            d = d.set_directory(dir);
+        }
+        d
+    }
+
+    pub(crate) fn pick_open(&mut self) {
+        if let Some(p) = self
+            .file_dialog()
+            .add_filter("Projects & images", &["nge", "psd", "png", "jpg", "jpeg"])
+            .pick_file()
+        {
+            self.open_path(&p.to_string_lossy());
+        }
+    }
+
+    pub(crate) fn pick_open_image(&mut self) {
+        if let Some(p) = self
+            .file_dialog()
+            .add_filter("Images", &["png", "jpg", "jpeg"])
+            .pick_file()
+        {
+            self.open_image(&p.to_string_lossy());
+        }
+    }
+
+    pub(crate) fn pick_place(&mut self) {
+        if let Some(p) = self
+            .file_dialog()
+            .add_filter("Images", &["png", "jpg", "jpeg"])
+            .pick_file()
+        {
+            self.place_image(&p.to_string_lossy());
+        }
+    }
+
+    /// Native save panel; returns the chosen path with `ext` enforced.
+    fn pick_save_path(&self, what: &str, ext: &str) -> Option<String> {
+        let name = self
+            .path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "untitled".into());
+        self.file_dialog()
+            .add_filter(what, &[ext])
+            .set_file_name(format!("{name}.{ext}"))
+            .save_file()
+            .map(|p| {
+                if p.extension().is_some() {
+                    p.to_string_lossy().into_owned()
+                } else {
+                    p.with_extension(ext).to_string_lossy().into_owned()
+                }
+            })
+    }
+
+    pub(crate) fn pick_save(&mut self) {
+        if let Some(p) = self.pick_save_path("NGE project", "nge") {
+            self.save_path(&p);
+        }
+    }
+
+    pub(crate) fn pick_export_png(&mut self) {
+        if let Some(p) = self.pick_save_path("PNG image", "png") {
+            self.export_png(&p);
+        }
+    }
+
+    pub(crate) fn pick_export_psd(&mut self) {
+        if let Some(p) = self.pick_save_path("Photoshop PSD", "psd") {
+            self.export_psd(&p);
+        }
+    }
+
+    pub(crate) fn pick_export_jpeg(&mut self) {
+        if let Some(p) = self.pick_save_path("JPEG image", "jpg") {
+            self.dialog = Some(Dialog::ExportJpeg(p, 90));
+        }
+    }
 }
 
 impl App {
@@ -118,14 +199,9 @@ impl App {
     pub(crate) fn dialogs(&mut self, ctx: &egui::Context) {
         let Some(mut d) = self.dialog.take() else { return };
         let title = match &d {
-            Dialog::Open(_) => "Open (.nge, .psd, .png, .jpg)",
-            Dialog::OpenImage(_) => "Open image",
-            Dialog::PlaceImage(_) => "Place image as layer",
-            Dialog::Save(_) => "Save project",
-            Dialog::Export(_) => "Export PNG",
             Dialog::ExportJpeg(..) => "Export JPEG",
-            Dialog::ExportPsd(_) => "Export Photoshop PSD",
             Dialog::New(..) => "New document",
+            Dialog::ConfirmClose => "Unsaved changes",
             Dialog::Filter(f) => f.name(),
             Dialog::CanvasSize(..) => "Canvas size",
             Dialog::ImageSize(..) => "Image size",
@@ -139,22 +215,33 @@ impl App {
             .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 match &mut d {
-                    Dialog::Open(p)
-                    | Dialog::OpenImage(p)
-                    | Dialog::PlaceImage(p)
-                    | Dialog::Save(p)
-                    | Dialog::Export(p)
-                    | Dialog::ExportPsd(p) => {
-                        ui.label("File path:");
-                        let r = ui.add(egui::TextEdit::singleline(p).desired_width(380.0));
-                        r.request_focus();
-                        if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                            confirmed = true;
-                        }
+                    Dialog::ConfirmClose => {
+                        ui.label("The document has unsaved changes.");
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Save and quit").clicked() {
+                                match self.path.clone() {
+                                    Some(p) => self.save_path(&p.to_string_lossy()),
+                                    None => self.pick_save(),
+                                }
+                                if self.editor.history().len() == self.saved_rev {
+                                    self.allow_close = true;
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                }
+                                keep = false;
+                            }
+                            if ui.button("Quit without saving").clicked() {
+                                self.allow_close = true;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                keep = false;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                keep = false;
+                            }
+                        });
                     }
                     Dialog::ExportJpeg(p, q) => {
-                        ui.label("File path:");
-                        ui.add(egui::TextEdit::singleline(p).desired_width(380.0));
+                        ui.label(RichText::new(file_name(p)).monospace());
                         let mut qf = *q as f32;
                         ui.add(egui::Slider::new(&mut qf, 1.0..=100.0).integer().text("Quality"));
                         *q = qf.round() as u8;
@@ -233,14 +320,16 @@ impl App {
                         ui.label(RichText::new("Resamples every layer bilinearly.").weak());
                     }
                 }
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        confirmed = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        keep = false;
-                    }
-                });
+                if !matches!(d, Dialog::ConfirmClose) {
+                    ui.horizontal(|ui| {
+                        if ui.button("OK").clicked() {
+                            confirmed = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                }
             });
 
         if let Dialog::Filter(f) = &d {
@@ -263,13 +352,8 @@ impl App {
 
         if confirmed {
             match &d {
-                Dialog::Open(p) => self.open_path(p),
-                Dialog::OpenImage(p) => self.open_image(p),
-                Dialog::PlaceImage(p) => self.place_image(p),
-                Dialog::Save(p) => self.save_path(p),
-                Dialog::Export(p) => self.export_png(p),
+                Dialog::ConfirmClose => {}
                 Dialog::ExportJpeg(p, q) => self.export_jpeg(p, *q),
-                Dialog::ExportPsd(p) => self.export_psd(p),
                 Dialog::New(w, h) => self.set_doc(blank(*w, *h), None),
                 Dialog::Filter(f) => {
                     if let Some(layer) = self.active {
