@@ -78,6 +78,9 @@ pub(crate) struct Retouch {
     pub(crate) bg_tolerance: f32,
     pub(crate) bg_continuous: bool,
     pub(crate) bg_contiguous: bool,
+    /// Spot healing synthesises the stroke's area with PatchMatch on
+    /// release (the live preview stays the fast diffusion heal).
+    pub(crate) spot_aware: bool,
 }
 
 /// A history state picked as the history brush's source: its step index
@@ -114,6 +117,7 @@ impl Default for Retouch {
             bg_tolerance: 25.0,
             bg_continuous: true,
             bg_contiguous: true,
+            spot_aware: true,
         }
     }
 }
@@ -297,7 +301,15 @@ impl App {
                         }
                         true
                     }
-                    HealMode::Spot | HealMode::Healing => false,
+                    HealMode::Spot => {
+                        check(ui, &mut self.retouch.spot_aware, "Content-Aware").on_hover_text(
+                            "On release, rebuild the stroked area from its surroundings (PatchMatch); \
+                             off: blend the surrounding colour in",
+                        );
+                        ui.separator();
+                        false
+                    }
+                    HealMode::Healing => false,
                 }
             }
             Tool::Eraser => {
@@ -321,11 +333,17 @@ impl App {
                             "%",
                             false,
                         );
-                        segmented(
-                            ui,
-                            &mut self.retouch.bg_continuous,
-                            &[(false, "Once"), (true, "Continuous")],
-                        );
+                        if wide {
+                            segmented(
+                                ui,
+                                &mut self.retouch.bg_continuous,
+                                &[(false, "Once"), (true, "Continuous")],
+                            );
+                        } else {
+                            check(ui, &mut self.retouch.bg_continuous, "Continuous").on_hover_text(
+                                "Resample the colour under every dab (off: once, at the start)",
+                            );
+                        }
                         check(ui, &mut self.retouch.bg_contiguous, "Contiguous")
                             .on_hover_text("Erase only what connects to the brush centre");
                         ui.separator();
@@ -971,6 +989,28 @@ mod tests {
     }
 
     #[test]
+    fn spot_healing_previews_fast_and_commits_content_aware() {
+        let mut app = small_app();
+        let layer = app.active.unwrap();
+        app.tool = Tool::Heal;
+        let label = |app: &App| {
+            app.stroke_command(layer, vec![StrokePoint::new(9.0, 9.0, 1.0)])
+                .label()
+        };
+        assert_eq!(label(&app), "Spot heal (content-aware)");
+        app.drag = Some(DragKind::Stroke);
+        assert_eq!(label(&app), "Spot heal", "the live preview");
+        app.drag = None;
+        app.retouch.spot_aware = false;
+        assert_eq!(label(&app), "Spot heal");
+        app.retouch.heal_mode = HealMode::Healing;
+        // The healing brush without a picked source heals untextured.
+        assert_eq!(label(&app), "Spot heal");
+        app.clone_source = Some((30.0, 30.0));
+        assert_eq!(label(&app), "Healing brush");
+    }
+
+    #[test]
     fn palette_actions_pick_the_tool_and_its_mode() {
         let mut app = small_app();
         app.run_menu_action("tool-patch");
@@ -983,6 +1023,126 @@ mod tests {
             (Tool::Eraser, EraserMode::Magic)
         );
         assert!(!app.retouch_tool_action("tool-nonsense"));
+    }
+
+    /// Real pointer input through whole app frames at 1440×900.
+    fn frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(raw, |ctx| app.frame(ctx));
+    }
+
+    fn button(app: &mut App, ctx: &egui::Context, p: Pos2, pressed: bool) {
+        frame(
+            app,
+            ctx,
+            vec![
+                egui::Event::PointerMoved(p),
+                egui::Event::PointerButton {
+                    pos: p,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+    }
+
+    fn drag(app: &mut App, ctx: &egui::Context, from: Pos2, to: Pos2) {
+        button(app, ctx, from, true);
+        for i in 1..=6 {
+            let t = i as f32 / 6.0;
+            frame(app, ctx, vec![egui::Event::PointerMoved(from + (to - from) * t)]);
+        }
+        button(app, ctx, to, false);
+    }
+
+    /// Screen position of a document point, calibrated by hovering the
+    /// canvas centre and reading back the document pixel under it.
+    fn to_screen(app: &mut App, ctx: &egui::Context) -> impl Fn(f32, f32) -> Pos2 {
+        let probe = egui::pos2(620.0, 450.0);
+        frame(app, ctx, vec![egui::Event::PointerMoved(probe)]);
+        let (px, py) = app.cursor_doc.expect("the probe is over the document");
+        let z = app.zoom;
+        move |x, y| {
+            egui::pos2(
+                probe.x + (x - (px as f32 + 0.5)) * z,
+                probe.y + (y - (py as f32 + 0.5)) * z,
+            )
+        }
+    }
+
+    #[test]
+    fn dragging_on_the_canvas_lassoes_then_patches() {
+        let mut app = small_app();
+        let ctx = ctx();
+        app.tool = Tool::Heal;
+        app.retouch.heal_mode = HealMode::Patch;
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        let at = to_screen(&mut app, &ctx);
+        // A drag outside any selection draws the patch outline.
+        let steps = app.editor.history().len();
+        button(&mut app, &ctx, at(6.0, 6.0), true);
+        for (x, y) in [(18.0, 6.0), (18.0, 18.0), (6.0, 18.0), (6.0, 7.0)] {
+            frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at(x, y))]);
+        }
+        button(&mut app, &ctx, at(6.0, 7.0), false);
+        assert_eq!(
+            app.editor.history().len(),
+            steps + 1,
+            "the lasso became a selection"
+        );
+        let sel = app.editor.doc().selection.clone().expect("selected");
+        assert!(sel.value(12, 12) > 0.99 && sel.value(30, 30) == 0.0);
+        // A drag from inside it moves the patch; the release heals it in.
+        drag(&mut app, &ctx, at(12.0, 12.0), at(32.0, 30.0));
+        assert_eq!(app.editor.history().last().copied(), Some("Patch"));
+        assert_eq!(app.editor.history().len(), steps + 2);
+        assert!(app.retouch.patch_drag.is_none() && app.drag.is_none());
+    }
+
+    #[test]
+    fn a_red_eye_click_on_the_canvas_fixes_the_pupil() {
+        let mut app = small_app();
+        let ctx = ctx();
+        let layer = app.active.unwrap();
+        app.run(&PaintStroke {
+            layer,
+            brush: Brush {
+                radius: 5.0,
+                hardness: 1.0,
+                color: [0.8, 0.02, 0.02, 1.0],
+                spacing: 0.2,
+                jitter: 0.0,
+                mode: BrushMode::Paint,
+            },
+            points: vec![StrokePoint::new(24.0, 24.0, 1.0)],
+        });
+        app.tool = Tool::Heal;
+        app.retouch.heal_mode = HealMode::RedEye;
+        app.brush.radius = 10.0;
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        let at = to_screen(&mut app, &ctx);
+        button(&mut app, &ctx, at(24.0, 24.0), true);
+        button(&mut app, &ctx, at(24.0, 24.0), false);
+        assert_eq!(app.editor.history().last().copied(), Some("Red eye"));
+        let p = app
+            .editor
+            .doc()
+            .layer(layer)
+            .unwrap()
+            .pixels()
+            .unwrap()
+            .get_pixel(24, 24);
+        let [r, g, b, _] = p.to_straight();
+        assert!(r < 0.05 && (r - g).abs() < 1e-3 && (g - b).abs() < 1e-3, "{p:?}");
     }
 
     #[test]

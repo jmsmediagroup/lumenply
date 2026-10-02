@@ -10,7 +10,9 @@ use lumenply_doc::adjust::{srgb_decode, srgb_encode};
 use lumenply_doc::{Document, LayerId};
 use lumenply_tiles::{Raster, Rect, Rgba};
 
-use crate::commands::{sampler, SampleSource};
+use crate::commands::{
+    dab_coverage, interpolate_dabs, sampler, stroke_bounds, Brush, SampleSource, StrokePoint,
+};
 use crate::{Command, EditError, EditResult};
 
 /// Straight, gamma-encoded RGB and alpha of a premultiplied linear pixel.
@@ -349,6 +351,91 @@ fn content_aware_patch(
         }
     }
     Ok(out)
+}
+
+/// Heal ▸ Spot, Content-Aware: the area a stroke covers is synthesised by
+/// PatchMatch from what surrounds it (as Content-Aware Fill does for a
+/// selection), then blended in by the stroke's coverage — each pixel's
+/// strongest dab coverage times the strength (`brush.color[3]`).
+/// Sampling is limited to the stroke's bounds grown by their larger side,
+/// 32 to 128 px. One undo step.
+pub struct SpotHealAware {
+    pub layer: LayerId,
+    pub brush: Brush,
+    pub points: Vec<StrokePoint>,
+}
+
+impl Command for SpotHealAware {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn label(&self) -> String {
+        "Spot heal (content-aware)".into()
+    }
+
+    fn affected(&self, doc: &Document) -> Option<Rect> {
+        Some(stroke_bounds(&self.brush, &self.points, doc.canvas()))
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        if self.points.is_empty() {
+            return Err(EditError::Invalid("stroke has no points".into()));
+        }
+        let canvas = doc.canvas();
+        let bounds = stroke_bounds(&self.brush, &self.points, canvas);
+        if bounds.is_empty() {
+            return Err(EditError::Invalid("the stroke is off the canvas".into()));
+        }
+        let m = bounds.w.max(bounds.h).clamp(32, 128) as i32;
+        let area = Rect::new(
+            bounds.x - m,
+            bounds.y - m,
+            bounds.w + 2 * m as u32,
+            bounds.h + 2 * m as u32,
+        )
+        .intersect(&canvas);
+        let (w, h) = (area.w as usize, area.h as usize);
+        let strength = self.brush.color[3].clamp(0.0, 1.0);
+        let mut cov = vec![0f32; w * h];
+        let sel = doc.selection.clone();
+        for d in interpolate_dabs(&self.brush, &self.points) {
+            dab_coverage(&self.brush, d, canvas, sel.as_ref(), |x, y, c| {
+                if area.contains(x, y) {
+                    let i = (y - area.y) as usize * w + (x - area.x) as usize;
+                    cov[i] = cov[i].max(c * strength);
+                }
+            });
+        }
+        let hole: Vec<bool> = cov.iter().map(|&c| c > 0.0).collect();
+        if !hole.iter().any(|&b| b) {
+            return Ok(());
+        }
+        let layer = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
+        let store = layer.pixels_mut().ok_or(EditError::NotPixel(self.layer))?;
+        let src = store.to_raster(area);
+        let filled = lumenply_render::inpaint::inpaint(&src, &hole, 0x5EED_0003)
+            .map_err(|e| EditError::Invalid(e.to_string()))?;
+        for (i, &k) in cov.iter().enumerate() {
+            if k <= 0.0 {
+                continue;
+            }
+            let (o, f) = (src.pixels[i], filled.pixels[i]);
+            let k = k.min(1.0);
+            store.set_pixel(
+                area.x + (i % w) as i32,
+                area.y + (i / w) as i32,
+                Rgba::new(
+                    o.r + (f.r - o.r) * k,
+                    o.g + (f.g - o.g) * k,
+                    o.b + (f.b - o.b) * k,
+                    o.a + (f.a - o.a) * k,
+                ),
+            );
+        }
+        store.prune_blank();
+        Ok(())
+    }
 }
 
 /// Heal ▸ Red Eye: find the red pupil in `area` (the reddest connected
@@ -695,6 +782,44 @@ mod tests {
         // The second red spot is not connected to the pupil: still red.
         let c = enc(px.get_pixel(35, 5));
         assert!((c[0] - 0.8).abs() < 1e-5 && (c[1] - 0.1).abs() < 1e-5, "{c:?}");
+    }
+
+    #[test]
+    fn content_aware_spot_healing_rebuilds_the_stripes_under_the_stroke() {
+        let (mut ed, id) = patch_doc();
+        let stroke = SpotHealAware {
+            layer: id,
+            brush: Brush {
+                radius: 7.0,
+                hardness: 1.0,
+                color: [0.0, 0.0, 0.0, 1.0],
+                spacing: 0.2,
+                jitter: 0.0,
+                mode: crate::commands::BrushMode::Paint,
+            },
+            points: vec![
+                StrokePoint::new(20.0, 18.0, 1.0),
+                StrokePoint::new(28.0, 18.0, 1.0),
+            ],
+        };
+        assert_eq!(stroke.affected(ed.doc()), Some(Rect::new(11, 9, 26, 18)));
+        ed.execute(&stroke).unwrap();
+        assert_eq!(ed.history().last().copied(), Some("Spot heal (content-aware)"));
+        let px = ed.doc().layer(id).unwrap().pixels().unwrap();
+        let mut worst = 0f32;
+        for y in 14..22 {
+            for x in 20..28 {
+                let c = enc(px.get_pixel(x, y));
+                worst = worst.max((c[0] - stripes(x as u32, y as u32)).abs());
+            }
+        }
+        assert!(
+            worst < 0.03,
+            "the blemish is gone, stripes rebuilt (worst {worst})"
+        );
+        // Far from the stroke nothing changed.
+        let c = enc(px.get_pixel(50, 50));
+        assert!((c[0] - stripes(50, 50)).abs() < 1e-3);
     }
 
     #[test]

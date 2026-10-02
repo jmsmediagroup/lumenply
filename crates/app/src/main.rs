@@ -908,6 +908,14 @@ impl App {
         }
         if self.tool == Tool::Heal {
             brush.mode = BrushMode::Paint;
+            // Content-aware spot healing runs on release; while dragging
+            // the fast diffusion heal previews it.
+            if self.retouch.heal_mode == retouch_ui::HealMode::Spot
+                && self.retouch.spot_aware
+                && self.drag != Some(DragKind::Stroke)
+            {
+                return Box::new(SpotHealAware { layer, brush, points });
+            }
             let texture =
                 self.retouch.heal_mode == retouch_ui::HealMode::Healing && self.clone_source.is_some();
             let sample = if self.sample_merged {
