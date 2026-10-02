@@ -105,6 +105,7 @@ fn properties_changed(old: &Layer, new: &Layer) -> bool {
     old.opacity != new.opacity
         || old.blend != new.blend
         || old.effects != new.effects
+        || old.smart_filters != new.smart_filters
         || old.clip != new.clip
         || old.pass_through != new.pass_through
         || !mask_same

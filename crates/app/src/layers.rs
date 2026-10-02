@@ -523,6 +523,7 @@ impl App {
                             select = Some((row.id, ctrl));
                         }
                     }
+                    self.smart_filter_rows(ui, row.id, row.depth);
                 }
                 // Drag-to-reorder: an accent insertion line follows the
                 // pointer; releasing moves the layer there.

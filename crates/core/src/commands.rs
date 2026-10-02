@@ -20,6 +20,10 @@ pub use crate::guides::{AddGuide, ClearGuides, MoveGuide, RemoveGuide};
 
 pub use crate::fill_cmds::{AddFillLayer, SetFill};
 pub use crate::shape_cmds::{AddShapeLayer, SetShape, ShapeFromWorkPath, ShapeToWorkPath};
+pub use crate::smart_filter_cmds::{
+    AddSmartFilter, RemoveSmartFilter, ReorderSmartFilter, SetSmartFilter, SetSmartFilterMask,
+    SetSmartFiltersEnabled,
+};
 
 pub use crate::brush_tip::{BrushDynamics, BrushTip, Dab};
 
@@ -268,7 +272,7 @@ impl Command for RasterizeLayer {
     }
 
     fn apply(&self, doc: &mut Document) -> EditResult {
-        let (w, h) = (doc.width, doc.height);
+        let (w, h, float) = (doc.width, doc.height, doc.float_mode);
         let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
         let store = match &mut l.content {
             LayerContent::Text(t) => {
@@ -294,6 +298,13 @@ impl Command for RasterizeLayer {
                 )))
             }
         };
+        // Smart filters bake into the pixels, as Photoshop does.
+        let store = if l.smart_filters.is_active() {
+            lumenply_render::smart_filters::bake(&store, &l.smart_filters, Rect::new(0, 0, w, h), float)
+        } else {
+            store
+        };
+        l.smart_filters = Default::default();
         l.content = LayerContent::Pixel(store);
         Ok(())
     }
@@ -884,6 +895,10 @@ impl Command for TransformLayer {
         if let Some(m) = l.mask.as_mut() {
             *m = lumenply_render::transform_mask(m, &self.transform);
         }
+        // The smart-filter mask follows the layer too (ADR 0011).
+        if let Some(m) = l.smart_filters.mask.as_mut() {
+            *m = lumenply_render::transform_mask(m, &self.transform);
+        }
         Ok(())
     }
 }
@@ -958,6 +973,10 @@ impl Command for PerspectiveLayer {
         if let Some(m) = l.mask.as_mut() {
             *m = lumenply_render::perspective_mask(m, &h);
         }
+        // The smart-filter mask follows the layer too (ADR 0011).
+        if let Some(m) = l.smart_filters.mask.as_mut() {
+            *m = lumenply_render::perspective_mask(m, &h);
+        }
         Ok(())
     }
 }
@@ -1024,6 +1043,10 @@ impl Command for WarpLayer {
         }
         *store = lumenply_render::warp_store(store, &self.grid);
         if let Some(m) = l.mask.as_mut() {
+            *m = lumenply_render::warp_mask(m, &self.grid);
+        }
+        // The smart-filter mask follows the layer too (ADR 0011).
+        if let Some(m) = l.smart_filters.mask.as_mut() {
             *m = lumenply_render::warp_mask(m, &self.grid);
         }
         Ok(())
@@ -1471,6 +1494,10 @@ impl Command for ResizeImage {
             if let Some(m) = l.mask.as_mut() {
                 *m = lumenply_render::transform_mask(m, &t);
             }
+            // The smart-filter mask follows the layer too (ADR 0011).
+            if let Some(m) = l.smart_filters.mask.as_mut() {
+                *m = lumenply_render::transform_mask(m, &t);
+            }
         });
         doc.width = self.width;
         doc.height = self.height;
@@ -1491,6 +1518,10 @@ fn shift_all(doc: &mut Document, dx: i32, dy: i32) {
             _ => {}
         }
         if let Some(m) = l.mask.as_mut() {
+            *m = lumenply_render::transform_mask(m, &Affine::translate(dx as f32, dy as f32));
+        }
+        // The smart-filter mask follows the layer too (ADR 0011).
+        if let Some(m) = l.smart_filters.mask.as_mut() {
             *m = lumenply_render::transform_mask(m, &Affine::translate(dx as f32, dy as f32));
         }
     });
@@ -2375,6 +2406,10 @@ impl Command for RotateImage {
             if let Some(m) = l.mask.as_mut() {
                 *m = lumenply_render::transform_mask(m, &t);
             }
+            // The smart-filter mask follows the layer too (ADR 0011).
+            if let Some(m) = l.smart_filters.mask.as_mut() {
+                *m = lumenply_render::transform_mask(m, &t);
+            }
         });
         if q % 2 == 1 {
             std::mem::swap(&mut doc.width, &mut doc.height);
@@ -2420,6 +2455,10 @@ impl Command for FlipImage {
                 _ => {}
             }
             if let Some(m) = l.mask.as_mut() {
+                *m = lumenply_render::transform_mask(m, &t);
+            }
+            // The smart-filter mask follows the layer too (ADR 0011).
+            if let Some(m) = l.smart_filters.mask.as_mut() {
                 *m = lumenply_render::transform_mask(m, &t);
             }
         });

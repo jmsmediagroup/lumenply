@@ -85,6 +85,7 @@ pub mod locks;
 pub mod selection;
 pub mod selection_ops;
 pub mod shape;
+pub mod smart_filter;
 
 pub use adjust::{Adjustment, CompiledAdjustment, LevelsChannel};
 pub use channels::SavedSelection;
@@ -94,6 +95,7 @@ pub use guides::{Guide, Orientation};
 pub use locks::LayerLocks;
 pub use selection::{CombineOp, Selection};
 pub use shape::{CustomShape, ShapeGeometry, ShapeKind, ShapeLayer, ShapeParams, ShapeStroke, StrokeAlign};
+pub use smart_filter::{SmartFilter, SmartFilters};
 
 /// A pixel filter: destructive when applied to a layer, live when it is a
 /// [`LayerContent::Filter`] layer. Kernels live in `lumenply-render`.
@@ -608,6 +610,8 @@ pub struct Layer {
     /// Photoshop-style locks (transparency, pixels, position, all);
     /// enforced by the editor, see [`locks`].
     pub locks: LayerLocks,
+    /// Non-destructive filters on this layer's own pixels (ADR 0011).
+    pub smart_filters: SmartFilters,
 }
 
 impl Layer {
@@ -653,8 +657,17 @@ impl Layer {
     }
 
     /// Pixels to composite for this layer: own pixels, or a text or smart
-    /// layer's cache.
+    /// layer's cache — after its smart filters, when it has any.
     pub fn raster_store(&self) -> Option<&TileStore> {
+        if let Some(filtered) = self.smart_filters.filtered() {
+            return Some(filtered);
+        }
+        self.content_store()
+    }
+
+    /// The layer's own pixels before any smart filter: what
+    /// [`Layer::raster_store`] returns for a layer without smart filters.
+    pub fn content_store(&self) -> Option<&TileStore> {
         match &self.content {
             LayerContent::Pixel(s) => Some(s),
             LayerContent::Text(t) => t.cache.as_ref(),
@@ -731,6 +744,7 @@ impl Layer {
             content,
             collapsed: false,
             locks: LayerLocks::NONE,
+            smart_filters: SmartFilters::default(),
         }
     }
 

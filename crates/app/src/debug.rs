@@ -23,6 +23,7 @@ impl App {
             || self.debug_gradient(ctx, tok)
             || self.debug_select_mask(ctx, tok)
             || self.debug_brush(ctx, tok)
+            || self.debug_smart_filters(ctx, tok)
     }
 
     /// Selections and what acts on them (`select:...`):

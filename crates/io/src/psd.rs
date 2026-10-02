@@ -1082,6 +1082,23 @@ fn collect_records(
                     }
                     _ => unreachable!(),
                 };
+                // PSD smart filters are not written (ADR 0011): the layer
+                // carries its filtered pixels instead, without fill or
+                // shape settings that would make readers re-render it.
+                let sf_baked;
+                let store: &TileStore = if l.smart_filters.is_active() {
+                    warnings.push(format!(
+                        "layer '{}': smart filters were baked into its pixels",
+                        l.name
+                    ));
+                    blocks.clear();
+                    sf_baked = l.smart_filters.filtered().cloned().unwrap_or_else(|| {
+                        lumenply_render::smart_filters::bake(store, &l.smart_filters, canvas, false)
+                    });
+                    &sf_baked
+                } else {
+                    store
+                };
                 let (bounds, chans) = if deep {
                     match layer_planes16(store) {
                         Some((b, planes)) => (
@@ -1128,7 +1145,9 @@ fn collect_records(
                         blocks
                     },
                 ));
-                if let (LayerContent::Shape(_), Some(rec)) = (&l.content, out.last_mut()) {
+                if let (LayerContent::Shape(_), Some(rec), false) =
+                    (&l.content, out.last_mut(), l.smart_filters.is_active())
+                {
                     shape::mark_pixel_data_irrelevant(&mut rec.record);
                 }
             }
