@@ -642,6 +642,59 @@ impl Command for ReorderLayer {
 }
 
 /// Shift a pixel layer (and its mask) by whole pixels. Exact, no resampling.
+/// Move a layer to an arbitrary position: into the sibling list of
+/// `parent` (`None` = the root) at `index`, counted bottom-to-top and
+/// clamped. Drives drag-and-drop in the layer panel.
+pub struct RelocateLayer {
+    pub layer: LayerId,
+    pub parent: Option<LayerId>,
+    pub index: usize,
+}
+
+impl Command for RelocateLayer {
+    fn label(&self) -> String {
+        "Move layer".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        // A group may not be dropped into itself or its own subtree.
+        if let Some(p) = self.parent {
+            let inside = doc
+                .layer(self.layer)
+                .is_some_and(|l| l.id == p || l.children().is_some_and(|_| contains_id(l, p)));
+            if inside {
+                return Err(EditError::Invalid("cannot move a group into itself".into()));
+            }
+        }
+        let moved = doc
+            .remove_layer(self.layer)
+            .ok_or(EditError::NoLayer(self.layer))?;
+        let list = match self.parent {
+            None => Some(doc.layers_mut()),
+            Some(p) => match doc.layer_mut(p) {
+                // The parent may have vanished only if it sat inside the
+                // moved subtree, which the check above rejects.
+                Some(l) => l.children_mut(),
+                None => None,
+            },
+        };
+        let Some(list) = list else {
+            // Put it back where the stack is always valid: on top of root.
+            doc.layers_mut().push(moved);
+            return Err(EditError::NotGroup(self.parent.unwrap_or_default()));
+        };
+        let i = self.index.min(list.len());
+        list.insert(i, moved);
+        Ok(())
+    }
+}
+
+fn contains_id(l: &Layer, id: LayerId) -> bool {
+    l.id == id
+        || l.children()
+            .is_some_and(|c| c.iter().any(|ch| contains_id(ch, id)))
+}
+
 pub struct MoveLayer {
     pub layer: LayerId,
     pub dx: i32,
@@ -2045,6 +2098,92 @@ mod tests {
         let m = doc.layer(id).unwrap().mask.as_ref().unwrap();
         assert_eq!(m.value(450, 130), 0.0, "hidden block rotated with the image");
         assert_eq!(m.value(100, 500), 1.0, "rest of the canvas stays revealed");
+    }
+
+    #[test]
+    fn relocate_layer_moves_within_and_across_groups() {
+        let mut doc = Document::new(8, 8);
+        let a = doc.add_pixel_layer("a");
+        let b = doc.add_pixel_layer("b");
+        let g = doc.add_group("g");
+        let inner_id = doc.alloc_id();
+        doc.layer_mut(g)
+            .unwrap()
+            .children_mut()
+            .unwrap()
+            .push(Layer::pixel(inner_id, "inner"));
+
+        // Root reorder: move `b` to the bottom.
+        RelocateLayer {
+            layer: b,
+            parent: None,
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let order: Vec<&str> = doc.layers().iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(order, ["b", "a", "g"]);
+
+        // Into a group, on top of its children.
+        RelocateLayer {
+            layer: a,
+            parent: Some(g),
+            index: 99,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let kids: Vec<&str> = doc
+            .layer(g)
+            .unwrap()
+            .children()
+            .unwrap()
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect();
+        assert_eq!(kids, ["inner", "a"]);
+        assert_eq!(doc.layer_count(), 4);
+
+        // Out of the group, to the root bottom.
+        RelocateLayer {
+            layer: inner_id,
+            parent: None,
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.layers()[0].name, "inner");
+
+        // A group cannot be dropped into its own subtree.
+        assert!(matches!(
+            RelocateLayer {
+                layer: g,
+                parent: Some(g),
+                index: 0,
+            }
+            .apply(&mut doc),
+            Err(EditError::Invalid(_))
+        ));
+        assert_eq!(doc.layer_count(), 4, "nothing lost by the refusal");
+
+        // A missing layer or non-group parent errors cleanly.
+        assert!(RelocateLayer {
+            layer: 999,
+            parent: None,
+            index: 0
+        }
+        .apply(&mut doc)
+        .is_err());
+        assert!(matches!(
+            RelocateLayer {
+                layer: b,
+                parent: Some(inner_id),
+                index: 0
+            }
+            .apply(&mut doc),
+            Err(EditError::NotGroup(_))
+        ));
+        assert_eq!(doc.layer_count(), 4, "failed insert restored the layer");
+        assert!(doc.layer(b).is_some());
     }
 
     #[test]

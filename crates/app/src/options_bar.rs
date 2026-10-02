@@ -53,7 +53,6 @@ impl App {
                         }
                         Tool::Eyedropper => {
                             ui.label(RichText::new("Click to pick the brush colour from the image").weak());
-                            egui::color_picker::color_edit_button_rgb(ui, &mut self.brush_rgb);
                         }
                         Tool::Bucket | Tool::Wand => {
                             let mut tol = self.tolerance * 100.0;
@@ -67,7 +66,6 @@ impl App {
                             ui.checkbox(&mut self.contiguous, "Contiguous");
                             ui.checkbox(&mut self.sample_merged, "Sample all layers");
                             if self.tool == Tool::Bucket {
-                                egui::color_picker::color_edit_button_rgb(ui, &mut self.brush_rgb);
                                 let mut op = self.brush.color[3] * 100.0;
                                 ui.label("Opacity");
                                 if ui
@@ -98,7 +96,6 @@ impl App {
                                         .text("Size"),
                                 );
                                 ui.checkbox(&mut self.text_bold, "Bold");
-                                egui::color_picker::color_edit_button_rgb(ui, &mut self.brush_rgb);
                                 ui.label(RichText::new("Click on the canvas to add text").weak());
                             }
                         }
@@ -158,15 +155,12 @@ impl App {
                             {
                                 self.brush.color[3] = op / 100.0;
                             }
-                            if self.tool == Tool::Brush {
-                                egui::color_picker::color_edit_button_rgb(ui, &mut self.brush_rgb);
-                                if self.editing_mask {
-                                    if ui.small_button("White").clicked() {
-                                        self.brush_rgb = [1.0; 3];
-                                    }
-                                    if ui.small_button("Black").clicked() {
-                                        self.brush_rgb = [0.0; 3];
-                                    }
+                            if self.tool == Tool::Brush && self.editing_mask {
+                                if ui.small_button("White").clicked() {
+                                    self.brush_rgb = [1.0; 3];
+                                }
+                                if ui.small_button("Black").clicked() {
+                                    self.brush_rgb = [0.0; 3];
                                 }
                             }
                         }

@@ -56,7 +56,11 @@ impl App {
             m("Deselect", "Ctrl+D", "deselect"),
             m("Invert selection", "Ctrl+Shift+I", "invert-sel"),
             m("New layer", "", "new-layer"),
-            m("New layer from selection (layer via copy)", "", "layer-via-copy"),
+            m(
+                "New layer from selection (layer via copy)",
+                "Ctrl+J",
+                "layer-via-copy",
+            ),
             m("Group layers", "Ctrl+G", "group"),
             m("Ungroup", "", "ungroup"),
             m("Delete layer", "", "delete-layer"),

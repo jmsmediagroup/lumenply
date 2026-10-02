@@ -99,6 +99,7 @@ impl App {
             .resizable(false)
             .frame(egui::Frame::none().fill(PANEL).inner_margin(9.0))
             .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing.y = 5.0;
                 for tool in Tool::ALL {
                     // A breath between tool families: move / select / paint /
                     // type & sample / navigate.
@@ -139,8 +140,104 @@ impl App {
                         }
                     }
                 }
+                self.color_well(ui);
             });
     }
+
+    /// The foreground/background colour well at the foot of the rail:
+    /// two overlapping swatches (click to edit), a swap arrow in the free
+    /// top-right corner (X) and a mini reset in the bottom-left (D) —
+    /// the classic layout in one compact block.
+    fn color_well(&mut self, ui: &mut egui::Ui) {
+        ui.add_space((ui.available_height() - 48.0).max(4.0));
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 44.0), Sense::hover());
+        // Swap, in the free top-right corner.
+        let swap_rect = egui::Rect::from_min_size(rect.min + egui::vec2(28.0, 0.0), Vec2::splat(12.0));
+        let swap = ui.interact(swap_rect, ui.id().with("swap-colors"), Sense::click());
+        {
+            let p = ui.painter();
+            let st = Stroke::new(1.3, MUTED);
+            let c = swap_rect.center();
+            p.line_segment([c + egui::vec2(-5.0, 2.0), c + egui::vec2(5.0, 2.0)], st);
+            p.line_segment([c + egui::vec2(-5.0, -2.0), c + egui::vec2(5.0, -2.0)], st);
+            p.line_segment([c + egui::vec2(5.0, 2.0), c + egui::vec2(2.0, 5.0)], st);
+            p.line_segment([c + egui::vec2(-5.0, -2.0), c + egui::vec2(-2.0, -5.0)], st);
+        }
+        if swap.on_hover_text("Swap colours (X)").clicked() {
+            std::mem::swap(&mut self.brush_rgb, &mut self.bg_rgb);
+        }
+        // Reset to black over white, in the free bottom-left corner.
+        let reset_rect = egui::Rect::from_min_size(rect.min + egui::vec2(0.0, 32.0), Vec2::splat(12.0));
+        let reset = ui.interact(reset_rect, ui.id().with("reset-colors"), Sense::click());
+        {
+            let p = ui.painter();
+            let a = egui::Rect::from_min_size(reset_rect.min, Vec2::splat(7.0));
+            let b = egui::Rect::from_min_size(reset_rect.min + egui::vec2(4.0, 4.0), Vec2::splat(7.0));
+            p.rect_filled(b, 1.5, Color32::WHITE);
+            p.rect_stroke(b, 1.5, Stroke::new(1.0, MUTED));
+            p.rect_filled(a, 1.5, Color32::BLACK);
+            p.rect_stroke(a, 1.5, Stroke::new(1.0, MUTED));
+        }
+        if reset.on_hover_text("Default colours (D)").clicked() {
+            self.brush_rgb = [0.0; 3];
+            self.bg_rgb = [1.0; 3];
+        }
+        let to32 = |c: [f32; 3]| {
+            Color32::from_rgb(
+                (c[0] * 255.0 + 0.5) as u8,
+                (c[1] * 255.0 + 0.5) as u8,
+                (c[2] * 255.0 + 0.5) as u8,
+            )
+        };
+        let bg_rect = egui::Rect::from_min_size(rect.min + egui::vec2(14.0, 18.0), Vec2::splat(26.0));
+        let fg_rect = egui::Rect::from_min_size(rect.min + egui::vec2(0.0, 2.0), Vec2::splat(26.0));
+        let bg_resp = ui.interact(bg_rect, ui.id().with("bg-well"), Sense::click());
+        let p = ui.painter();
+        p.rect_filled(bg_rect, 4.0, to32(self.bg_rgb));
+        p.rect_stroke(bg_rect, 4.0, Stroke::new(1.0, LINE));
+        let fg_resp = ui.interact(fg_rect, ui.id().with("fg-well"), Sense::click());
+        p.rect_filled(fg_rect, 4.0, to32(self.brush_rgb));
+        p.rect_stroke(fg_rect.expand(1.0), 5.0, Stroke::new(2.0, PANEL));
+        p.rect_stroke(fg_rect, 4.0, Stroke::new(1.0, LINE));
+        color_popup(
+            ui,
+            &fg_resp.on_hover_text("Brush colour"),
+            "fg-pick",
+            &mut self.brush_rgb,
+        );
+        color_popup(
+            ui,
+            &bg_resp.on_hover_text("Background colour"),
+            "bg-pick",
+            &mut self.bg_rgb,
+        );
+    }
+}
+
+/// A colour-picker popup anchored to a painted swatch.
+fn color_popup(ui: &mut egui::Ui, resp: &egui::Response, id: &str, rgb: &mut [f32; 3]) {
+    let popup = ui.make_persistent_id(id);
+    if resp.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(popup));
+    }
+    egui::popup::popup_above_or_below_widget(
+        ui,
+        popup,
+        resp,
+        egui::AboveOrBelow::Above,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        |ui| {
+            ui.set_min_width(220.0);
+            let mut c = Color32::from_rgb(
+                (rgb[0] * 255.0 + 0.5) as u8,
+                (rgb[1] * 255.0 + 0.5) as u8,
+                (rgb[2] * 255.0 + 0.5) as u8,
+            );
+            if egui::color_picker::color_picker_color32(ui, &mut c, egui::color_picker::Alpha::Opaque) {
+                *rgb = [c.r() as f32 / 255.0, c.g() as f32 / 255.0, c.b() as f32 / 255.0];
+            }
+        },
+    );
 }
 
 pub(crate) fn draw_icon(p: &egui::Painter, r: egui::Rect, tool: Tool, c: Color32) {

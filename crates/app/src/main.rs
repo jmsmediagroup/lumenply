@@ -58,6 +58,35 @@ fn main() -> Result<(), eframe::Error> {
 }
 
 impl App {
+    /// Files dragged onto the window: projects open, images land as layers
+    /// in the current document (undoable), with a hint while hovering.
+    fn handle_file_drop(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+            let screen = ctx.screen_rect();
+            let p = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("drop-hint"),
+            ));
+            p.rect_filled(screen, 0.0, Color32::from_black_alpha(120));
+            p.text(
+                screen.center(),
+                Align2::CENTER_CENTER,
+                "Drop to open — images are placed as a new layer",
+                FontId::proportional(18.0),
+                TEXT,
+            );
+        }
+        let dropped = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()));
+        if let Some(path) = dropped {
+            let p = path.to_string_lossy().into_owned();
+            if is_image_path(&p) && self.editor.doc().layer_count() > 0 {
+                self.place_image(&p);
+            } else {
+                self.open_path(&p);
+            }
+        }
+    }
+
     /// `--screenshot`: wait a few frames for everything to upload, ask the
     /// backend for a frame grab, save it, quit. Lets the UI be inspected
     /// without macOS screen-recording permission.
@@ -187,6 +216,10 @@ struct App {
     histogram: [u32; histogram::BINS],
     /// User preferences (undo caps, canvas colour, autosave interval).
     prefs: session::Prefs,
+    /// Layer row being dragged to a new position in the panel.
+    layer_drag: Option<LayerId>,
+    /// Last window title pushed to the OS, to avoid resending each frame.
+    last_title: String,
     /// Debug: save a screenshot of the window here after a few frames,
     /// then exit (`--screenshot path.png`). Used to verify the UI headlessly.
     shot: Option<(PathBuf, u32)>,
@@ -294,6 +327,8 @@ impl App {
             recent: session::load_recent(),
             histogram: [0; histogram::BINS],
             prefs: session::Prefs::load(),
+            layer_drag: None,
+            last_title: String::new(),
             shot: args
                 .iter()
                 .position(|a| a == "--screenshot")
@@ -592,7 +627,12 @@ impl App {
             // act on the document underneath the live transform preview.
             return;
         }
-        let (redo, invert, undo, all, none, save, open, xform, group) = ctx.input_mut(|i| {
+        // Esc is "get me out": drop the selection (the polygonal lasso and
+        // free transform consume it first for their own cancel).
+        if self.editor.doc().selection.is_some() && ctx.input_mut(|i| i.consume_key(M::NONE, Key::Escape)) {
+            self.run(&SetSelection { selection: None });
+        }
+        let (redo, invert, undo, all, none, save, open, xform, group, copy_layer) = ctx.input_mut(|i| {
             (
                 i.consume_key(M::COMMAND | M::SHIFT, Key::Z) || i.consume_key(M::COMMAND, Key::Y),
                 i.consume_key(M::COMMAND | M::SHIFT, Key::I),
@@ -603,8 +643,12 @@ impl App {
                 i.consume_key(M::COMMAND, Key::O),
                 i.consume_key(M::COMMAND, Key::T),
                 i.consume_key(M::COMMAND, Key::G),
+                i.consume_key(M::COMMAND, Key::J),
             )
         });
+        if copy_layer {
+            self.run_menu_action("layer-via-copy");
+        }
         if redo {
             self.redo();
         }
@@ -649,9 +693,9 @@ impl App {
         if clear && self.active_is_pixel() {
             self.clear_active();
         }
-        let (tool, bigger, smaller, fit, actual) = ctx.input(|i| {
+        let (tool, bigger, smaller, fit, actual, swap_colors, default_colors) = ctx.input(|i| {
             if i.modifiers.command || i.modifiers.alt {
-                return (None, false, false, false, false);
+                return (None, false, false, false, false, false, false);
             }
             let tool = if i.key_pressed(Key::V) {
                 Some(Tool::Move)
@@ -696,8 +740,17 @@ impl App {
                 i.key_pressed(Key::OpenBracket),
                 i.key_pressed(Key::Num0),
                 i.key_pressed(Key::Num1),
+                i.key_pressed(Key::X),
+                i.key_pressed(Key::D),
             )
         });
+        if swap_colors {
+            std::mem::swap(&mut self.brush_rgb, &mut self.bg_rgb);
+        }
+        if default_colors {
+            self.brush_rgb = [0.0; 3];
+            self.bg_rgb = [1.0; 3];
+        }
         if let Some(t) = tool {
             self.tool = t;
         }
@@ -744,6 +797,7 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_file_drop(ctx);
         // Intercept closing the window while there are unsaved changes.
         if ctx.input(|i| i.viewport().close_requested())
             && !self.allow_close
@@ -771,6 +825,21 @@ impl eframe::App for App {
         if self.dirty {
             self.refresh(ctx);
             ctx.request_repaint();
+        }
+        let name = self
+            .path
+            .as_ref()
+            .map(|p| file_name(&p.to_string_lossy()))
+            .unwrap_or_else(|| "Untitled".into());
+        let unsaved = if self.editor.history().len() != self.saved_rev {
+            " •"
+        } else {
+            ""
+        };
+        let title = format!("{name}{unsaved} — NGE");
+        if self.last_title != title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.last_title = title;
         }
         self.debug_screenshot(ctx);
     }

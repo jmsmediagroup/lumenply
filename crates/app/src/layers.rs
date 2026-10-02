@@ -11,6 +11,8 @@ pub(crate) enum Kind {
 
 pub(crate) struct LayerRow {
     id: LayerId,
+    /// Group this row sits in (`None` = root), for drag-and-drop targets.
+    parent: Option<LayerId>,
     name: String,
     visible: bool,
     opacity: f32,
@@ -25,7 +27,7 @@ pub(crate) struct LayerRow {
 
 impl App {
     pub(crate) fn layer_rows(&self) -> Vec<LayerRow> {
-        fn walk(layers: &[Layer], depth: usize, out: &mut Vec<LayerRow>) {
+        fn walk(layers: &[Layer], parent: Option<LayerId>, depth: usize, out: &mut Vec<LayerRow>) {
             for l in layers.iter().rev() {
                 let (kind, chip) = match &l.content {
                     LayerContent::Pixel(_) => (Kind::Pixel, None),
@@ -46,6 +48,7 @@ impl App {
                 };
                 out.push(LayerRow {
                     id: l.id,
+                    parent,
                     name: l.name.clone(),
                     visible: l.visible,
                     opacity: l.opacity,
@@ -57,12 +60,12 @@ impl App {
                     collapsed: l.collapsed,
                 });
                 if let (Some(children), false) = (l.children(), l.collapsed) {
-                    walk(children, depth + 1, out);
+                    walk(children, Some(l.id), depth + 1, out);
                 }
             }
         }
         let mut rows = Vec::new();
-        walk(self.editor.doc().layers(), 0, &mut rows);
+        walk(self.editor.doc().layers(), None, 0, &mut rows);
         rows
     }
 
@@ -79,6 +82,8 @@ impl App {
         let mut rename_cancel = false;
         let mut mask_click = None;
         let mut ctx_action: Option<(&'static str, LayerId)> = None;
+        let mut drop_action: Option<(LayerId, Option<LayerId>, usize)> = None;
+        let mut row_rects: Vec<egui::Rect> = Vec::new();
         let mut renaming = self.renaming.take();
 
         egui::ScrollArea::vertical()
@@ -90,10 +95,15 @@ impl App {
                     let selected = self.selected.contains(&row.id);
                     let is_active = Some(row.id) == self.active;
                     let w = ui.available_width();
-                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 38.0), Sense::click());
+                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 38.0), Sense::click_and_drag());
+                    row_rects.push(rect);
+                    if resp.drag_started() {
+                        self.layer_drag = Some(row.id);
+                        self.set_active(Some(row.id));
+                    }
                     let p = ui.painter();
                     if is_active {
-                        p.rect_filled(rect, 6.0, RAISED);
+                        p.rect_filled(rect, 6.0, ACCENT_TINT);
                         p.rect_stroke(rect.shrink(1.0), 6.0, Stroke::new(1.5, ACCENT));
                     } else if selected {
                         p.rect_filled(rect, 6.0, RAISED);
@@ -317,6 +327,57 @@ impl App {
                         }
                     }
                 }
+                // Drag-to-reorder: an accent insertion line follows the
+                // pointer; releasing moves the layer there.
+                if let Some(dragged) = self.layer_drag {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    let pointer = ui.ctx().pointer_latest_pos();
+                    let released = ui.ctx().input(|i| i.pointer.any_released());
+                    if let (Some(p), false) = (pointer, row_rects.is_empty()) {
+                        let mut slot = row_rects.len();
+                        for (i, r) in row_rects.iter().enumerate() {
+                            if p.y < r.center().y {
+                                slot = i;
+                                break;
+                            }
+                        }
+                        let y = if slot < row_rects.len() {
+                            row_rects[slot].top() - 1.0
+                        } else {
+                            row_rects[row_rects.len() - 1].bottom() + 1.0
+                        };
+                        let x0 = row_rects[0].left();
+                        let x1 = row_rects[0].right();
+                        ui.painter().hline(x0..=x1, y, Stroke::new(2.0, ACCENT));
+                        if released {
+                            let target = rows.get(slot).map(|r| (r.parent, r.id));
+                            drop_action = Some(match target {
+                                // Above the row below the line, in that row's group.
+                                Some((parent, below)) => {
+                                    let doc = self.editor.doc();
+                                    let list = match parent {
+                                        None => Some(doc.layers()),
+                                        Some(g) => doc.layer(g).and_then(|l| l.children()),
+                                    };
+                                    let pos = list
+                                        .and_then(|l| l.iter().position(|x| x.id == below))
+                                        .map_or(0, |e| e + 1);
+                                    // Removal shifts the slot when moving
+                                    // upward within the same list.
+                                    let adjust = list
+                                        .and_then(|l| l.iter().position(|x| x.id == dragged))
+                                        .is_some_and(|m| m < pos);
+                                    (dragged, parent, pos - usize::from(adjust))
+                                }
+                                // Below everything: the bottom of the root.
+                                None => (dragged, None, 0),
+                            });
+                        }
+                    }
+                    if released {
+                        self.layer_drag = None;
+                    }
+                }
             });
 
         if rename_cancel {
@@ -352,6 +413,9 @@ impl App {
                 self.set_active(Some(id));
                 self.editing_mask = true;
             }
+        }
+        if let Some((layer, parent, index)) = drop_action {
+            self.run(&RelocateLayer { layer, parent, index });
         }
         if let Some((act, id)) = ctx_action {
             // Context-menu actions act on the clicked row.

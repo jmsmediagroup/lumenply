@@ -19,6 +19,8 @@ pub(crate) const MUTED: Color32 = Color32::from_rgb(0xA7, 0xAE, 0xB8);
 pub(crate) const ACCENT: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
 /// Text drawn on top of the accent.
 pub(crate) const ACCENT_INK: Color32 = Color32::from_rgb(0x1A, 0x13, 0x00);
+/// The active layer row's fill: RAISED warmed faintly toward the accent.
+pub(crate) const ACCENT_TINT: Color32 = Color32::from_rgb(0x41, 0x3A, 0x2D);
 /// Live (non-destructive) filter layers.
 pub(crate) const LIVE_FILTER: Color32 = Color32::from_rgb(0x9F, 0xC9, 0xFF);
 

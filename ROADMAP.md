@@ -143,7 +143,8 @@ None of these could be tested in the container.
 - [x] Autosave every 2 min to ~/.nge (atomic, off-thread), crash-recovery prompt
       at startup, recent-files menu
 - [x] Unsaved-changes prompt on close
-- [ ] Docking panels (egui_dock); drag-to-reorder layers
+- [ ] Docking panels (egui_dock)
+- [x] Drag-to-reorder layers (across groups, with an insertion line)
 - [x] Layer context menu (rename, reorder, flip, mask, ungroup, delete)
 - [x] Preferences (Edit menu, persisted to ~/.nge/prefs.json): canvas surround
       colour, undo step and memory caps, autosave interval
