@@ -57,6 +57,11 @@ pub struct PatchHeal {
 }
 
 impl PatchHeal {
+    /// The pixels the patch changes, for previews.
+    pub fn area(&self, doc: &Document) -> Option<Rect> {
+        self.hole(doc).ok()
+    }
+
     /// The patched area's bounds, before the patch is applied.
     fn hole(&self, doc: &Document) -> EditResult<Rect> {
         let none = || EditError::Invalid("draw around the area to patch first".into());
@@ -151,8 +156,15 @@ impl Command for PatchHeal {
         }
     }
 
+    /// A Destination patch moves the selection, whose outline only a full
+    /// redraw refreshes, so it reports no bounded area (see
+    /// [`PatchHeal::area`] for the pixels it changes).
     fn affected(&self, doc: &Document) -> Option<Rect> {
-        self.hole(doc).ok()
+        if self.destination {
+            None
+        } else {
+            self.area(doc)
+        }
     }
 
     fn apply(&self, doc: &mut Document) -> EditResult {
@@ -496,6 +508,17 @@ pub struct ContentAwareMove {
 }
 
 impl ContentAwareMove {
+    /// The pixels the move changes (where they leave and where they land),
+    /// for previews.
+    pub fn area(&self, doc: &Document) -> Option<Rect> {
+        let hole = ContentAwareMove::hole(doc).ok()?;
+        let (dx, dy) = self.offset;
+        Some(
+            hole.union(&Rect::new(hole.x + dx, hole.y + dy, hole.w, hole.h))
+                .intersect(&doc.canvas()),
+        )
+    }
+
     fn hole(doc: &Document) -> EditResult<Rect> {
         let none = || EditError::Invalid("select what to move first".into());
         let hole = doc
@@ -519,13 +542,10 @@ impl Command for ContentAwareMove {
         "Content-aware move".into()
     }
 
-    fn affected(&self, doc: &Document) -> Option<Rect> {
-        let hole = ContentAwareMove::hole(doc).ok()?;
-        let (dx, dy) = self.offset;
-        Some(
-            hole.union(&Rect::new(hole.x + dx, hole.y + dy, hole.w, hole.h))
-                .intersect(&doc.canvas()),
-        )
+    /// The selection moves too, and only a full redraw refreshes its
+    /// outline: no bounded area (see [`ContentAwareMove::area`]).
+    fn affected(&self, _doc: &Document) -> Option<Rect> {
+        None
     }
 
     fn apply(&self, doc: &mut Document) -> EditResult {
@@ -930,7 +950,8 @@ mod tests {
             content_aware: false,
             destination: true,
         };
-        assert_eq!(patch.affected(ed.doc()), Some(Rect::new(16, 10, 16, 16)));
+        assert_eq!(patch.area(ed.doc()), Some(Rect::new(16, 10, 16, 16)));
+        assert_eq!(patch.affected(ed.doc()), None, "the selection outline moves");
         ed.execute(&patch).unwrap();
         let px = ed.doc().layer(id).unwrap().pixels().unwrap();
         let worst = stripe_error(px);
@@ -1148,7 +1169,8 @@ mod tests {
             fill: true,
             adapt: false,
         };
-        assert_eq!(mv.affected(ed.doc()), Some(Rect::new(20, 14, 32, 8)));
+        assert_eq!(mv.area(ed.doc()), Some(Rect::new(20, 14, 32, 8)));
+        assert_eq!(mv.affected(ed.doc()), None, "the selection outline moves");
         ed.execute(&mv).unwrap();
         assert_eq!(ed.history().last().copied(), Some("Content-aware move"));
         let doc = ed.doc();

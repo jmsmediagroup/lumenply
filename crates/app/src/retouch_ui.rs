@@ -622,6 +622,22 @@ impl App {
         }
     }
 
+    /// The pixels a Patch or Move drag changes at `offset`, for previews.
+    fn drag_area(&self, layer: LayerId, offset: (i32, i32)) -> Option<Rect> {
+        let doc = self.editor.doc();
+        if self.retouch.heal_mode == HealMode::Move {
+            ContentAwareMove {
+                layer,
+                offset,
+                fill: false,
+                adapt: false,
+            }
+            .area(doc)
+        } else {
+            self.patch_command(layer, offset, false).area(doc)
+        }
+    }
+
     /// Patch and Move: a drag outside the selection draws a freehand lasso
     /// (it becomes the selection); a drag inside it carries the selection,
     /// previewing the result, and the release applies it.
@@ -682,15 +698,13 @@ impl App {
                     let off = ((q.0 - pd.from.0).round() as i32, (q.1 - pd.from.1).round() as i32);
                     if off != pd.offset {
                         // Repaint where the last preview drew as well.
-                        let was = self
-                            .drag_command(layer, pd.offset, false)
-                            .affected(self.editor.doc());
+                        let was = self.drag_area(layer, pd.offset);
                         pd.offset = off;
                         self.retouch.patch_drag = Some(pd);
                         let cmd = self.drag_command(layer, off, false);
                         let mut preview = self.editor.doc().clone();
                         if cmd.apply(&mut preview).is_ok() {
-                            let area = match (cmd.affected(self.editor.doc()), was) {
+                            let area = match (self.drag_area(layer, off), was) {
                                 (Some(a), Some(b)) => Some(a.union(&b)),
                                 _ => None,
                             };
@@ -998,7 +1012,7 @@ impl App {
                     let cmd = self.drag_command(layer, offset, false);
                     let mut preview = self.editor.doc().clone();
                     if cmd.apply(&mut preview).is_ok() {
-                        let area = cmd.affected(self.editor.doc());
+                        let area = self.drag_area(layer, offset);
                         self.refresh(ctx);
                         self.preview(ctx, &preview, area);
                     }
@@ -1342,6 +1356,13 @@ mod tests {
         assert!(
             (behind.r - 0.2).abs() < 1e-3 && (behind.b - 0.4).abs() < 1e-3,
             "{behind:?}"
+        );
+        // The marching ants follow the selection to its new place.
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.sel_points.is_empty());
+        assert!(
+            app.sel_points.iter().all(|&(x, y)| x >= 26 && y >= 24),
+            "stale outline"
         );
     }
 
