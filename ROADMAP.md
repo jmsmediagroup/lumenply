@@ -143,6 +143,11 @@ None of these could be tested in the container.
       (render::develop, hue-preserving tone on perceptual luminance, local
       highlights/shadows from a blurred log-luminance base). Still open:
       re-opening the develop later (a smart "Camera Raw filter" layer)
+- [x] Export As (File ▸ Export, palette): PNG / JPEG / lossless WebP, quality,
+      transparency (or onto white), output size in px or % with Lanczos-3
+      resampling in linear light (render::resample), a preview of the encoded
+      result (JPEG decoded back, so artefacts show) and its real file size,
+      encoded on a worker thread
 - [ ] AVIF/HEIF
 - [~] PSD: 16-bit import (raw, RLE and ZIP ± prediction channels) and
       export (raw channels; Export menu), full precision both ways and

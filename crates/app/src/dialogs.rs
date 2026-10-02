@@ -132,7 +132,7 @@ impl App {
 
     /// Native save panel for one format; returns the chosen path with its
     /// extension enforced. `exts[0]` is the default.
-    fn pick_save_path(&self, title: &str, what: &str, exts: &[&str]) -> Option<String> {
+    pub(crate) fn pick_save_path(&self, title: &str, what: &str, exts: &[&str]) -> Option<String> {
         if self.no_doc {
             return None; // nothing to save
         }

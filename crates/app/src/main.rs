@@ -31,6 +31,7 @@ mod crop;
 mod debug;
 mod demo;
 mod dialogs;
+mod export_as;
 mod guides;
 mod histogram;
 mod history;
@@ -266,6 +267,8 @@ struct App {
     text_new_armed: bool,
     /// Quick Selection (the Wand tool's sibling mode) and its stroke.
     quick: quick_select_tool::QuickSelectState,
+    /// File ▸ Export ▸ Export As…, while open (it replaces the editor UI).
+    export_as: Option<Box<export_as::ExportAsState>>,
     /// Filter > Liquify's workspace, while open (it replaces the editor UI).
     liquify: Option<Box<liquify::LiquifyState>>,
     /// The Camera Raw develop workspace, while a RAW file is being opened.
@@ -441,6 +444,7 @@ impl App {
             text_align: TextAlign::Left,
             text_new_armed: false,
             liquify: None,
+            export_as: None,
             quick: Default::default(),
             camera_raw: None,
             clone_source: None,
@@ -1284,6 +1288,11 @@ impl App {
         }
         if self.camera_raw.is_some() {
             self.camera_raw_ui(ctx);
+            self.debug_screenshot(ctx);
+            return;
+        }
+        if self.export_as.is_some() {
+            self.export_as_ui(ctx);
             self.debug_screenshot(ctx);
             return;
         }

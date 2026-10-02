@@ -15,6 +15,7 @@ impl App {
             || self.debug_start(ctx, tok)
             || self.debug_liquify(ctx, tok)
             || self.debug_camera_raw(ctx, tok)
+            || self.debug_export_as(ctx, tok)
             || self.debug_select(tok)
             || self.debug_crop_guides(ctx, tok)
             || self.debug_adjust(ctx, tok)

@@ -199,7 +199,17 @@ fn write_png_srgb(
     data: &[u8],
 ) -> Result<(), IoError> {
     let file = std::fs::File::create(path)?;
-    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    png_srgb_into(std::io::BufWriter::new(file), width, height, depth, data)
+}
+
+fn png_srgb_into(
+    out: impl std::io::Write,
+    width: u32,
+    height: u32,
+    depth: png::BitDepth,
+    data: &[u8],
+) -> Result<(), IoError> {
+    let mut enc = png::Encoder::new(out, width, height);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(depth);
     enc.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
@@ -235,10 +245,11 @@ pub fn save_16bit(path: impl AsRef<Path>, raster: &Raster) -> Result<(), IoError
     write_png_srgb(path, raster.width, raster.height, png::BitDepth::Sixteen, &bytes)
 }
 
-/// Save a raster as an 8-bit sRGB PNG with straight alpha, tagged as sRGB.
-pub fn save_png(path: impl AsRef<Path>, raster: &Raster) -> Result<(), IoError> {
+/// 8-bit sRGB bytes with straight alpha; `opaque` composites over white.
+fn rgba8(raster: &Raster, opaque: bool) -> Vec<u8> {
     let mut buf = Vec::with_capacity(raster.pixels.len() * 4);
     for p in &raster.pixels {
+        let p = if opaque { p.over(Rgba::WHITE) } else { *p };
         let [r, g, b, a] = p.to_straight();
         buf.extend_from_slice(&[
             linear_to_srgb(r),
@@ -247,13 +258,46 @@ pub fn save_png(path: impl AsRef<Path>, raster: &Raster) -> Result<(), IoError> 
             (a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
         ]);
     }
+    buf
+}
+
+/// Save a raster as an 8-bit sRGB PNG with straight alpha, tagged as sRGB.
+pub fn save_png(path: impl AsRef<Path>, raster: &Raster) -> Result<(), IoError> {
     write_png_srgb(
         path.as_ref(),
         raster.width,
         raster.height,
         png::BitDepth::Eight,
-        &buf,
+        &rgba8(raster, false),
     )
+}
+
+/// An 8-bit sRGB PNG (tagged sRGB) in memory; `transparency` false
+/// composites over white.
+pub fn encode_png(raster: &Raster, transparency: bool) -> Result<Vec<u8>, IoError> {
+    let mut out = Vec::new();
+    png_srgb_into(
+        &mut out,
+        raster.width,
+        raster.height,
+        png::BitDepth::Eight,
+        &rgba8(raster, !transparency),
+    )?;
+    Ok(out)
+}
+
+/// A lossless WebP in memory; `transparency` false composites over white.
+pub fn encode_webp(raster: &Raster, transparency: bool) -> Result<Vec<u8>, IoError> {
+    let mut out = Vec::new();
+    image_webp::WebPEncoder::new(&mut out)
+        .encode(
+            &rgba8(raster, !transparency),
+            raster.width,
+            raster.height,
+            image_webp::ColorType::Rgba8,
+        )
+        .map_err(|e| IoError::Codec(e.to_string()))?;
+    Ok(out)
 }
 
 /// Splice an ICC profile into a JPEG stream as an APP2 segment, placed
@@ -284,6 +328,12 @@ fn jpeg_with_icc(jpeg: &[u8], icc: &[u8]) -> Vec<u8> {
 /// Save a raster as JPEG (no alpha: composited over white), quality 1–100,
 /// with an sRGB ICC profile embedded.
 pub fn save_jpeg(path: impl AsRef<Path>, raster: &Raster, quality: u8) -> Result<(), IoError> {
+    std::fs::write(path, encode_jpeg(raster, quality)?)?;
+    Ok(())
+}
+
+/// The JPEG [`save_jpeg`] writes, in memory.
+pub fn encode_jpeg(raster: &Raster, quality: u8) -> Result<Vec<u8>, IoError> {
     let mut buf = Vec::with_capacity(raster.pixels.len() * 3);
     for p in &raster.pixels {
         let over_white = p.over(Rgba::WHITE);
@@ -295,8 +345,57 @@ pub fn save_jpeg(path: impl AsRef<Path>, raster: &Raster, quality: u8) -> Result
     let mut encoded = Vec::new();
     let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, quality.clamp(1, 100));
     img.write_with_encoder(enc)?;
-    std::fs::write(path, jpeg_with_icc(&encoded, SRGB_ICC))?;
-    Ok(())
+    Ok(jpeg_with_icc(&encoded, SRGB_ICC))
+}
+
+#[cfg(test)]
+mod encode_tests {
+    use super::*;
+
+    fn sample() -> Raster {
+        let mut r = Raster::new(9, 6);
+        for (i, p) in r.pixels.iter_mut().enumerate() {
+            let a = if i % 4 == 0 { 0.5 } else { 1.0 };
+            *p = Rgba::from_straight(srgb_to_linear((i * 25 % 256) as u8), 0.2, 0.7, a);
+        }
+        r
+    }
+
+    #[test]
+    fn png_and_webp_encode_losslessly_in_memory() {
+        let r = sample();
+        let want = rgba8(&r, false);
+        let png = encode_png(&r, true).unwrap();
+        let back = image::load_from_memory(&png).unwrap().to_rgba8();
+        assert_eq!(back.into_raw(), want);
+        let webp = encode_webp(&r, true).unwrap();
+        assert_eq!(&webp[..4], b"RIFF");
+        assert_eq!(&webp[8..12], b"WEBP");
+        let mut dec = image_webp::WebPDecoder::new(std::io::Cursor::new(&webp)).unwrap();
+        assert_eq!(dec.dimensions(), (9, 6));
+        let mut buf = vec![0u8; dec.output_buffer_size().unwrap()];
+        dec.read_image(&mut buf).unwrap();
+        assert_eq!(buf, want);
+    }
+
+    #[test]
+    fn without_transparency_pixels_sit_on_white() {
+        let mut r = Raster::new(1, 1);
+        r.pixels[0] = Rgba::from_straight(0.0, 0.0, 0.0, 0.5);
+        let png = encode_png(&r, false).unwrap();
+        let px = image::load_from_memory(&png).unwrap().to_rgba8().into_raw();
+        // Half black over white in linear light is linear 0.5 = sRGB 188.
+        assert_eq!(px, vec![188, 188, 188, 255]);
+    }
+
+    #[test]
+    fn jpeg_in_memory_carries_its_srgb_profile() {
+        let jpg = encode_jpeg(&sample(), 90).unwrap();
+        assert_eq!(&jpg[..2], &[0xFF, 0xD8]);
+        assert!(jpg.windows(12).any(|w| w == b"ICC_PROFILE\0"));
+        let lo = encode_jpeg(&sample(), 10).unwrap();
+        assert!(lo.len() < jpg.len());
+    }
 }
 
 #[cfg(test)]

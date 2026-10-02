@@ -117,6 +117,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Show or hide the history strip", "toggle-history"),
     ("About Lumenply", "about"),
     ("Liquify...", "liquify"),
+    ("Export As...", "export-as"),
     ("Duplicate layer", "duplicate-layer"),
     ("Merge down (group, clipping mask)", "merge-down"),
     ("Merge visible", "merge-visible"),
@@ -680,6 +681,7 @@ impl App {
             "prefs" => self.dialog = Some(Dialog::Preferences(self.prefs.clone(), None)),
             "about" => self.dialog = Some(Dialog::About),
             "liquify" => self.open_liquify(),
+            "export-as" => self.open_export_as(),
             "zoom-in" => self.view_cmd = Some(ViewCmd::ZoomIn),
             "zoom-out" => self.view_cmd = Some(ViewCmd::ZoomOut),
             "toggle-history" => {
@@ -738,7 +740,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 103); // + liquify, layer ops, locks, align, select modify, fill, view aids, fill layers
+        assert_eq!(n, 104); // + export as
     }
 
     #[test]

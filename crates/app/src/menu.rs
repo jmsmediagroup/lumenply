@@ -369,6 +369,7 @@ impl App {
     /// Every export format, grouped by what survives: File ▸ Export and
     /// the Export button both show this list.
     fn export_items(&mut self, ui: &mut egui::Ui) {
+        self.act(ui, "Export As...", "export-as");
         menu_heading(ui, "FLATTENED IMAGE");
         self.act(ui, "PNG...", "export-png");
         self.act(ui, "JPEG...", "export-jpeg");
