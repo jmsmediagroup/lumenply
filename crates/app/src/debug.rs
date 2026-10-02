@@ -21,6 +21,7 @@ impl App {
             || self.debug_adjust(ctx, tok)
             || self.debug_shape(ctx, tok)
             || self.debug_gradient(ctx, tok)
+            || self.debug_select_mask(ctx, tok)
     }
 
     /// Selections and what acts on them (`select:...`):

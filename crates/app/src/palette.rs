@@ -171,6 +171,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("New fill layer: solid color", "fill-solid"),
     ("New fill layer: gradient", "fill-gradient"),
     ("New shape layer from path", "shape-from-path"),
+    ("Select and Mask...", "select-mask"),
 ];
 
 impl App {
@@ -591,6 +592,7 @@ impl App {
             }
             "fill-dialog" | "content-aware" if !pixel => need_pixel,
             "content-aware" if !selection => Some("Select the area to fill first"),
+            "select-mask" if !selection => need_selection,
             _ => None,
         }
     }
@@ -625,6 +627,7 @@ impl App {
             "actual" => (M::NONE, Key::Num1),
             "quick-mask" => (M::NONE, Key::Q),
             "palette" => (M::COMMAND, Key::K),
+            "select-mask" => (M::COMMAND | M::ALT, Key::R),
             _ => return String::new(),
         };
         shortcut_text(ctx, m, k)
@@ -844,6 +847,7 @@ impl App {
                 let margin = self.content_aware_margin();
                 self.dialog = Some(Dialog::Fill(aware, margin, 0));
             }
+            "select-mask" => self.open_select_mask(),
             aid if guides::VIEW_ACTIONS.contains(&aid) => self.run_view_aid(aid),
             filter if filter.starts_with("filter-") => {
                 match filter_presets().into_iter().find(|(_, f)| filter_id(f) == filter) {
@@ -871,7 +875,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 118); // + cut, copy, copy merged, paste, paste in place
+        assert_eq!(n, 119); // + Select and Mask
     }
 
     #[test]

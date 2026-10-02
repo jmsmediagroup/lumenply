@@ -21,6 +21,7 @@ pub mod liquify;
 pub mod locks;
 pub mod paste;
 pub mod quick_select;
+pub mod refine;
 mod select_ops;
 pub mod shape_cmds;
 pub mod smart_contents;
