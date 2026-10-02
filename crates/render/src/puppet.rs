@@ -6,7 +6,11 @@
 //! with alpha above [`COVER_ALPHA`] is kept and split into two triangles
 //! (diagonals alternate, so the mesh has no preferred direction). Every
 //! opaque pixel therefore lies inside the mesh, with an Expansion-wide
-//! transparent margin around it. Density sets the cell size.
+//! transparent margin around it. Density sets the cell size. To follow the
+//! outline rather than whole-cell stairs, edge cells drop a triangle that
+//! holds nothing (picking the diagonal that allows it), and outline
+//! vertices are then pulled in to Expansion + ½ px from the shape wherever
+//! a check shows no opaque pixel or margin would leave the mesh.
 //!
 //! **Deformation.** Igarashi, Moscovich & Hughes (2005), "As-rigid-as-
 //! possible shape manipulation", in its two closed-form steps:
@@ -222,6 +226,48 @@ impl OpaqueMap {
         OpaqueMap { area, bits }
     }
 
+    /// The nearest point of any opaque pixel's square to `p` within `r`,
+    /// with its distance.
+    fn nearest(&self, p: Pt, r: f64) -> Option<(f64, Pt)> {
+        let mut best: Option<(f64, Pt)> = None;
+        let x0 = ((p[0] - r).floor() as i32).max(self.area.x);
+        let x1 = ((p[0] + r).ceil() as i32).min(self.area.right() - 1);
+        let y0 = ((p[1] - r).floor() as i32).max(self.area.y);
+        let y1 = ((p[1] + r).ceil() as i32).min(self.area.bottom() - 1);
+        for y in y0..=y1 {
+            let row = (y - self.area.y) as usize * self.area.w as usize;
+            for x in x0..=x1 {
+                if !self.bits[row + (x - self.area.x) as usize] {
+                    continue;
+                }
+                let q = [
+                    p[0].clamp(x as f64, x as f64 + 1.0),
+                    p[1].clamp(y as f64, y as f64 + 1.0),
+                ];
+                let d = (q[0] - p[0]).hypot(q[1] - p[1]);
+                if d <= r && best.is_none_or(|b| d < b.0) {
+                    best = Some((d, q));
+                }
+            }
+        }
+        best
+    }
+
+    /// Whether `f` holds for some opaque pixel in the inclusive ranges.
+    fn any_in(&self, (x0, x1): (i32, i32), (y0, y1): (i32, i32), f: impl Fn(i32, i32) -> bool) -> bool {
+        let (x0, x1) = (x0.max(self.area.x), x1.min(self.area.right() - 1));
+        let (y0, y1) = (y0.max(self.area.y), y1.min(self.area.bottom() - 1));
+        for y in y0..=y1 {
+            let row = (y - self.area.y) as usize * self.area.w as usize;
+            for x in x0..=x1 {
+                if self.bits[row + (x - self.area.x) as usize] && f(x, y) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Whether triangle `t` meets the square of some opaque pixel grown by
     /// `e` on every side (separating-axis test; touching counts).
     fn touches(&self, t: [Pt; 3], e: f64) -> bool {
@@ -342,7 +388,126 @@ impl PuppetMesh {
         // shape in 45° steps instead of whole-cell stairs.
         let opaque = OpaqueMap::new(store, b);
         let needed = |t: [Pt; 3]| opaque.touches(t, e as f64);
-        Some(Self::from_cells(origin, step, cols, rows, &kept, needed))
+        let mut mesh = Self::from_cells(origin, step, cols, rows, &kept, needed);
+        mesh.shrink_wrap(&opaque, e as f64);
+        Some(mesh)
+    }
+
+    /// Pulls outline vertices in towards the shape, to `e` + ½ px from the
+    /// nearest opaque pixel, wherever that keeps every opaque pixel and its
+    /// `e` margin inside the mesh and no triangle collapses. A vertex
+    /// moves less than one cell in all, so [`PuppetMesh::locate`] finds it
+    /// among the neighbouring cells.
+    fn shrink_wrap(&mut self, opaque: &OpaqueMap, e: f64) {
+        let n = self.rest.len();
+        let mut edges: std::collections::HashMap<(u32, u32), u32> = std::collections::HashMap::new();
+        let mut incident: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (t, tv) in self.tris.iter().enumerate() {
+            for k in 0..3 {
+                let (a, b) = (tv[k], tv[(k + 1) % 3]);
+                *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+                incident[tv[k] as usize].push(t);
+            }
+        }
+        let mut outline = vec![false; n];
+        for (&(a, b), &c) in &edges {
+            if c == 1 {
+                outline[a as usize] = true;
+                outline[b as usize] = true;
+            }
+        }
+        let step = self.step as f64;
+        let want = e + 0.5;
+        let home = self.rest.clone();
+        for _pass in 0..2 {
+            for v in 0..n {
+                if !outline[v] {
+                    continue;
+                }
+                let p = self.rest[v];
+                let Some((d, q)) = opaque.nearest(p, 1.5 * step + want) else {
+                    continue;
+                };
+                if d <= want + 0.25 {
+                    continue;
+                }
+                let len = (d - want).min(0.75 * step);
+                let np = [p[0] + (q[0] - p[0]) / d * len, p[1] + (q[1] - p[1]) / d * len];
+                let h = home[v];
+                if (np[0] - h[0]).abs().max((np[1] - h[1]).abs()) > 0.9 * step {
+                    continue;
+                }
+                if self.can_move(v, np, &incident[v], opaque, e) {
+                    self.rest[v] = np;
+                }
+            }
+        }
+    }
+
+    /// Whether moving vertex `v` to `np` keeps its triangles from
+    /// collapsing and every opaque pixel's `e`-grown square that the mesh
+    /// held still held (checked at its centre, corners and edge middles).
+    fn can_move(&self, v: usize, np: Pt, inc: &[usize], opaque: &OpaqueMap, e: f64) -> bool {
+        let p = self.rest[v];
+        let tri = |t: usize, at: Pt| {
+            self.tris[t].map(|w| {
+                if w as usize == v {
+                    at
+                } else {
+                    self.rest[w as usize]
+                }
+            })
+        };
+        let area = |t: [Pt; 3]| cross(sub(t[1], t[0]), sub(t[2], t[0]));
+        let old: Vec<[Pt; 3]> = inc.iter().map(|&t| tri(t, p)).collect();
+        let new: Vec<[Pt; 3]> = inc.iter().map(|&t| tri(t, np)).collect();
+        if old.iter().zip(&new).any(|(o, n)| area(*n) < 0.3 * area(*o)) {
+            return false;
+        }
+        let inside = |ts: &[[Pt; 3]], q: Pt| {
+            ts.iter().any(|t| {
+                barycentric(q, t[0], t[1], t[2]).is_some_and(|w| w.iter().all(|&x| x >= -INSIDE_EPS))
+            })
+        };
+        // What the move takes away lies in the slivers between the old and
+        // new spot and each neighbour.
+        let mut slivers: Vec<[Pt; 3]> = Vec::new();
+        for o in &old {
+            for &w in o {
+                if w != p && !slivers.iter().any(|s| s[2] == w) {
+                    slivers.push([p, np, w]);
+                }
+            }
+        }
+        let offs = [-e, 0.5, 1.0 + e];
+        for s in &slivers {
+            let lo_x = s.iter().map(|q| q[0]).fold(f64::INFINITY, f64::min);
+            let hi_x = s.iter().map(|q| q[0]).fold(f64::NEG_INFINITY, f64::max);
+            let lo_y = s.iter().map(|q| q[1]).fold(f64::INFINITY, f64::min);
+            let hi_y = s.iter().map(|q| q[1]).fold(f64::NEG_INFINITY, f64::max);
+            let hit = opaque.any_in(
+                ((lo_x - 1.0 - e).floor() as i32, (hi_x + e).ceil() as i32),
+                ((lo_y - 1.0 - e).floor() as i32, (hi_y + e).ceil() as i32),
+                |x, y| {
+                    offs.iter().any(|&dy| {
+                        offs.iter().any(|&dx| {
+                            let q = [x as f64 + dx, y as f64 + dy];
+                            q[0] >= lo_x
+                                && q[0] <= hi_x
+                                && q[1] >= lo_y
+                                && q[1] <= hi_y
+                                && inside(std::slice::from_ref(s), q)
+                                && inside(&old, q)
+                                && !inside(&new, q)
+                        })
+                    })
+                },
+            );
+            if hit {
+                return false;
+            }
+        }
+        true
     }
 
     /// The mesh of the kept cells of a grid (row-major `cols × rows`).
@@ -459,33 +624,34 @@ impl PuppetMesh {
     /// Where rest point `p` lies in the mesh, if inside it.
     pub fn locate(&self, p: Pt) -> Option<MeshPoint> {
         let s = self.step as f64;
-        // The grid cell holding `p`; a point on the grid's far edge belongs
-        // to the last cell.
-        let cell = |v: f64, o: i32, n: usize| {
-            let g = (v - o as f64) / s;
-            if g == n as f64 {
-                Some(n - 1)
-            } else if (0.0..n as f64).contains(&g) {
-                Some(g.floor() as usize)
-            } else {
-                None
-            }
-        };
-        let i = cell(p[0], self.origin.0, self.cols)?;
-        let j = cell(p[1], self.origin.1, self.rows)?;
-        let (first, n) = self.cell_tri[j * self.cols + i];
-        if first == u32::MAX {
+        if !(p[0].is_finite() && p[1].is_finite()) {
             return None;
         }
+        let gi = ((p[0] - self.origin.0 as f64) / s).floor() as i64;
+        let gj = ((p[1] - self.origin.1 as f64) / s).floor() as i64;
+        // The cell holding `p` and its neighbours: outline vertices may sit
+        // up to a cell inwards (shrink-wrap), and a point on a cell edge
+        // belongs to either side.
         let mut best: Option<MeshPoint> = None;
-        for t in first..first + n as u32 {
-            let [a, b, c] = self.tris[t as usize].map(|v| self.rest[v as usize]);
-            let Some(w) = barycentric(p, a, b, c) else {
-                continue;
-            };
-            let worst = w[0].min(w[1]).min(w[2]);
-            if best.is_none_or(|bp| worst > bp.bary[0].min(bp.bary[1]).min(bp.bary[2])) {
-                best = Some(MeshPoint { tri: t, bary: w });
+        for j in gj - 1..=gj + 1 {
+            for i in gi - 1..=gi + 1 {
+                if i < 0 || j < 0 || i >= self.cols as i64 || j >= self.rows as i64 {
+                    continue;
+                }
+                let (first, n) = self.cell_tri[j as usize * self.cols + i as usize];
+                if first == u32::MAX {
+                    continue;
+                }
+                for t in first..first + n as u32 {
+                    let [a, b, c] = self.tris[t as usize].map(|v| self.rest[v as usize]);
+                    let Some(w) = barycentric(p, a, b, c) else {
+                        continue;
+                    };
+                    let worst = w[0].min(w[1]).min(w[2]);
+                    if best.is_none_or(|bp| worst > bp.bary[0].min(bp.bary[1]).min(bp.bary[2])) {
+                        best = Some(MeshPoint { tri: t, bary: w });
+                    }
+                }
             }
         }
         best.filter(|bp| bp.bary.iter().all(|&w| w >= -INSIDE_EPS))
@@ -1404,6 +1570,39 @@ mod tests {
         // raised to the 4 px minimum.
         assert_eq!(mesh.step(), 4);
         assert!(PuppetMesh::build(&TileStore::new(), MeshParams::default()).is_none());
+    }
+
+    #[test]
+    fn the_outline_is_pulled_in_to_the_shape() {
+        // A 200 px disc, 9 px cells, 2 px expansion: outline vertices end
+        // e + ½ = 2.5 px from the disc wherever the move is safe.
+        let store = disc(110.0, 110.0, 100.0);
+        let mesh = PuppetMesh::build(&store, MeshParams::default()).unwrap();
+        let b = store.content_bounds().unwrap();
+        let opaque = OpaqueMap::new(&store, b);
+        let mut edges = std::collections::HashMap::new();
+        for t in &mesh.tris {
+            for k in 0..3 {
+                let (u, v) = (t[k].min(t[(k + 1) % 3]), t[k].max(t[(k + 1) % 3]));
+                *edges.entry((u, v)).or_insert(0) += 1;
+            }
+        }
+        let mut outline: Vec<u32> = edges
+            .iter()
+            .filter(|e| *e.1 == 1)
+            .flat_map(|e| [e.0 .0, e.0 .1])
+            .collect();
+        outline.sort_unstable();
+        outline.dedup();
+        let dist: Vec<f64> = outline
+            .iter()
+            .map(|&v| opaque.nearest(mesh.rest[v as usize], 40.0).map_or(40.0, |d| d.0))
+            .collect();
+        let snug = dist.iter().filter(|d| (**d - 2.5).abs() < 1e-6).count();
+        let mean = dist.iter().sum::<f64>() / dist.len() as f64;
+        assert_eq!((outline.len(), snug), (72, 22));
+        // Measured: 4.95 px on average, against 5.67 px on the bare grid.
+        assert!((mean - 4.946).abs() < 0.01, "{mean}");
     }
 
     #[test]
