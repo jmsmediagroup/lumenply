@@ -213,6 +213,56 @@ None of these could be tested in the container.
       stretch as a Levels adjustment layer)
 - [x] More filters: noise (position-seeded), motion blur, median, high pass —
       destructive or live, with dialog previews and palette entries
+- [x] Photoshop filters: Mosaic (canvas-anchored cells), Emboss, Find Edges,
+      Surface Blur, Lens Blur (disc kernel, highlight boost), Dust & Scratches —
+      destructive or live, dialog previews, palette entries; tile-seam tested;
+      Filter menu grouped Blur/Noise/Pixelate/Sharpen/Stylize/Other (ADR 0009)
+- [x] Select > Modify: Expand, Contract, Border, Smooth (exact Euclidean
+      distance, antialiased, canvas edge doesn't shrink), live marching-ants
+      preview dialogs; Select > Grow and Similar (wand tolerance)
+- [x] Content-Aware Fill (multi-scale PatchMatch + EM voting, seeded; Edit menu,
+      Shift+Backspace Fill dialog, selection bar): 500×400 hole in 2400×1600 in ~0.2 s
+- [x] Liquify (Filter menu, Shift+Cmd+X): modal workspace with Forward warp,
+      Reconstruct, Smooth, Twirl, Pucker, Bloat; advected displacement field,
+      per-stroke undo, mesh view; bakes 12 MP in ~20 ms as one undo step
+- [~] Quick Selection: engine done (core::quick_select — geodesic segmentation
+      with a stroke colour model, colour-line edge refinement, ~0.2 s per stroke);
+      the tool in the rail is still to wire up
+- [x] Crop tool (C): whole-canvas frame (or the selection), 8 handles, move,
+      straighten by dragging outside (fits inside the canvas), ratio presets +
+      custom W:H + swap, Delete cropped pixels (off by default), checkerboard
+      where the crop extends the canvas, Enter/Esc; one CropCanvas undo step
+      (whole-pixel exact; bilinear when turned; text stays upright) (ADR 0007)
+- [x] Rulers (Cmd+R), guides (drag from a ruler, move with V, drop on a ruler to
+      delete; Show/Lock/Clear, New guide…; saved in .lumen; undoable), grid
+      (Cmd+', spacing/subdivisions in Preferences), snapping (Shift+Cmd+;) to
+      guides, grid, canvas edges/centre and layer bounds for Move, marquees,
+      crop and free-transform moves
+- [x] Duplicate layer (any kind, groups deep-copied; Cmd+J without a
+      selection), Merge down / Merge group / Merge clipping mask (Cmd+E, blocked
+      with reasons), Merge visible (Shift+Cmd+E), Flatten image, Stamp visible
+      (Shift+Alt+Cmd+E); merged pixels come from the reference compositor and
+      equal the composite (tested)
+- [x] Layer locks (transparency, pixels, position, all; group locks cover
+      children), enforced by the editor on every command; Layers-header
+      toggles, row padlocks, Layer ▸ Lock; saved in .lumen; PSD lspf
+      round-trip, psd-tools-verified
+- [x] Align (6 edges, to each other or to the selection or canvas) and
+      distribute (3+ layers) as one undo step; Move tool bar and Layer ▸
+      Align / Distribute
+- [x] Adjustments: Gradient Map, Channel Mixer, Photo Filter, Selective Color
+      (gamma-domain; GPU falls back to CPU for them); PSD grdm/mixr/phfl/selc
+      round-trip, psd-tools-verified
+- [x] Fill layers: Solid Color and Gradient (linear/radial/angle/reflected/
+      diamond, angle, scale, reverse, offset) compositing like pixel layers from
+      a derived canvas cache; Layer ▸ New fill layer; PSD SoCo/GdFl round-trip
+      (ADR 0008)
+- [x] Gradient stop editor (click to add, drag to move, drag off to remove,
+      per-stop colour picker and opacity, presets), shared by Gradient Map and
+      gradient fills
+- [ ] Merge selected layers (Cmd+E with a multi-selection)
+- [ ] Lock-aware Properties transform controls
+- [ ] Shape layers (vector shape + fill), pattern fills (PSD imports them as pixels)
 - [~] Text: searchable font picker (system fonts via fontdb, .ttc face index
       honoured), bold/italic/bold-italic (real faces, else synthetic oblique
       and synthetic bold), alignment (left/centre/right), tracking in em/1000;
@@ -226,7 +276,8 @@ None of these could be tested in the container.
       marching-ants preview, soft graded edges, cancel undoes)
 - [x] Quick-mask mode (Q): paint the selection under the classic red overlay —
       white selects, black deselects, live while stroking
-- [ ] AI tools (local ONNX): subject select, object removal, upscaling — see project overview
+- [ ] AI tools (local ONNX): subject select, upscaling — see project overview
+      (object removal without AI exists: Content-Aware Fill)
 
 ## 6. Usability
 
@@ -328,7 +379,12 @@ None of these could be tested in the container.
 
 ## Known limitations and debts
 
-- Pressure is fixed at 1.0 in the app (engine supports it).
+- Pen pressure works on macOS and Windows only (no Linux source yet), untested
+  on a real tablet.
+- Gradient midpoints/smoothness are not modelled; Selective Color approximates
+  Photoshop's undocumented maths; fill layers can't be scaled or rotated
+  without rasterizing; vector shape layers import as pixels.
+- Dust & Scratches radius is capped at 8 (per-pixel median).
 
 - Text layers cannot be scaled or rotated without rasterizing.
 - Opening files from Finder (double-click, Open With, Dock drop) does nothing:

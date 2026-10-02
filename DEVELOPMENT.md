@@ -64,7 +64,12 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
   no macOS screen-recording permission needed. To reach a state behind a click,
   add `--screenshot-do tok,tok` (palette action ids, plus per-area debug
   tokens in `debug.rs`: `popups:click=File`, `popups:rclick=X:Y`,
-  `text:click:X:Y`, `color:fg`, `start:fake-recent`, `layout:tool=…`), and
+  `text:click:X:Y`, `color:fg`, `start:fake-recent`, `layout:tool=…`,
+  `layout:layer=background`, `select:rect=X:Y:W:H`, `select:caf`,
+  `crop:frame=X0:Y0:X1:Y1`, `guides:add=v:X`, `adj:add=gradient-map`,
+  `adj:fill=gradient`, `liquify:demo`, `raw:open=PATH`; tokens that toggle
+  view prefs such as `rulers`/`grid` save prefs — another reason for a scratch
+  `HOME`), and
   `--window-size 960x640` for narrow layouts. Run screenshots with `HOME`
   pointed at a scratch folder so recent files, prefs and the autosave of the
   real user are never read or written. The dark theme is forced via
