@@ -134,15 +134,16 @@ impl App {
 
     pub(crate) fn begin_free_transform(&mut self) {
         let Some(id) = self.active else { return };
-        // Pixel layers and smart objects transform; a smart object's
-        // bounds come from its rendered cache.
+        // Pixel layers, smart objects and shapes transform; a smart
+        // object's or shape's bounds come from its rendered cache (a shape
+        // then composes the transform into its outline, staying vector).
         let Some(b) = self
             .active_layer()
-            .filter(|l| l.pixels().is_some() || l.smart_layer().is_some())
+            .filter(|l| l.pixels().is_some() || l.smart_layer().is_some() || l.shape_layer().is_some())
             .and_then(|l| l.raster_store())
             .and_then(|p| p.content_bounds())
         else {
-            self.status = "Free transform needs a pixel layer or smart object with content".into();
+            self.status = "Free transform needs a pixel layer, smart object or shape with content".into();
             return;
         };
         self.tool = Tool::Move;
@@ -485,6 +486,7 @@ impl App {
             self.act(ui, "Solid color", "fill-solid");
             self.act(ui, "Gradient", "fill-gradient");
         });
+        self.act(ui, "New shape from path", "shape-from-path");
         menu_separator(ui);
         layer_actions::column_separator(ui);
         self.act(ui, "Rename", "rename");
@@ -541,7 +543,10 @@ impl App {
         };
         let group = l.children().is_some();
         let pixel = l.pixels().is_some();
-        let rasterizable = l.smart_layer().is_some() || l.text_layer().is_some() || l.fill_layer().is_some();
+        let rasterizable = l.smart_layer().is_some()
+            || l.text_layer().is_some()
+            || l.fill_layer().is_some()
+            || l.shape_layer().is_some();
         let clip = l.clip;
         let mask = l.mask.as_ref().map(|m| m.enabled);
         self.act(ui, "Rename", "rename");

@@ -206,6 +206,7 @@ impl App {
                             }
                         }
                         Tool::Text => self.text_options_bar(ui),
+                        Tool::Shape => self.shape_options_bar(ui, tier),
                         Tool::Gradient => {
                             segmented(
                                 ui,
@@ -646,7 +647,7 @@ fn bar_scroll(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> f32 {
 
 /// A slider cluster in the bar: muted label, slider, typeable mono value.
 /// Returns true when the value changed.
-fn bar_slider(
+pub(crate) fn bar_slider(
     ui: &mut egui::Ui,
     label: &str,
     v: &mut f32,
@@ -704,6 +705,7 @@ fn tool_hint(tool: Tool) -> Option<&'static str> {
         Tool::RectSelect | Tool::EllipseSelect | Tool::Lasso => "Shift adds, Alt subtracts",
         Tool::PolyLasso => "Click to add points, double-click to close",
         Tool::Pen => "Click corners, drag curves; click the first point to close",
+        Tool::Shape => "Shift constrains, Alt draws from the centre",
         Tool::Hand => "Drag to pan, scroll to zoom",
         _ => return None,
     })
@@ -711,7 +713,7 @@ fn tool_hint(tool: Tool) -> Option<&'static str> {
 
 /// The tool's usage hint at the end of the bar (on narrow windows it lives
 /// in the tool name's tooltip instead).
-fn hint_label(ui: &mut egui::Ui, tier: Tier, tool: Tool) {
+pub(crate) fn hint_label(ui: &mut egui::Ui, tier: Tier, tool: Tool) {
     if let (false, Some(h)) = (tier == Tier::Tight, tool_hint(tool)) {
         ui.label(RichText::new(h).weak());
     }

@@ -19,10 +19,11 @@ pub(crate) enum Tool {
     Eyedropper,
     Hand,
     Crop,
+    Shape,
 }
 
 impl Tool {
-    pub(crate) const ALL: [Tool; 17] = [
+    pub(crate) const ALL: [Tool; 18] = [
         Tool::Move,
         Tool::RectSelect,
         Tool::EllipseSelect,
@@ -37,6 +38,7 @@ impl Tool {
         Tool::Bucket,
         Tool::Gradient,
         Tool::Pen,
+        Tool::Shape,
         Tool::Text,
         Tool::Eyedropper,
         Tool::Hand,
@@ -61,6 +63,7 @@ impl Tool {
             Tool::Wand => "Magic Wand",
             Tool::Hand => "Hand",
             Tool::Crop => "Crop",
+            Tool::Shape => "Shape",
         }
     }
 
@@ -81,6 +84,7 @@ impl Tool {
             Tool::Wand => "W",
             Tool::Hand => "H",
             Tool::Crop => "C",
+            Tool::Shape => "U",
         }
     }
 
@@ -107,6 +111,9 @@ impl Tool {
             Tool::Wand => "Magic Wand (W)",
             Tool::Hand => "Hand (H)",
             Tool::Crop => "Crop (C) — drag the handles; drag outside the frame to straighten; Enter crops",
+            Tool::Shape => {
+                "Shape (U) — rectangle, ellipse, polygon, line or custom; Shift constrains, Alt from the centre"
+            }
         }
     }
 }
@@ -518,6 +525,11 @@ pub(crate) fn draw_icon(p: &egui::Painter, r: egui::Rect, tool: Tool, c: Color32
             p.add(quad(egui::vec2(10.6, 5.4), egui::vec2(13.0, 3.0), 2.0, 1.6));
             p.add(line(&[(3.6, 12.4), (1.3, 14.7)]));
         }
+        Tool::Shape => {
+            // A square overlapped by a circle: the shape family.
+            p.add(closed(&[(1.5, 1.5), (10.0, 1.5), (10.0, 10.0), (1.5, 10.0)]));
+            p.circle_stroke(g(10.0, 10.0), 4.8 * k, s);
+        }
         Tool::Crop => {
             // Two interlocking right angles, the classic crop mark.
             p.add(line(&[(4.0, 1.0), (4.0, 12.0), (15.0, 12.0)]));
@@ -561,11 +573,11 @@ mod tests {
 
     #[test]
     fn rail_folds_to_two_columns_when_short() {
-        // 17 buttons, 5 family separators, gaps, colour well and padding.
-        let one_col = 17.0 * BTN + 5.0 * SEP + 21.0 * GAP + WELL_H + 2.0 * PAD;
-        assert_eq!(one_col, 750.0);
-        assert_eq!(rail_columns(750.0), 1);
-        assert_eq!(rail_columns(749.0), 2);
+        // 18 buttons, 5 family separators, gaps, colour well and padding.
+        let one_col = 18.0 * BTN + 5.0 * SEP + 22.0 * GAP + WELL_H + 2.0 * PAD;
+        assert_eq!(one_col, 787.0);
+        assert_eq!(rail_columns(787.0), 1);
+        assert_eq!(rail_columns(786.0), 2);
         assert_eq!(rail_columns(430.0), 2);
         assert_eq!(rail_width(1), 52.0);
         assert_eq!(rail_width(2), 89.0);
@@ -581,13 +593,14 @@ mod tests {
         assert_eq!(names[2], (false, vec!["L", "W"]), "poly lasso + wand");
         assert_eq!(names[3], (true, vec!["C"]), "crop alone after a separator");
         assert_eq!(names[4], (true, vec!["B", "E"]), "paint starts a row");
-        assert_eq!(rows.len(), 9);
+        assert_eq!(names[7], (false, vec!["P", "U"]), "pen + shape");
+        assert_eq!(rows.len(), 10);
         assert_eq!(rows.iter().map(|(_, r)| r.len()).sum::<usize>(), Tool::ALL.len());
     }
 
     #[test]
     fn every_tool_has_a_distinct_rail_id() {
         let ids: std::collections::HashSet<egui::Id> = Tool::ALL.into_iter().map(rail_id).collect();
-        assert_eq!(ids.len(), 17);
+        assert_eq!(ids.len(), 18);
     }
 }

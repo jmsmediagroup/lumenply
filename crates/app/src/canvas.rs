@@ -52,6 +52,8 @@ pub(crate) enum DragKind {
     Move,
     Gradient,
     Xform(Handle),
+    /// Shape tool: drawing a new shape (shape_tool.rs).
+    Shape,
 }
 
 /// In-progress free transform of one layer.
@@ -1044,6 +1046,7 @@ impl App {
                 }
             }
             Tool::Crop => self.crop_input(ctx, resp, to_doc),
+            Tool::Shape => self.shape_input(ctx, resp, to_doc),
             Tool::Hand => {
                 if resp.hovered() {
                     ctx.set_cursor_icon(if resp.dragged() {
@@ -1184,7 +1187,9 @@ impl App {
                     ctx.set_cursor_icon(egui::CursorIcon::Move);
                 }
                 if resp.drag_started_by(primary) {
-                    let fill = self.active_layer().is_some_and(|l| l.fill_layer().is_some());
+                    let fill = self
+                        .active_layer()
+                        .is_some_and(|l| l.fill_layer().is_some() || l.shape_layer().is_some());
                     if let Some(why) = self.lock_block(layer_actions::LockNeed::Move) {
                         self.status = why.into();
                     } else if self.active_is_pixel() || self.active_is_text() || fill {
@@ -1210,7 +1215,7 @@ impl App {
                                     .editor
                                     .doc()
                                     .layer(layer)
-                                    .and_then(|l| l.pixels())
+                                    .and_then(|l| l.pixels().or_else(|| l.shape_layer()?.cache.as_ref()))
                                     .and_then(|s| s.bounds());
                                 let mut preview = self.editor.doc().clone();
                                 let cmd = MoveLayer {
@@ -1645,6 +1650,7 @@ impl App {
             }
             Tool::Text => self.paint_text_overlay(painter, resp),
             Tool::Crop => self.paint_crop(ctx, painter, resp),
+            Tool::Shape => self.paint_shape_overlay(painter, resp),
             Tool::Hand | Tool::Move | Tool::Eyedropper | Tool::Bucket | Tool::Wand => {}
         }
     }
