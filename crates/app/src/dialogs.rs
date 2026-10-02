@@ -569,36 +569,47 @@ impl App {
                                 }
                             }
                         }
-                        for (id, label, ..) in session::SHORTCUTS {
-                            ui.horizontal(|ui| {
-                                row_label(ui, label, wide.label_w);
-                                let text = if capturing.as_deref() == Some(*id) {
-                                    "press keys…".to_string()
-                                } else {
-                                    session::chord_label(ui.ctx(), p, id)
-                                };
-                                let highlight = capturing.as_deref() == Some(*id);
-                                let btn = egui::Button::new(RichText::new(text).monospace())
-                                    .min_size(egui::vec2(120.0, 22.0))
-                                    .fill(if highlight { ACCENT_TINT } else { GROUND })
-                                    .stroke(Stroke::new(1.0, if highlight { ACCENT } else { LINE }));
-                                if ui
-                                    .add(btn)
-                                    .on_hover_text(format!("Click, then press the new keys for {label}"))
-                                    .clicked()
-                                {
-                                    *capturing = Some(id.to_string());
-                                }
-                                if p.shortcuts.contains_key(*id)
-                                    && ui
-                                        .small_button("Reset")
-                                        .on_hover_text("Back to the default shortcut")
-                                        .clicked()
-                                {
-                                    p.shortcuts.remove(*id);
+                        // The shortcut list scrolls so the footer stays on screen in
+                        // short windows (the dialog is anchored to the centre).
+                        let list_h = (ui.ctx().screen_rect().height() - 430.0).clamp(110.0, 560.0);
+                        egui::ScrollArea::vertical()
+                            .id_salt("prefs-shortcuts")
+                            .max_height(list_h)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                for (id, label, ..) in session::SHORTCUTS {
+                                    ui.horizontal(|ui| {
+                                        row_label(ui, label, wide.label_w);
+                                        let text = if capturing.as_deref() == Some(*id) {
+                                            "press keys…".to_string()
+                                        } else {
+                                            session::chord_label(ui.ctx(), p, id)
+                                        };
+                                        let highlight = capturing.as_deref() == Some(*id);
+                                        let btn = egui::Button::new(RichText::new(text).monospace())
+                                            .min_size(egui::vec2(120.0, 22.0))
+                                            .fill(if highlight { ACCENT_TINT } else { GROUND })
+                                            .stroke(Stroke::new(1.0, if highlight { ACCENT } else { LINE }));
+                                        if ui
+                                            .add(btn)
+                                            .on_hover_text(format!(
+                                                "Click, then press the new keys for {label}"
+                                            ))
+                                            .clicked()
+                                        {
+                                            *capturing = Some(id.to_string());
+                                        }
+                                        if p.shortcuts.contains_key(*id)
+                                            && ui
+                                                .small_button("Reset")
+                                                .on_hover_text("Back to the default shortcut")
+                                                .clicked()
+                                        {
+                                            p.shortcuts.remove(*id);
+                                        }
+                                    });
                                 }
                             });
-                        }
                     }
                     Dialog::Recover => {
                         note(
@@ -701,39 +712,45 @@ impl App {
                         );
                     }
                     Dialog::Filter(f) => {
-                        let mut row = |ui: &mut egui::Ui,
-                                       label: &str,
-                                       v: &mut f32,
-                                       r: RangeInclusive<f32>,
-                                       sfx: &str,
-                                       o: RowOpts| {
+                        let row = |ui: &mut egui::Ui,
+                                   label: &str,
+                                   v: &mut f32,
+                                   r: RangeInclusive<f32>,
+                                   sfx: &str,
+                                   o: RowOpts| {
                             let before = *v;
                             slider_row_ex(ui, label, v, r, sfx, o);
-                            filter_changed |= *v != before;
+                            *v != before
+                        };
+                        // Amounts read as percentages, like the other 0–1 values.
+                        let pct = |ui: &mut egui::Ui, v: &mut f32, r: RangeInclusive<f32>| {
+                            let before = *v;
+                            slider_row_scaled(ui, "Amount", v, r, 100.0, "%");
+                            *v != before
                         };
                         let lin = RowOpts::default();
                         let log = RowOpts { log: true, ..lin };
                         match f {
                             Filter::GaussianBlur { radius } | Filter::BoxBlur { radius } => {
-                                row(ui, "Radius", radius, 0.5..=60.0, " px", log);
+                                filter_changed |= row(ui, "Radius", radius, 0.5..=60.0, " px", log);
                             }
                             Filter::Sharpen { amount, radius } => {
-                                row(ui, "Amount", amount, 0.0..=5.0, "", lin);
-                                row(ui, "Radius", radius, 0.5..=20.0, " px", lin);
+                                filter_changed |= pct(ui, amount, 0.0..=5.0);
+                                filter_changed |= row(ui, "Radius", radius, 0.5..=20.0, " px", lin);
                             }
                             Filter::Noise { amount } => {
-                                row(ui, "Amount", amount, 0.0..=1.0, "", lin);
+                                filter_changed |= pct(ui, amount, 0.0..=1.0);
                             }
                             Filter::MotionBlur { angle, distance } => {
-                                row(ui, "Angle", angle, -180.0..=180.0, "°", lin);
-                                row(ui, "Distance", distance, 1.0..=200.0, " px", lin);
+                                filter_changed |= row(ui, "Angle", angle, -180.0..=180.0, "°", lin);
+                                filter_changed |= row(ui, "Distance", distance, 1.0..=200.0, " px", lin);
                             }
                             Filter::Median { radius } => {
                                 let int = RowOpts { int: true, ..lin };
-                                row(ui, "Radius", radius, 1.0..=8.0, " px", int);
+                                filter_changed |= row(ui, "Radius", radius, 1.0..=8.0, " px", int);
                             }
                             Filter::HighPass { radius } => {
-                                row(ui, "Radius", radius, 0.5..=60.0, " px", log);
+                                filter_changed |= row(ui, "Radius", radius, 0.5..=60.0, " px", log);
                             }
                         }
                         note(ui, "Previewed on the canvas; applies to the active layer.");
@@ -775,7 +792,7 @@ impl App {
                         }
                         ui.horizontal(|ui| {
                             ui.add_space(LABEL_W + ui.spacing().item_spacing.x);
-                            ui.checkbox(lock, "Keep aspect ratio");
+                            check(ui, lock, "Keep aspect ratio");
                         });
                         note(ui, "Resamples every layer bilinearly.");
                     }

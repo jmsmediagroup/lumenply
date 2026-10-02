@@ -1089,7 +1089,14 @@ impl App {
                 let avail = ui.available_height();
                 let layers_full = layers::HEADER_H + rows * layers::ROW_PITCH + layers::FOOTER_H;
                 let layers_min = layers::HEADER_H + 3.0 * layers::ROW_PITCH + layers::FOOTER_H;
-                let layers_want = layers_full.min(layers_min.max(avail * 0.45));
+                let layers_auto = layers_full.min(layers_min.max(avail * 0.45));
+                // The divider below Properties can be dragged; double-click
+                // returns to the automatic split.
+                let split_id = egui::Id::new("dock-layers-h");
+                let layers_max = (avail - quick_h - 120.0).max(layers_min);
+                let layers_want = ctx
+                    .data_mut(|d| d.get_persisted::<f32>(split_id))
+                    .map_or(layers_auto, |h| h.clamp(layers_min, layers_max));
                 let props_max = (avail - quick_h - layers_want - 24.0).max(72.0);
                 egui::ScrollArea::vertical()
                     .id_salt("props")
@@ -1104,8 +1111,32 @@ impl App {
                             })
                             .show(ui, |ui| self.properties_ui(ui));
                     });
-                ui.add_space(2.0);
-                ui.separator();
+                let (bar, grip) =
+                    ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), Sense::click_and_drag());
+                let live = grip.hovered() || grip.dragged();
+                if live {
+                    ctx.set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                }
+                ui.painter().hline(
+                    bar.x_range(),
+                    bar.center().y,
+                    Stroke::new(1.0, if live { ACCENT } else { LINE }),
+                );
+                if grip.dragged() {
+                    let h = (layers_want - grip.drag_delta().y).clamp(layers_min, layers_max);
+                    ctx.data_mut(|d| d.insert_persisted(split_id, h));
+                }
+                if grip.double_clicked() {
+                    ctx.data_mut(|d| d.remove::<f32>(split_id));
+                }
+                grip.on_hover_text("Drag to give Properties or Layers more room · double-click to reset")
+                    .widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Other,
+                            true,
+                            "Resize Properties and Layers",
+                        )
+                    });
                 let top = ui.cursor().top();
                 self.quick_add_ui(ui);
                 let h = ui.cursor().top() - top;

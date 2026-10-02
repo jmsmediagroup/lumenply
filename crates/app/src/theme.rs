@@ -186,6 +186,23 @@ pub(crate) fn footer_button(text: &str) -> egui::Button<'static> {
 }
 
 /// Paint the keyboard-focus ring around a custom-painted widget.
+/// A checkbox with a square-ish box. egui draws checkboxes with the
+/// widgets' corner radius, which on a 14 px box reads as a radio button.
+pub(crate) fn check(
+    ui: &mut egui::Ui,
+    value: &mut bool,
+    label: impl Into<egui::WidgetText>,
+) -> egui::Response {
+    ui.scope(|ui| {
+        let v = &mut ui.visuals_mut().widgets;
+        for w in [&mut v.inactive, &mut v.hovered, &mut v.active, &mut v.open] {
+            w.rounding = egui::Rounding::same(3.0);
+        }
+        ui.checkbox(value, label)
+    })
+    .inner
+}
+
 pub(crate) fn focus_ring(ui: &egui::Ui, resp: &egui::Response, rect: egui::Rect, rounding: f32) {
     if resp.has_focus() {
         ui.painter()
@@ -300,6 +317,48 @@ pub(crate) fn slider_row(
     suffix: &str,
 ) -> bool {
     slider_row_ex(ui, label, v, range, suffix, RowOpts::default())
+}
+
+/// A slider row over a value stored in other units, shown as `v × scale`
+/// in whole numbers (a 0–1 opacity as 0–100 %, a −1…1 shift as −100…100,
+/// a 0–1 level as 0–255). The value is written back only when the row
+/// changes it, so an untouched row never drifts by float rounding.
+pub(crate) fn slider_row_scaled(
+    ui: &mut egui::Ui,
+    label: &str,
+    v: &mut f32,
+    range: RangeInclusive<f32>,
+    scale: f32,
+    suffix: &str,
+) -> bool {
+    slider_row_scaled_w(ui, label, v, range, scale, suffix, LABEL_W)
+}
+
+/// [`slider_row_scaled`] with a wider label column (long pair labels).
+pub(crate) fn slider_row_scaled_w(
+    ui: &mut egui::Ui,
+    label: &str,
+    v: &mut f32,
+    range: RangeInclusive<f32>,
+    scale: f32,
+    suffix: &str,
+    label_w: f32,
+) -> bool {
+    let shown_before = *v * scale;
+    let mut shown = shown_before;
+    let r = (range.start() * scale)..=(range.end() * scale);
+    // Not `int`: egui's integer slider rounds the value as soon as it is
+    // drawn, which would edit the document just by showing the panel. The
+    // spans here are ≥ 100 units, so the field already shows whole numbers.
+    let opts = RowOpts {
+        label_w,
+        ..RowOpts::default()
+    };
+    let finished = slider_row_ex(ui, label, &mut shown, r, suffix, opts);
+    if shown != shown_before {
+        *v = shown / scale;
+    }
+    finished
 }
 
 /// [`slider_row`] on a logarithmic scale (radii, sizes).
@@ -719,6 +778,24 @@ pub(crate) fn target_rect(ctx: &egui::Context, name: &str) -> Option<egui::Rect>
 #[cfg(test)]
 mod popup_tests {
     use super::*;
+
+    #[test]
+    fn scaled_rows_never_drift_values_they_do_not_change() {
+        // 0.6 × 100 ÷ 100 is not 0.6 in f32; a row that wrote back every
+        // frame would nudge the value and record an undo step per frame.
+        let ctx = egui::Context::default();
+        let mut vals = [0.6f32, 0.07, -0.06, 0.333_333_34, 1.0];
+        for _ in 0..3 {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    for v in vals.iter_mut() {
+                        slider_row_scaled(ui, "Opacity", v, -1.0..=1.0, 100.0, "%");
+                    }
+                });
+            });
+        }
+        assert_eq!(vals, [0.6f32, 0.07, -0.06, 0.333_333_34, 1.0], "bit-identical");
+    }
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> egui::Rect {
         egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h))

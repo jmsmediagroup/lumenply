@@ -209,6 +209,13 @@ impl App {
                 }
                 self.fix_active();
             }
+            // The Properties/Layers divider, as if dragged to give Layers
+            // this many points of height.
+            "split" => {
+                if let Ok(h) = arg.parse::<f32>() {
+                    ctx.data_mut(|d| d.insert_persisted(egui::Id::new("dock-layers-h"), h));
+                }
+            }
             "about" => self.dialog = Some(Dialog::About),
             "recover" => self.dialog = Some(Dialog::Recover),
             "confirm-close" => self.dialog = Some(Dialog::ConfirmClose),

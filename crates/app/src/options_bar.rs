@@ -176,22 +176,25 @@ impl App {
                             hint_label(ui, tier, self.tool);
                         }
                         Tool::Bucket | Tool::Wand => {
+                            // Selection tools lead with how the selection
+                            // combines, as the marquees and lassos do.
+                            if self.tool == Tool::Wand {
+                                select_ops(ui, &mut self.select_op);
+                                ui.separator();
+                            }
                             let mut tol = self.tolerance * 100.0;
                             if bar_slider(ui, "Tolerance", &mut tol, 0.0..=100.0, "%", false) {
                                 self.tolerance = tol / 100.0;
                             }
-                            ui.checkbox(&mut self.contiguous, "Contiguous")
+                            check(ui, &mut self.contiguous, "Contiguous")
                                 .on_hover_text("Only fill/select connected pixels");
-                            ui.checkbox(&mut self.sample_merged, "All layers")
+                            check(ui, &mut self.sample_merged, "All layers")
                                 .on_hover_text("Sample the merged image instead of the active layer only");
                             if self.tool == Tool::Bucket {
                                 let mut op = self.brush.color[3] * 100.0;
                                 if bar_slider(ui, "Opacity", &mut op, 1.0..=100.0, "%", false) {
                                     self.brush.color[3] = op / 100.0;
                                 }
-                            } else {
-                                ui.separator();
-                                select_ops(ui, &mut self.select_op);
                             }
                         }
                         Tool::Text => self.text_options_bar(ui),
@@ -206,7 +209,7 @@ impl App {
                             crate::color_picker::color_edit_button_rgb(ui, &mut self.brush_rgb);
                             ui.label("To");
                             crate::color_picker::color_edit_button_rgb(ui, &mut self.bg_rgb);
-                            ui.checkbox(&mut self.gradient_to_transparent, "To transparent");
+                            check(ui, &mut self.gradient_to_transparent, "To transparent");
                             hint_label(ui, tier, self.tool);
                         }
                         Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal => {
@@ -243,7 +246,7 @@ impl App {
                                 ui.separator();
                             }
                             if self.tool == Tool::Heal {
-                                ui.checkbox(&mut self.heal_spot, "Spot").on_hover_text(
+                                check(ui, &mut self.heal_spot, "Spot").on_hover_text(
                                     "Heal from the surroundings alone; untick to add texture from a picked source",
                                 );
                             }
@@ -251,20 +254,29 @@ impl App {
                                 || (self.tool == Tool::Heal && !self.heal_spot);
                             if needs_source {
                                 let picking = self.clone_picking || self.clone_source.is_none();
+                                let status = match self.clone_source {
+                                    Some((x, y)) => format!("Source at {x:.0}, {y:.0}"),
+                                    None => "No source yet".to_string(),
+                                };
                                 if ui
                                     .selectable_label(picking, "Pick source")
-                                    .on_hover_text("Next click sets the clone source (or Alt+click)")
+                                    .on_hover_text(format!(
+                                        "{status}. Next click sets the clone source (or Alt+click)"
+                                    ))
                                     .clicked()
                                 {
                                     self.clone_picking = true;
                                 }
-                                match self.clone_source {
-                                    Some((x, y)) => ui.label(
-                                        RichText::new(format!("Source {:.0}, {:.0}", x, y)).monospace(),
-                                    ),
-                                    None => ui.label(RichText::new("No source yet").color(MUTED)),
-                                };
-                                ui.checkbox(&mut self.sample_merged, "All layers")
+                                // On a tight bar the status lives in the tooltip
+                                // above, so the brush sliders keep their room.
+                                if tier != Tier::Tight {
+                                    let text = RichText::new(status);
+                                    ui.label(match self.clone_source {
+                                        Some(_) => text.monospace().color(TEXT),
+                                        None => text.color(MUTED),
+                                    });
+                                }
+                                check(ui, &mut self.sample_merged, "All layers")
                                     .on_hover_text("Sample the merged image instead of the active layer only");
                             }
                             if self.tool == Tool::Heal || needs_source {

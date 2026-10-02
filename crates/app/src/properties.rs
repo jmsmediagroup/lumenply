@@ -56,19 +56,29 @@ impl App {
                 egui::Button::new(RichText::new("More…").size(12.0).color(MUTED))
                     .min_size(egui::vec2(64.0, 24.0)),
                 |ui| {
-                    for (name, adj) in adjustment_presets() {
-                        if ui.button(name).clicked() {
-                            add_adj = Some(adj);
-                            ui.close_menu();
-                        }
-                    }
-                    ui.separator();
-                    for (name, f) in filter_presets() {
-                        if ui.button(format!("Live {name}")).clicked() {
-                            add_filter = Some(f);
-                            ui.close_menu();
-                        }
-                    }
+                    // Two columns keep this menu short enough to open below
+                    // the chips instead of covering the bars above.
+                    ui.horizontal_top(|ui| {
+                        ui.vertical(|ui| {
+                            menu_heading(ui, "ADJUSTMENT");
+                            for (name, adj) in adjustment_presets() {
+                                if menu_item(ui, name, "") {
+                                    add_adj = Some(adj);
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                        ui.add_space(6.0);
+                        ui.vertical(|ui| {
+                            menu_heading(ui, "LIVE FILTER");
+                            for (name, f) in filter_presets() {
+                                if menu_item(ui, name, "") {
+                                    add_filter = Some(f);
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                    });
                 },
             );
         });
@@ -207,11 +217,11 @@ impl App {
                     finished |= slider_row_log(ui, "Radius", radius, 0.5..=60.0, " px");
                 }
                 Filter::Sharpen { amount, radius } => {
-                    finished |= slider_row(ui, "Amount", amount, 0.0..=5.0, "");
+                    finished |= slider_row_scaled(ui, "Amount", amount, 0.0..=5.0, 100.0, "%");
                     finished |= slider_row(ui, "Radius", radius, 0.5..=20.0, " px");
                 }
                 Filter::Noise { amount } => {
-                    finished |= slider_row(ui, "Amount", amount, 0.0..=1.0, "");
+                    finished |= slider_row_scaled(ui, "Amount", amount, 0.0..=1.0, 100.0, "%");
                 }
                 Filter::MotionBlur { angle, distance } => {
                     finished |= slider_row(ui, "Angle", angle, -180.0..=180.0, "°");
@@ -351,7 +361,7 @@ impl App {
 
         ui.horizontal(|ui| {
             let mut on = fx.drop_shadow.is_some();
-            if ui.checkbox(&mut on, "Drop shadow").changed() {
+            if check(ui, &mut on, "Drop shadow").changed() {
                 fx.drop_shadow = on.then(ShadowFx::default);
                 changed = true;
                 finished = true;
@@ -384,7 +394,7 @@ impl App {
             });
             let f = slider_row(ui, "Blur", &mut sfx.blur, 0.0..=60.0, " px");
             finished |= f;
-            let f2 = slider_row(ui, "Opacity", &mut sfx.opacity, 0.0..=1.0, "");
+            let f2 = slider_row_scaled(ui, "Opacity", &mut sfx.opacity, 0.0..=1.0, 100.0, "%");
             finished |= f2;
             if sfx != fx.drop_shadow.unwrap() {
                 changed = true;
@@ -394,7 +404,7 @@ impl App {
 
         ui.horizontal(|ui| {
             let mut on = fx.outer_glow.is_some();
-            if ui.checkbox(&mut on, "Outer glow").changed() {
+            if check(ui, &mut on, "Outer glow").changed() {
                 fx.outer_glow = on.then(GlowFx::default);
                 changed = true;
                 finished = true;
@@ -408,7 +418,7 @@ impl App {
         if let Some(mut g) = fx.outer_glow {
             let f = slider_row(ui, "Blur", &mut g.blur, 0.0..=60.0, " px");
             finished |= f;
-            let f2 = slider_row(ui, "Opacity", &mut g.opacity, 0.0..=1.0, "");
+            let f2 = slider_row_scaled(ui, "Opacity", &mut g.opacity, 0.0..=1.0, 100.0, "%");
             finished |= f2;
             if g != fx.outer_glow.unwrap() {
                 changed = true;
@@ -418,7 +428,7 @@ impl App {
 
         ui.horizontal(|ui| {
             let mut on = fx.inner_shadow.is_some();
-            if ui.checkbox(&mut on, "Inner shadow").changed() {
+            if check(ui, &mut on, "Inner shadow").changed() {
                 fx.inner_shadow = on.then(ShadowFx::default);
                 changed = true;
                 finished = true;
@@ -451,7 +461,7 @@ impl App {
             });
             let f = slider_row(ui, "Blur", &mut sfx.blur, 0.0..=60.0, " px");
             finished |= f;
-            let f2 = slider_row(ui, "Opacity", &mut sfx.opacity, 0.0..=1.0, "");
+            let f2 = slider_row_scaled(ui, "Opacity", &mut sfx.opacity, 0.0..=1.0, 100.0, "%");
             finished |= f2;
             if sfx != fx.inner_shadow.unwrap() {
                 changed = true;
@@ -461,7 +471,7 @@ impl App {
 
         ui.horizontal(|ui| {
             let mut on = fx.inner_glow.is_some();
-            if ui.checkbox(&mut on, "Inner glow").changed() {
+            if check(ui, &mut on, "Inner glow").changed() {
                 fx.inner_glow = on.then(GlowFx::default);
                 changed = true;
                 finished = true;
@@ -475,7 +485,7 @@ impl App {
         if let Some(mut g) = fx.inner_glow {
             let f = slider_row(ui, "Blur", &mut g.blur, 0.0..=60.0, " px");
             finished |= f;
-            let f2 = slider_row(ui, "Opacity", &mut g.opacity, 0.0..=1.0, "");
+            let f2 = slider_row_scaled(ui, "Opacity", &mut g.opacity, 0.0..=1.0, 100.0, "%");
             finished |= f2;
             if g != fx.inner_glow.unwrap() {
                 changed = true;
@@ -485,7 +495,7 @@ impl App {
 
         ui.horizontal(|ui| {
             let mut on = fx.bevel.is_some();
-            if ui.checkbox(&mut on, "Bevel").changed() {
+            if check(ui, &mut on, "Bevel").changed() {
                 fx.bevel = on.then(lumenply_doc::BevelFx::default);
                 changed = true;
                 finished = true;
@@ -504,7 +514,7 @@ impl App {
             finished |= f2;
             let f3 = slider_row(ui, "Angle", &mut b.angle, 0.0..=360.0, "°");
             finished |= f3;
-            let f4 = slider_row(ui, "Opacity", &mut b.opacity, 0.0..=1.0, "");
+            let f4 = slider_row_scaled(ui, "Opacity", &mut b.opacity, 0.0..=1.0, 100.0, "%");
             finished |= f4;
             if b != fx.bevel.unwrap() {
                 changed = true;
@@ -514,7 +524,7 @@ impl App {
 
         ui.horizontal(|ui| {
             let mut on = fx.color_overlay.is_some();
-            if ui.checkbox(&mut on, "Color overlay").changed() {
+            if check(ui, &mut on, "Color overlay").changed() {
                 fx.color_overlay = on.then(lumenply_doc::ColorOverlayFx::default);
                 changed = true;
                 finished = true;
@@ -526,7 +536,7 @@ impl App {
             }
         });
         if let Some(mut co) = fx.color_overlay {
-            let f = slider_row(ui, "Opacity", &mut co.opacity, 0.0..=1.0, "");
+            let f = slider_row_scaled(ui, "Opacity", &mut co.opacity, 0.0..=1.0, 100.0, "%");
             finished |= f;
             if co != fx.color_overlay.unwrap() {
                 changed = true;
@@ -536,7 +546,7 @@ impl App {
 
         ui.horizontal(|ui| {
             let mut on = fx.gradient_overlay.is_some();
-            if ui.checkbox(&mut on, "Gradient overlay").changed() {
+            if check(ui, &mut on, "Gradient overlay").changed() {
                 fx.gradient_overlay = on.then(lumenply_doc::GradientOverlayFx::default);
                 changed = true;
                 finished = true;
@@ -551,7 +561,7 @@ impl App {
         if let Some(mut go) = fx.gradient_overlay {
             let f = slider_row(ui, "Angle", &mut go.angle, 0.0..=360.0, "°");
             finished |= f;
-            let f2 = slider_row(ui, "Opacity", &mut go.opacity, 0.0..=1.0, "");
+            let f2 = slider_row_scaled(ui, "Opacity", &mut go.opacity, 0.0..=1.0, 100.0, "%");
             finished |= f2;
             if go != fx.gradient_overlay.unwrap() {
                 changed = true;
@@ -561,7 +571,7 @@ impl App {
 
         ui.horizontal(|ui| {
             let mut on = fx.stroke.is_some();
-            if ui.checkbox(&mut on, "Stroke").changed() {
+            if check(ui, &mut on, "Stroke").changed() {
                 fx.stroke = on.then(StrokeFx::default);
                 changed = true;
                 finished = true;
@@ -575,7 +585,7 @@ impl App {
         if let Some(mut st) = fx.stroke {
             let f = slider_row(ui, "Size", &mut st.size, 0.5..=40.0, " px");
             finished |= f;
-            let f2 = slider_row(ui, "Opacity", &mut st.opacity, 0.0..=1.0, "");
+            let f2 = slider_row_scaled(ui, "Opacity", &mut st.opacity, 0.0..=1.0, 100.0, "%");
             finished |= f2;
             if st != fx.stroke.unwrap() {
                 changed = true;
@@ -610,8 +620,8 @@ impl App {
                 ui.label(RichText::new("This adjustment has no settings.").weak());
             }
             Adjustment::BrightnessContrast { brightness, contrast } => {
-                finished |= slider_row(ui, "Brightness", brightness, -1.0..=1.0, "");
-                finished |= slider_row(ui, "Contrast", contrast, -1.0..=1.0, "");
+                finished |= slider_row_scaled(ui, "Brightness", brightness, -1.0..=1.0, 100.0, "");
+                finished |= slider_row_scaled(ui, "Contrast", contrast, -1.0..=1.0, 100.0, "");
             }
             Adjustment::HueSaturation {
                 hue,
@@ -619,8 +629,8 @@ impl App {
                 lightness,
             } => {
                 finished |= slider_row(ui, "Hue", hue, -180.0..=180.0, "°");
-                finished |= slider_row(ui, "Saturation", saturation, -1.0..=1.0, "");
-                finished |= slider_row(ui, "Lightness", lightness, -1.0..=1.0, "");
+                finished |= slider_row_scaled(ui, "Saturation", saturation, -1.0..=1.0, 100.0, "");
+                finished |= slider_row_scaled(ui, "Lightness", lightness, -1.0..=1.0, 100.0, "");
             }
             Adjustment::Levels {
                 in_black,
@@ -648,19 +658,19 @@ impl App {
                         )
                     }
                 };
-                finished |= slider_row(ui, "Input black", ib, 0.0..=1.0, "");
-                finished |= slider_row(ui, "Input white", iw, 0.0..=1.0, "");
+                finished |= slider_row_scaled(ui, "Input black", ib, 0.0..=1.0, 255.0, "");
+                finished |= slider_row_scaled(ui, "Input white", iw, 0.0..=1.0, 255.0, "");
                 finished |= slider_row(ui, "Gamma", g, 0.1..=4.0, "");
-                finished |= slider_row(ui, "Output black", ob, 0.0..=1.0, "");
-                finished |= slider_row(ui, "Output white", ow, 0.0..=1.0, "");
+                finished |= slider_row_scaled(ui, "Output black", ob, 0.0..=1.0, 255.0, "");
+                finished |= slider_row_scaled(ui, "Output white", ow, 0.0..=1.0, 255.0, "");
             }
             Adjustment::Curves { points } => {
                 finished |= curve_editor(ui, points, &mut self.curve_drag);
             }
             Adjustment::BlackWhite { red, green, blue } => {
-                finished |= slider_row(ui, "Red", red, 0.0..=1.0, "");
-                finished |= slider_row(ui, "Green", green, 0.0..=1.0, "");
-                finished |= slider_row(ui, "Blue", blue, 0.0..=1.0, "");
+                finished |= slider_row_scaled(ui, "Red", red, 0.0..=1.0, 100.0, "%");
+                finished |= slider_row_scaled(ui, "Green", green, 0.0..=1.0, 100.0, "%");
+                finished |= slider_row_scaled(ui, "Blue", blue, 0.0..=1.0, 100.0, "%");
             }
             Adjustment::Exposure {
                 exposure,
@@ -692,19 +702,36 @@ impl App {
                     label_w: 112.0,
                     ..RowOpts::default()
                 };
-                finished |= slider_row_ex(ui, "Cyan ↔ Red", &mut tone[0], -1.0..=1.0, "", o);
-                finished |= slider_row_ex(ui, "Magenta ↔ Green", &mut tone[1], -1.0..=1.0, "", o);
-                finished |= slider_row_ex(ui, "Yellow ↔ Blue", &mut tone[2], -1.0..=1.0, "", o);
-                if ui.checkbox(preserve_luminosity, "Preserve luminosity").changed() {
+                finished |=
+                    slider_row_scaled_w(ui, "Cyan ↔ Red", &mut tone[0], -1.0..=1.0, 100.0, "", o.label_w);
+                finished |= slider_row_scaled_w(
+                    ui,
+                    "Magenta ↔ Green",
+                    &mut tone[1],
+                    -1.0..=1.0,
+                    100.0,
+                    "",
+                    o.label_w,
+                );
+                finished |= slider_row_scaled_w(
+                    ui,
+                    "Yellow ↔ Blue",
+                    &mut tone[2],
+                    -1.0..=1.0,
+                    100.0,
+                    "",
+                    o.label_w,
+                );
+                if check(ui, preserve_luminosity, "Preserve luminosity").changed() {
                     finished = true;
                 }
             }
             Adjustment::Vibrance { vibrance, saturation } => {
-                finished |= slider_row(ui, "Vibrance", vibrance, -1.0..=1.0, "");
-                finished |= slider_row(ui, "Saturation", saturation, -1.0..=1.0, "");
+                finished |= slider_row_scaled(ui, "Vibrance", vibrance, -1.0..=1.0, 100.0, "");
+                finished |= slider_row_scaled(ui, "Saturation", saturation, -1.0..=1.0, 100.0, "");
             }
             Adjustment::Threshold { level } => {
-                finished |= slider_row(ui, "Level", level, 0.0..=1.0, "");
+                finished |= slider_row_scaled(ui, "Level", level, 0.0..=1.0, 255.0, "");
             }
             Adjustment::Posterize { levels } => {
                 let mut v = *levels as f32;
