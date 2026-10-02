@@ -21,7 +21,8 @@ impl App {
     /// so a menu opens, and an item fires, through exactly the code a
     /// user's click runs: `popups:click=T`, `popups:rclick=T`,
     /// `popups:hover=T`, `popups:wait`, `popups:esc`, `popups:key=Enter`
-    /// (any egui key name), `popups:type=text`. A target `T` is
+    /// (any egui key name), `popups:type=text`, `popups:sleep=ms` (real
+    /// time, for tooltip delays). A target `T` is
     /// `X:Y` in points or a name recorded by [`theme::note_target`]: a
     /// menu title ("File", "Export"), a menu item label ("Undo"), or an
     /// icon menu id ("add-adj", "layer-more", "export-button").
@@ -31,14 +32,19 @@ impl App {
         };
         let (verb, target) = rest.split_once('=').unwrap_or((rest, ""));
         let t = target.to_string();
+        // The pointer glides the last few points over three frames, as a
+        // real mouse does: egui only counts it as having moved (which
+        // tooltips wait for after a click) once it has a velocity.
+        let glide = |t: &String| vec![("move+8", t.clone()), ("move+4", t.clone()), ("move", t.clone())];
         let steps: Vec<(&str, String)> = match verb {
-            "click" => vec![("move", t.clone()), ("press-l", t.clone()), ("release-l", t)],
-            "rclick" => vec![("move", t.clone()), ("press-r", t.clone()), ("release-r", t)],
-            "hover" => vec![("move", t), ("wait", String::new())],
+            "click" => [glide(&t), vec![("press-l", t.clone()), ("release-l", t)]].concat(),
+            "rclick" => [glide(&t), vec![("press-r", t.clone()), ("release-r", t)]].concat(),
+            "hover" => [glide(&t), vec![("wait", String::new())]].concat(),
             "wait" => vec![("wait", String::new())],
             "esc" => vec![("key", "Escape".into())],
             "key" => vec![("key", t)],
             "type" => vec![("type", t)],
+            "sleep" => vec![("sleep", t)],
             _ => return false,
         };
         let id = egui::Id::new("popups:steps");
@@ -55,17 +61,45 @@ impl App {
     }
 
     /// Feed one queued `popups:` pointer step into the frame's raw input.
-    /// Does nothing unless `--screenshot-do` queued steps.
+    /// Does nothing unless `--screenshot-do` queued steps. Once a replay
+    /// has started, the real pointer is ignored (the OS cursor entering or
+    /// leaving the window would otherwise clear hovers mid-capture) and the
+    /// replayed pointer stays where it was last put.
     pub(crate) fn debug_popups_input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         let id = egui::Id::new("popups:steps");
-        let step = ctx.data_mut(|d| {
+        let last_id = egui::Id::new("popups:pointer");
+        let (step, replaying) = ctx.data_mut(|d| {
             let q = d.get_temp_mut_or_default::<Vec<(String, String)>>(id);
-            (!q.is_empty()).then(|| q.remove(0))
+            let step = (!q.is_empty()).then(|| q.remove(0));
+            let replaying = step.is_some() || d.get_temp::<bool>(id.with("started")).unwrap_or(false);
+            (step, replaying)
         });
+        if !replaying {
+            return;
+        }
+        ctx.data_mut(|d| d.insert_temp(id.with("started"), true));
+        raw.events.retain(|e| {
+            !matches!(
+                e,
+                egui::Event::PointerMoved(_)
+                    | egui::Event::PointerButton { .. }
+                    | egui::Event::PointerGone
+                    | egui::Event::MouseMoved(_)
+            )
+        });
+        if let Some(p) = ctx.data(|d| d.get_temp::<Pos2>(last_id)) {
+            raw.events.push(egui::Event::PointerMoved(p));
+        }
         let Some((verb, target)) = step else {
             return;
         };
         match verb.as_str() {
+            // Real time passing, for tooltip delays.
+            "sleep" => {
+                let ms = target.parse().unwrap_or(600);
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+                return;
+            }
             "type" => {
                 raw.events.push(egui::Event::Text(target));
                 return;
@@ -96,8 +130,12 @@ impl App {
             pressed,
             modifiers: egui::Modifiers::NONE,
         };
+        let pos = match verb.strip_prefix("move+").and_then(|d| d.parse::<f32>().ok()) {
+            Some(dx) => pos.map(|p| p + egui::vec2(dx, 0.0)),
+            None => pos,
+        };
         let event = match (verb.as_str(), pos) {
-            ("move", Some(p)) => egui::Event::PointerMoved(p),
+            (v, Some(p)) if v.starts_with("move") => egui::Event::PointerMoved(p),
             ("press-l", Some(p)) => button(egui::PointerButton::Primary, true, p),
             ("release-l", Some(p)) => button(egui::PointerButton::Primary, false, p),
             ("press-r", Some(p)) => button(egui::PointerButton::Secondary, true, p),
@@ -109,6 +147,9 @@ impl App {
             }
             _ => return,
         };
+        if let Some(p) = pos {
+            ctx.data_mut(|d| d.insert_temp(last_id, p));
+        }
         raw.events.push(event);
     }
 

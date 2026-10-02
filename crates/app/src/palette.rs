@@ -404,9 +404,6 @@ impl App {
             "rasterize" if !layer.is_some_and(|l| l.smart_layer().is_some() || l.text_layer().is_some()) => {
                 Some("Select a smart object or text layer first")
             }
-            "close" if self.tabs.is_empty() && self.editor.history().len() == self.saved_rev => {
-                Some("This is the only document and it has no changes")
-            }
             _ => None,
         }
     }

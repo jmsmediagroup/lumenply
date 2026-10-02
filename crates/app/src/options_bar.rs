@@ -384,7 +384,7 @@ impl App {
                                                     load = Some(i);
                                                 }
                                                 if ui
-                                                    .small_button("✕")
+                                                    .small_button("×")
                                                     .on_hover_text("Delete this saved path")
                                                     .clicked()
                                                 {
@@ -453,7 +453,7 @@ impl App {
                         if ui.selectable_label(false, &p.name).clicked() {
                             apply = Some(i);
                         }
-                        if ui.small_button("✕").on_hover_text("Delete this preset").clicked() {
+                        if ui.small_button("×").on_hover_text("Delete this preset").clicked() {
                             delete = Some(i);
                         }
                     });

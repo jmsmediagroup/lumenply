@@ -310,8 +310,9 @@ impl App {
                             r
                         };
                         menu_separator(ui);
-                        act(ui, pos + 1 < count, "Move up", "up");
-                        act(ui, pos > 0, "Move down", "down");
+                        act(ui, pos + 1 < count, "Move up", "up")
+                            .on_disabled_hover_text("Already at the top");
+                        act(ui, pos > 0, "Move down", "down").on_disabled_hover_text("Already at the bottom");
                         menu_separator(ui);
                         if row.clip {
                             act(ui, true, "Release clip", "unclip");
