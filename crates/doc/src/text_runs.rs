@@ -1,5 +1,6 @@
 //! Character styling inside a text layer: runs that override the layer's
-//! colour, size, bold or italic over a byte range of its text (Photoshop's
+//! colour, size, bold, italic, underline or strikethrough over a byte
+//! range of its text (Photoshop's
 //! per-character formatting). Runs never overlap, stay sorted, never
 //! repeat the layer's own value for a field, and follow every text edit
 //! made through [`TextLayer::replace_text`] or
@@ -22,6 +23,10 @@ pub struct CharStyle {
     pub bold: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strikethrough: Option<bool>,
 }
 
 impl CharStyle {
@@ -36,6 +41,8 @@ impl CharStyle {
             size: over.size.or(self.size),
             bold: over.bold.or(self.bold),
             italic: over.italic.or(self.italic),
+            underline: over.underline.or(self.underline),
+            strikethrough: over.strikethrough.or(self.strikethrough),
         }
     }
 }
@@ -57,6 +64,8 @@ pub struct ResolvedStyle {
     pub size: f32,
     pub bold: bool,
     pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
 }
 
 impl TextLayer {
@@ -76,6 +85,8 @@ impl TextLayer {
             size: o.size.unwrap_or(self.size),
             bold: o.bold.unwrap_or(self.bold),
             italic: o.italic.unwrap_or(self.italic),
+            underline: o.underline.unwrap_or(self.underline),
+            strikethrough: o.strikethrough.unwrap_or(self.strikethrough),
         }
     }
 
@@ -132,6 +143,12 @@ impl TextLayer {
         if let Some(v) = patch.italic {
             self.italic = v;
         }
+        if let Some(v) = patch.underline {
+            self.underline = v;
+        }
+        if let Some(v) = patch.strikethrough {
+            self.strikethrough = v;
+        }
         for r in &mut self.runs {
             if patch.color.is_some() {
                 r.style.color = None;
@@ -144,6 +161,12 @@ impl TextLayer {
             }
             if patch.italic.is_some() {
                 r.style.italic = None;
+            }
+            if patch.underline.is_some() {
+                r.style.underline = None;
+            }
+            if patch.strikethrough.is_some() {
+                r.style.strikethrough = None;
             }
         }
         self.normalize_runs();
@@ -264,6 +287,12 @@ impl TextLayer {
             if r.style.italic == Some(base.3) {
                 r.style.italic = None;
             }
+            if r.style.underline == Some(self.underline) {
+                r.style.underline = None;
+            }
+            if r.style.strikethrough == Some(self.strikethrough) {
+                r.style.strikethrough = None;
+            }
             if r.start >= r.end || r.style.is_empty() {
                 continue;
             }
@@ -317,7 +346,9 @@ mod tests {
                 color: RED,
                 size: 40.0,
                 bold: false,
-                italic: false
+                italic: false,
+                underline: false,
+                strikethrough: false
             }
         );
         assert_eq!((t.style_at(6).color, t.style_at(6).size), (BLACK, 40.0));

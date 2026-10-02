@@ -233,6 +233,33 @@ pub fn rasterize(t: &TextLayer) -> TileStore {
         return store;
     }
     let lay = crate::text_layout::layout(t);
+    // Underline and strikethrough: a bar under / through each glyph's
+    // advance (spaces between words included, as Photoshop draws them;
+    // spaces trailing a line are not).
+    let mut line_end = vec![f32::MIN; lay.lines.len()];
+    for g in &lay.glyphs {
+        if !t.text[g.byte..].starts_with(char::is_whitespace) {
+            line_end[g.line] = line_end[g.line].max(g.x + g.advance);
+        }
+    }
+    for g in &lay.glyphs {
+        let line = &lay.lines[g.line];
+        let face = &lay.faces[g.face];
+        if line.hidden || !(face.underline || face.strikethrough) || g.x >= line_end[g.line] {
+            continue;
+        }
+        let thick = (face.size / 16.0).max(1.0);
+        let mut bars = Vec::new();
+        if face.underline {
+            bars.push(line.baseline + face.size * 0.12);
+        }
+        if face.strikethrough {
+            bars.push(line.baseline - face.size * 0.3);
+        }
+        for top in bars {
+            fill_bar(&mut store, g.x, g.x + g.advance, top, top + thick, face.color);
+        }
+    }
     for g in &lay.glyphs {
         let line = &lay.lines[g.line];
         if line.hidden {
@@ -273,6 +300,24 @@ pub fn rasterize(t: &TextLayer) -> TileStore {
     }
     store.prune_blank();
     store
+}
+
+/// Paint `color` over the rectangle [x0, x1) × [y0, y1) (canvas px), with
+/// partial coverage on its fractional edges.
+fn fill_bar(store: &mut TileStore, x0: f32, x1: f32, y0: f32, y1: f32, color: [f32; 4]) {
+    let [r, g, b, a] = color;
+    let cover = |lo: f32, hi: f32, p: i32| (hi.min(p as f32 + 1.0) - lo.max(p as f32)).clamp(0.0, 1.0);
+    for py in y0.floor() as i32..y1.ceil() as i32 {
+        let cy = cover(y0, y1, py);
+        for px in x0.floor() as i32..x1.ceil() as i32 {
+            let c = cy * cover(x0, x1, px);
+            if c <= 0.0 {
+                continue;
+            }
+            let dst = store.get_pixel(px, py);
+            store.set_pixel(px, py, Rgba::from_straight(r, g, b, a * c).over(dst));
+        }
+    }
 }
 
 /// Thicken a coverage bitmap horizontally by `strength` pixels: each output
@@ -464,6 +509,41 @@ mod tests {
             }
         }
         total
+    }
+
+    #[test]
+    fn underline_and_strikethrough_draw_bars_under_and_through_the_glyphs() {
+        // "ll" at 32 px from x 10, baseline 100: the underline bar is
+        // 2 px thick (32 / 16) starting 3.84 px below the baseline, the
+        // strike bar 9.6 px above it; both span the advances.
+        let plain = TextLayer::new("ll", 10.0, 100.0, 32.0, BLACK);
+        let lay = crate::text_layout::layout(&plain);
+        let end = lay.glyphs[1].x + lay.glyphs[1].advance;
+        let under = rasterize(&TextLayer {
+            underline: true,
+            ..plain.clone()
+        });
+        let row = |s: &TileStore, y: i32| (0..200).filter(|&x| s.get_pixel(x, y).a > 0.99).count();
+        // Below the baseline (rows 104, 105) only the bar has ink: it runs
+        // from x 10 to the end of the last advance.
+        assert_eq!(row(&under, 104), (end - 10.0) as usize);
+        assert_eq!(row(&rasterize(&plain), 104), 0);
+        assert!(under.get_pixel(10, 104).a > 0.99 && under.get_pixel(9, 104).a < 0.01);
+        // Row 103 is partly covered (the bar starts at 103.84).
+        let partial = under.get_pixel(20, 103).a;
+        assert!((partial - 0.16).abs() < 0.02, "{partial}");
+        // Strikethrough: the band from 90.4 to 92.4, across the gap
+        // between the two l's too.
+        let strike = rasterize(&TextLayer {
+            strikethrough: true,
+            ..plain.clone()
+        });
+        let gap_x = (lay.glyphs[0].x + lay.glyphs[0].advance - 1.0) as i32;
+        assert!(
+            rasterize(&plain).get_pixel(gap_x, 91).a < 0.01,
+            "no ink in the gap"
+        );
+        assert!(strike.get_pixel(gap_x, 91).a > 0.99, "the bar crosses it");
     }
 
     #[test]

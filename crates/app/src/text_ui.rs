@@ -247,15 +247,7 @@ impl App {
         }
         row(ui, "Style", |ui| {
             finished |= style_toggles(ui, &mut t.bold, &mut t.italic, Some(&mut t.all_caps));
-            ui.add_space(4.0);
-            let r = chip(ui, t.kerning, RichText::new("VA").size(11.0), 28.0).on_hover_text(
-                "Kerning: the font's own pair spacing and exact advances (Photoshop's Metrics)",
-            );
-            a11y_name(&r, "Kerning");
-            if r.clicked() {
-                t.kerning = !t.kerning;
-                finished = true;
-            }
+            finished |= line_toggles(ui, &mut t.underline, &mut t.strikethrough);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 finished |= text_color_button(ui, &mut t.color);
             });
@@ -273,6 +265,25 @@ impl App {
             t.line_height = (lead / t.size).clamp(0.5, 10.0);
         }
         finished |= value_slider_row(ui, "Tracking", &mut t.tracking, -200.0..=800.0, "", false);
+        row(ui, "Kerning", |ui| {
+            for (on, label, tip) in [
+                (
+                    true,
+                    "Metrics",
+                    "The font's own pair spacing and exact advances (Photoshop's Metrics)",
+                ),
+                (false, "Off", "Whole-pixel advances without kerning pairs"),
+            ] {
+                if chip(ui, t.kerning == on, RichText::new(label), 0.0)
+                    .on_hover_text(tip)
+                    .clicked()
+                    && t.kerning != on
+                {
+                    t.kerning = on;
+                    finished = true;
+                }
+            }
+        });
         finished |= value_slider_row(
             ui,
             "Baseline",
@@ -521,6 +532,27 @@ fn style_toggles(ui: &mut egui::Ui, bold: &mut bool, italic: &mut bool, caps: Op
             a11y_name(&r, "All caps");
             if r.clicked() {
                 *caps = !*caps;
+                changed = true;
+            }
+        }
+    });
+    changed
+}
+
+/// Underline and strikethrough toggles. Returns true on a change.
+fn line_toggles(ui: &mut egui::Ui, underline: &mut bool, strike: &mut bool) -> bool {
+    let mut changed = false;
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.spacing_mut().button_padding.x = 4.0;
+        for (v, text, name) in [
+            (underline, RichText::new("U").underline(), "Underline"),
+            (strike, RichText::new("S").strikethrough(), "Strikethrough"),
+        ] {
+            let r = chip(ui, *v, text, 28.0).on_hover_text(name);
+            a11y_name(&r, name);
+            if r.clicked() {
+                *v = !*v;
                 changed = true;
             }
         }

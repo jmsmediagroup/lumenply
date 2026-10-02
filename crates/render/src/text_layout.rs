@@ -78,6 +78,9 @@ pub struct Face {
     pub color: [f32; 4],
     pub(crate) bold_px: f32,
     pub(crate) oblique: bool,
+    /// Draw a line under / through this face's glyphs.
+    pub underline: bool,
+    pub strikethrough: bool,
     bold: bool,
     italic: bool,
     ascent: f32,
@@ -123,10 +126,14 @@ fn face_for(t: &TextLayer, faces: &mut Vec<Face>, st: ResolvedStyle) -> usize {
     } else {
         12.0
     };
-    if let Some(i) = faces
-        .iter()
-        .position(|f| f.size == size && f.color == st.color && f.bold == st.bold && f.italic == st.italic)
-    {
+    if let Some(i) = faces.iter().position(|f| {
+        f.size == size
+            && f.color == st.color
+            && f.bold == st.bold
+            && f.italic == st.italic
+            && f.underline == st.underline
+            && f.strikethrough == st.strikethrough
+    }) {
         return i;
     }
     // Fonts resolve by family and style only, so a light key is enough.
@@ -156,6 +163,8 @@ fn face_for(t: &TextLayer, faces: &mut Vec<Face>, st: ResolvedStyle) -> usize {
             0.0
         },
         oblique: r.synthetic_oblique,
+        underline: st.underline,
+        strikethrough: st.strikethrough,
         bold: st.bold,
         italic: st.italic,
         ascent,
@@ -175,6 +184,8 @@ pub fn layout(t: &TextLayer) -> TextLayout {
             size: t.size,
             bold: t.bold,
             italic: t.italic,
+            underline: t.underline,
+            strikethrough: t.strikethrough,
         },
     );
     let (size, ascent, descent) = (faces[base].size, faces[base].ascent, faces[base].descent);

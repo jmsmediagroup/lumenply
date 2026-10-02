@@ -1210,7 +1210,8 @@ impl App {
     /// paragraph box, `text:edit` edits the active text layer (caret at the
     /// end), `text:select=A:B` selects byte range A..B, `text:caret=I`
     /// places the caret, `text:commit` ends the session, `text:leading=N`,
-    /// `text:size=N`, `text:color=R:G:B`, `text:strong` (bold), `text:shift=N`,
+    /// `text:size=N`, `text:color=R:G:B`, `text:strong` (bold),
+    /// `text:underline`, `text:strike`, `text:shift=N`,
     /// `text:caps`, `text:justify` restyle the active text like its
     /// controls do (character styles go to a canvas selection when there
     /// is one; `size` also sets the size for new text).
@@ -1251,6 +1252,10 @@ impl App {
                     if let [r, g, b] = c[..] {
                         t.color = linear_rgba([r / 255.0, g / 255.0, b / 255.0], 1.0);
                     }
+                } else if rest == "underline" {
+                    t.underline = !t.underline;
+                } else if rest == "strike" {
+                    t.strikethrough = !t.strikethrough;
                 } else if rest == "strong" {
                     t.bold = !t.bold;
                 } else if rest == "caps" {
@@ -1309,12 +1314,16 @@ pub(crate) fn route_text_edit(
         size: (edited.size != shown.size).then_some(edited.size),
         bold: (edited.bold != shown.bold).then_some(edited.bold),
         italic: (edited.italic != shown.italic).then_some(edited.italic),
+        underline: (edited.underline != shown.underline).then_some(edited.underline),
+        strikethrough: (edited.strikethrough != shown.strikethrough).then_some(edited.strikethrough),
     };
     let mut out = TextLayer {
         color: before.color,
         size: before.size,
         bold: before.bold,
         italic: before.italic,
+        underline: before.underline,
+        strikethrough: before.strikethrough,
         text: before.text.clone(),
         runs: before.runs.clone(),
         ..edited.clone()
@@ -1353,6 +1362,8 @@ impl App {
             shown.size = st.size;
             shown.bold = st.bold;
             shown.italic = st.italic;
+            shown.underline = st.underline;
+            shown.strikethrough = st.strikethrough;
         }
         (shown, sel)
     }

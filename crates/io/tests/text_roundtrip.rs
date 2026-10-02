@@ -117,6 +117,7 @@ fn lumen_round_trip_keeps_paragraph_boxes_and_character_options() {
         baseline_shift: -3.5,
         all_caps: true,
         kerning: true,
+        underline: true,
         line_height: 1.6,
         ..TextLayer::new(
             "wraps inside its box when it is long",
@@ -135,7 +136,7 @@ fn lumen_round_trip_keeps_paragraph_boxes_and_character_options() {
     assert_eq!(t.box_size, Some([180.0, 120.0]));
     assert_eq!(t.align, TextAlign::Justify);
     assert_eq!((t.baseline_shift, t.all_caps, t.line_height), (-3.5, true, 1.6));
-    assert!(t.kerning);
+    assert!(t.kerning && t.underline && !t.strikethrough);
     assert_eq!(*t, para);
     // Wrapped glyphs come back where they were.
     let orig = doc

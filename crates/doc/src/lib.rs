@@ -516,6 +516,11 @@ pub struct TextLayer {
     /// advances without pairs.
     #[serde(default)]
     pub kerning: bool,
+    /// A line under, or through, every character (runs may override).
+    #[serde(default)]
+    pub underline: bool,
+    #[serde(default)]
+    pub strikethrough: bool,
     /// Per-character colour, size, bold and italic (see [`text_runs`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runs: Vec<text_runs::TextRun>,
@@ -554,6 +559,8 @@ impl PartialEq for TextLayer {
             && self.baseline_shift == o.baseline_shift
             && self.all_caps == o.all_caps
             && self.kerning == o.kerning
+            && self.underline == o.underline
+            && self.strikethrough == o.strikethrough
             && self.runs == o.runs
     }
 }
@@ -576,6 +583,8 @@ impl TextLayer {
             baseline_shift: 0.0,
             all_caps: false,
             kerning: false,
+            underline: false,
+            strikethrough: false,
             runs: Vec::new(),
             cache: None,
         }
