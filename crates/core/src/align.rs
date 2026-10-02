@@ -105,6 +105,10 @@ fn translate(doc: &mut Document, id: LayerId, dx: i32, dy: i32) -> EditResult {
     if let Some(m) = l.mask.as_mut() {
         *m = lumenply_render::transform_mask(m, &t);
     }
+    // The smart-filter mask follows the layer too (ADR 0011).
+    if let Some(m) = l.smart_filters.mask.as_mut() {
+        *m = lumenply_render::transform_mask(m, &t);
+    }
     Ok(())
 }
 

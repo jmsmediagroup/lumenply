@@ -94,17 +94,20 @@ impl Command for CropCanvas {
                 }
                 LayerContent::Shape(sh) => sh.transform_by(&t),
                 LayerContent::Text(text) => {
-                    let (x, y) = t.apply(text.x, text.y);
                     // Whole-pixel crops keep the anchor exact.
-                    (text.x, text.y) = match exact {
-                        Some((dx, dy)) => (text.x + dx as f32, text.y + dy as f32),
-                        None => (x, y),
-                    };
+                    match exact {
+                        Some((dx, dy)) => (text.x, text.y) = (text.x + dx as f32, text.y + dy as f32),
+                        None => text.map_position(|x, y| t.apply(x, y)),
+                    }
                     lumenply_render::text::refresh_cache(text);
                 }
                 _ => {}
             }
             if let Some(m) = l.mask.as_mut() {
+                *m = lumenply_render::transform_mask(m, &t);
+            }
+            // The smart-filter mask follows the layer too (ADR 0011).
+            if let Some(m) = l.smart_filters.mask.as_mut() {
                 *m = lumenply_render::transform_mask(m, &t);
             }
         });

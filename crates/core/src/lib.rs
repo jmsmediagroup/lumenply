@@ -7,12 +7,14 @@
 //! CLI behave identically.
 
 pub mod align;
+pub mod brush_tip;
 pub mod canvas_ops;
 pub mod channels;
 pub mod commands;
 mod content_aware;
 pub mod crop;
 pub mod demo;
+mod erasers;
 pub mod fill_cmds;
 pub mod fill_opacity;
 pub mod gradient_tool;
@@ -22,9 +24,13 @@ pub mod liquify;
 pub mod locks;
 pub mod paste;
 pub mod quick_select;
+pub mod refine;
+mod retouch;
+mod retouch_brush;
 mod select_ops;
 pub mod shape_cmds;
 pub mod smart_contents;
+pub mod smart_filter_cmds;
 pub mod snap;
 
 use lumenply_doc::{Document, LayerId};
@@ -113,8 +119,12 @@ fn delta_bytes(old: &Document, new: &Document) -> usize {
     let mut total = 0;
     old.for_each_layer(|l| {
         let counterpart = new.layer(l.id);
-        if let Some(s) = l.raster_store() {
-            total += store_delta(s, counterpart.and_then(|n| n.raster_store()));
+        if let Some(s) = l.content_store() {
+            total += store_delta(s, counterpart.and_then(|n| n.content_store()));
+        }
+        if let Some(c) = &l.smart_filters.cache {
+            let other = counterpart.and_then(|n| n.smart_filters.cache.as_ref());
+            total += store_delta(&c.store, other.map(|o| &o.store));
         }
         if let Some(m) = &l.mask {
             total += store_delta(
@@ -180,8 +190,11 @@ pub fn compact_storage(doc: &mut Document) {
 pub fn storage_bytes(doc: &Document) -> usize {
     let mut total = 0;
     doc.for_each_layer(|l| {
-        if let Some(s) = l.raster_store() {
+        if let Some(s) = l.content_store() {
             total += s.byte_size();
+        }
+        if let Some(c) = &l.smart_filters.cache {
+            total += c.store.byte_size();
         }
         if let Some(m) = &l.mask {
             total += m.tiles.byte_size();
@@ -260,7 +273,7 @@ impl Editor {
             locks::enforce(&self.doc, &mut next, cmd)?;
             lumenply_render::fill::refresh_stale(&mut next);
             compact_storage(&mut next);
-            self.last_affected = cmd.affected(&self.doc);
+            self.last_affected = smart_filter_cmds::widen_affected(&next, cmd.affected(&self.doc));
             self.last_target = cmd.target_layer();
             // The whole drag undoes in one go, so its undo step covers
             // every tick so far, and its memory estimate follows the
@@ -284,6 +297,31 @@ impl Editor {
         self.coalesce_key = None;
     }
 
+    /// Is `key` the open coalescing run (its edits still share the last
+    /// undo step)?
+    pub fn coalescing(&self, key: &str) -> bool {
+        self.coalesce_key.as_deref() == Some(key)
+    }
+
+    /// Abandon the open coalescing run `key`: put the document back as it
+    /// was before the run and forget the run's undo step (it leaves no redo
+    /// entry either). For edit sessions that end with nothing worth
+    /// keeping, such as new text closed before anything was typed. Returns
+    /// false, changing nothing, when `key` is not the open run.
+    pub fn discard_coalescing(&mut self, key: &str) -> bool {
+        if !self.coalescing(key) {
+            return false;
+        }
+        let Some(snap) = self.undo.pop() else {
+            return false;
+        };
+        self.coalesce_key = None;
+        self.last_target = None;
+        self.last_affected = snap.affected;
+        self.doc = snap.doc;
+        true
+    }
+
     fn push_command(&mut self, cmd: &dyn Command) -> EditResult {
         let mut next = self.doc.clone();
         cmd.apply(&mut next)?;
@@ -291,7 +329,7 @@ impl Editor {
         // Fill layers follow canvas size changes (crop, resize, rotate).
         lumenply_render::fill::refresh_stale(&mut next);
         compact_storage(&mut next);
-        self.last_affected = cmd.affected(&self.doc);
+        self.last_affected = smart_filter_cmds::widen_affected(&next, cmd.affected(&self.doc));
         self.last_target = cmd.target_layer();
         let prev = std::mem::replace(&mut self.doc, next);
         let bytes = delta_bytes(&prev, &self.doc);
@@ -372,6 +410,18 @@ impl Editor {
         !self.redo.is_empty()
     }
 
+    /// The document as it was after `steps` history steps: 0 is the oldest
+    /// state kept (the opened image unless the history limit dropped it),
+    /// `history().len()` the current one, beyond that the redo steps.
+    pub fn state(&self, steps: usize) -> Option<&Document> {
+        let n = self.undo.len();
+        match steps.cmp(&n) {
+            std::cmp::Ordering::Less => Some(&self.undo[steps].doc),
+            std::cmp::Ordering::Equal => Some(&self.doc),
+            std::cmp::Ordering::Greater => self.redo.iter().rev().nth(steps - n - 1).map(|s| &s.doc),
+        }
+    }
+
     /// Labels of the undo stack, oldest first.
     pub fn history(&self) -> Vec<&str> {
         self.undo.iter().map(|s| s.label.as_str()).collect()
@@ -404,6 +454,7 @@ mod tests {
                 spacing: 0.25,
                 jitter: 0.0,
                 mode: BrushMode::Paint,
+                ..Brush::default()
             },
             points: vec![StrokePoint::new(10.0, 10.0, 1.0)],
         };
@@ -431,6 +482,58 @@ mod tests {
         });
         assert!(matches!(err, Err(EditError::NoLayer(42))));
         assert!(!ed.can_undo());
+    }
+
+    #[test]
+    fn discarding_a_coalesced_run_leaves_no_trace() {
+        let mut ed = Editor::new(Document::new(64, 64));
+        ed.execute(&AddPixelLayer::new("L")).unwrap();
+        let steps = ed.history().len();
+        let text = |s: &str| lumenply_doc::TextLayer::new(s, 4.0, 40.0, 20.0, [0.0, 0.0, 0.0, 1.0]);
+        let id = ed.doc().next_id();
+        ed.execute_coalescing(
+            &AddTextLayer {
+                text: text(""),
+                above: None,
+            },
+            "type",
+        )
+        .unwrap();
+        ed.execute_coalescing(
+            &SetText {
+                layer: id,
+                text: text("ab"),
+            },
+            "type",
+        )
+        .unwrap();
+        assert!(ed.coalescing("type") && !ed.coalescing("other"));
+        assert_eq!(ed.history().len(), steps + 1, "add + typing is one step");
+        assert_eq!(ed.doc().layer_count(), 2);
+
+        // Another key does nothing.
+        assert!(!ed.discard_coalescing("other"));
+        assert_eq!(ed.doc().layer_count(), 2);
+        // The open run goes away entirely: no layer, no step, no redo.
+        assert!(ed.discard_coalescing("type"));
+        assert_eq!(ed.doc().layer_count(), 1);
+        assert_eq!(ed.history().len(), steps);
+        assert!(!ed.can_redo());
+        assert!(!ed.coalescing("type"));
+        assert!(!ed.discard_coalescing("type"), "only once");
+
+        // A closed run cannot be discarded.
+        ed.execute_coalescing(
+            &AddTextLayer {
+                text: text("x"),
+                above: None,
+            },
+            "type",
+        )
+        .unwrap();
+        ed.end_coalescing();
+        assert!(!ed.discard_coalescing("type"));
+        assert_eq!(ed.doc().layer_count(), 2);
     }
 
     #[test]

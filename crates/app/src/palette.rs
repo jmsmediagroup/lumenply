@@ -171,6 +171,19 @@ const ACTIONS: &[(&str, &str)] = &[
     ("New fill layer: solid color", "fill-solid"),
     ("New fill layer: gradient", "fill-gradient"),
     ("New shape layer from path", "shape-from-path"),
+    ("Select and Mask...", "select-mask"),
+    ("Import brushes (.abr)...", "import-brushes"),
+    ("Define brush tip from selection", "define-brush"),
+    ("Convert for smart filters", "sf-convert"),
+    ("Spot Healing Brush (Heal ▸ Spot)", "tool-spot-heal"),
+    ("Patch tool (Heal ▸ Patch)", "tool-patch"),
+    ("Content-Aware Move tool (Heal ▸ Move)", "tool-content-move"),
+    ("Red Eye tool (Heal ▸ Red Eye)", "tool-red-eye"),
+    ("Blur tool (Brush ▸ Blur)", "tool-blur"),
+    ("Sharpen tool (Brush ▸ Sharpen)", "tool-sharpen"),
+    ("History Brush (Brush ▸ History)", "tool-history-brush"),
+    ("Background Eraser (Eraser ▸ Background)", "tool-bg-eraser"),
+    ("Magic Eraser (Eraser ▸ Magic)", "tool-magic-eraser"),
 ];
 
 impl App {
@@ -224,8 +237,28 @@ impl App {
                     ("Quick mask", "Q"),
                     ("Pan", "Space + drag, scroll"),
                     ("Zoom at the pointer", "Alt + scroll, pinch"),
-                    ("Commit / cancel (crop, transform, text)", "Enter  /  Esc"),
+                    ("Commit / cancel (crop, transform)", "Enter  /  Esc"),
                     ("Add to / subtract from a selection", "Shift  /  Alt"),
+                ] {
+                    row(ui, what, keys);
+                }
+                section_title(ui, "TYPING ON THE CANVAS");
+                let mac = cfg!(target_os = "macos");
+                for (what, keys) in [
+                    ("Edit the active text", "Enter (Text tool)"),
+                    ("Commit the text", "Esc  /  Cmd+Enter"),
+                    ("New line", "Enter"),
+                    (
+                        "Word / line jumps",
+                        if mac {
+                            "Alt+Arrow  /  Cmd+Arrow"
+                        } else {
+                            "Ctrl+Arrow  /  Home End"
+                        },
+                    ),
+                    ("Select word / line / all", "2 / 3 / 4 clicks"),
+                    ("Size of the selection", "Cmd+Shift+>  /  <"),
+                    ("Move the text", "Cmd + drag"),
                 ] {
                     row(ui, what, keys);
                 }
@@ -515,6 +548,9 @@ impl App {
         if let Some(block) = self.layer_action_block(id) {
             return block;
         }
+        if let Some(block) = self.smart_filter_action_block(id) {
+            return block;
+        }
         match id {
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
             "redo" if !self.editor.can_redo() => Some("Nothing to redo"),
@@ -591,6 +627,7 @@ impl App {
             }
             "fill-dialog" | "content-aware" if !pixel => need_pixel,
             "content-aware" if !selection => Some("Select the area to fill first"),
+            "select-mask" if !selection => need_selection,
             _ => None,
         }
     }
@@ -625,6 +662,7 @@ impl App {
             "actual" => (M::NONE, Key::Num1),
             "quick-mask" => (M::NONE, Key::Q),
             "palette" => (M::COMMAND, Key::K),
+            "select-mask" => (M::COMMAND | M::ALT, Key::R),
             _ => return String::new(),
         };
         shortcut_text(ctx, m, k)
@@ -647,7 +685,7 @@ impl App {
             self.status = why.into();
             return;
         }
-        if self.run_layer_action(id) {
+        if self.run_layer_action(id) || self.run_smart_filter_action(id) {
             return;
         }
         match id {
@@ -655,6 +693,8 @@ impl App {
             "open" => self.pick_open(),
             "demo" => self.open_demo(),
             "place" => self.pick_place(),
+            "import-brushes" => self.pick_import_brushes(),
+            "define-brush" => self.define_brush_tip(),
             "save" => self.save_live(),
             "saveas" => self.pick_save(),
             "export-png" => self.pick_export_png(),
@@ -844,7 +884,9 @@ impl App {
                 let margin = self.content_aware_margin();
                 self.dialog = Some(Dialog::Fill(aware, margin, 0));
             }
+            "select-mask" => self.open_select_mask(),
             aid if guides::VIEW_ACTIONS.contains(&aid) => self.run_view_aid(aid),
+            tool if self.retouch_tool_action(tool) => {}
             filter if filter.starts_with("filter-") => {
                 match filter_presets().into_iter().find(|(_, f)| filter_id(f) == filter) {
                     Some((_, f)) => self.dialog = Some(Dialog::Filter(f)),
@@ -871,7 +913,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 118); // + cut, copy, copy merged, paste, paste in place
+        assert_eq!(n, 131); // + convert for smart filters, retouching modes
     }
 
     #[test]

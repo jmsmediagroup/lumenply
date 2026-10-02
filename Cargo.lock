@@ -2483,6 +2483,7 @@ dependencies = [
  "lumenply-doc",
  "lumenply-render",
  "lumenply-tiles",
+ "rayon",
  "thiserror 1.0.69",
 ]
 

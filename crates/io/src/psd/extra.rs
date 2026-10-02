@@ -245,10 +245,7 @@ pub(super) fn parse_adjustment(key: &[u8], data: &[u8]) -> Option<Adjustment> {
                 2 => {
                     let space = d.u16().ok()?;
                     let c = [d.u16().ok()?, d.u16().ok()?, d.u16().ok()?, d.u16().ok()?];
-                    if space != 0 {
-                        return None;
-                    }
-                    [linear_of16(c[0]), linear_of16(c[1]), linear_of16(c[2])]
+                    photoshop_color(space, c)?
                 }
                 // Version 3 stores L*a*b* (D50) × 100 as 32-bit integers.
                 3 => {
@@ -729,6 +726,39 @@ pub(super) fn parse_fill(key: &[u8], data: &[u8]) -> Option<Fill> {
 }
 
 /// CIE L*a*b* (D50, Photoshop's Lab) to straight linear sRGB, clipped.
+/// A Photoshop colour structure (space id + four 16-bit components) as
+/// linear sRGB: RGB, HSB, CMYK (uncalibrated), Lab and Grayscale.
+fn photoshop_color(space: u16, c: [u16; 4]) -> Option<[f32; 3]> {
+    let unit = |v: u16, max: f32| (v as f32 / max).clamp(0.0, 1.0);
+    let gamma = match space {
+        0 => [unit(c[0], 65535.0), unit(c[1], 65535.0), unit(c[2], 65535.0)],
+        1 => {
+            // Hue in hundredths of a degree, saturation and brightness 0-10000.
+            let (h, s, v) = (c[0] as f32 / 100.0, unit(c[1], 10000.0), unit(c[2], 10000.0));
+            let f = |n: f32| {
+                let k = (n + h / 60.0).rem_euclid(6.0);
+                v - v * s * k.min(4.0 - k).clamp(0.0, 1.0)
+            };
+            [f(5.0), f(3.0), f(1.0)]
+        }
+        // 65535 is no ink.
+        2 => {
+            let k = 1.0 - unit(c[3], 65535.0);
+            [0, 1, 2].map(|i| unit(c[i], 65535.0) * (1.0 - k))
+        }
+        7 => {
+            return Some(lab_to_linear_srgb(
+                c[0] as f32 / 100.0,
+                c[1] as i16 as f32 / 100.0,
+                c[2] as i16 as f32 / 100.0,
+            ))
+        }
+        8 => [1.0 - unit(c[0], 10000.0); 3],
+        _ => return None,
+    };
+    Some(gamma.map(crate::srgb_to_linear_f))
+}
+
 pub(super) fn lab_to_linear_srgb(l: f32, a: f32, b: f32) -> [f32; 3] {
     let fy = (l + 16.0) / 116.0;
     let fx = fy + a / 500.0;
@@ -859,6 +889,26 @@ mod tests {
         };
         assert!(color.iter().all(|c| close(*c, 1.0)), "{color:?}");
         assert!(close(density, 0.4));
+
+        // Version 2 also names other colour spaces: Lab (7) mid grey,
+        // HSB (1) pure red, Grayscale (8) 0% = white.
+        for (space, comps, want) in [
+            (7u16, [5000u16, 0, 0, 0], srgb_to_linear_f(119.0 / 255.0)),
+            (1, [0, 10000, 10000, 0], 1.0),
+            (8, [0, 0, 0, 0], 1.0),
+        ] {
+            let mut v2 = vec![0, 2];
+            v2.extend_from_slice(&space.to_be_bytes());
+            for c in comps {
+                v2.extend_from_slice(&c.to_be_bytes());
+            }
+            v2.extend_from_slice(&25u32.to_be_bytes());
+            v2.push(1);
+            let Some(Adjustment::PhotoFilter { color, .. }) = parse_adjustment(b"phfl", &v2) else {
+                panic!("space {space}")
+            };
+            assert!((color[0] - want).abs() < 0.01, "space {space}: {color:?}");
+        }
     }
 
     /// Writes `<tmp>/lumenply-psd-extra/adjustments.psd` (checked with

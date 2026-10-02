@@ -344,6 +344,8 @@ impl GpuCompositor {
                     && l.effects.is_empty()
                     // Fill opacity below 100% renders on the CPU reference path.
                     && l.fill_opacity >= 1.0
+                    // Smart filters render on the CPU (ADR 0011).
+                    && !l.smart_filters.is_active()
                     && match &l.content {
                         LayerContent::Pixel(_)
                         | LayerContent::Text(_)

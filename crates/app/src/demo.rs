@@ -51,6 +51,7 @@ pub(crate) fn build() -> Result<Editor, String> {
         "Lift shadows",
         Adjustment::Curves {
             points: vec![[0.0, 0.03], [0.22, 0.29], [0.55, 0.6], [1.0, 1.0]],
+            channels: Default::default(),
         },
     )?;
 
@@ -62,6 +63,7 @@ pub(crate) fn build() -> Result<Editor, String> {
             hue: 6.0,
             saturation: 0.32,
             lightness: 0.0,
+            colorize: false,
         },
     )?;
     ed.execute(&SetMask {

@@ -66,16 +66,23 @@ impl App {
                             let field = |ui: &mut egui::Ui, label: &str, dv: egui::DragValue| {
                                 ui.label(RichText::new(label).color(MUTED));
                                 let r = num_field(ui, dv.fixed_decimals(1), 70.0);
-                                a11y_name(&r, match label {
-                                    "W" => "Width",
-                                    "H" => "Height",
-                                    other => other,
-                                });
+                                a11y_name(
+                                    &r,
+                                    match label {
+                                        "W" => "Width",
+                                        "H" => "Height",
+                                        other => other,
+                                    },
+                                );
                                 r.changed()
                             };
                             let c1 = field(ui, "W", egui::DragValue::new(&mut sx).speed(1.0).suffix("%"));
                             let c2 = field(ui, "H", egui::DragValue::new(&mut sy).speed(1.0).suffix("%"));
-                            let c3 = field(ui, "Rotate", egui::DragValue::new(&mut rot).speed(0.5).suffix("°"));
+                            let c3 = field(
+                                ui,
+                                "Rotate",
+                                egui::DragValue::new(&mut rot).speed(0.5).suffix("°"),
+                            );
                             let c4 = field(
                                 ui,
                                 "Skew",
@@ -122,8 +129,9 @@ impl App {
                         ui.separator();
                         if ui
                             .add(
-                                primary_button("Apply")
-                                    .shortcut_text(RichText::new("Enter").color(ACCENT_INK.gamma_multiply(0.7))),
+                                primary_button("Apply").shortcut_text(
+                                    RichText::new("Enter").color(ACCENT_INK.gamma_multiply(0.7)),
+                                ),
                             )
                             .on_hover_text("Commit the transform (Enter)")
                             .clicked()
@@ -183,7 +191,9 @@ impl App {
                                         .shortcut_text(self.action_keys(ui.ctx(), "xform")),
                                 )
                                 .on_hover_text("Scale, rotate, skew, distort or warp the active layer")
-                                .on_disabled_hover_text(block.unwrap_or("Select a pixel layer to transform it"))
+                                .on_disabled_hover_text(
+                                    block.unwrap_or("Select a pixel layer to transform it"),
+                                )
                                 .clicked()
                             {
                                 self.begin_free_transform();
@@ -226,19 +236,25 @@ impl App {
                         Tool::Shape => self.shape_options_bar(ui, tier),
                         Tool::Gradient => self.gradient_options_bar(ui, tier),
                         Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal => {
+                            if self.retouch_options_bar(ui, tier) {
+                                return;
+                            }
                             if self.tool == Tool::Brush {
-                                const MODES: [(BrushMode, &str); 6] = [
+                                const MODES: [(BrushMode, &str); 9] = [
                                     (BrushMode::Paint, "Paint"),
                                     (BrushMode::Dodge, "Dodge"),
                                     (BrushMode::Burn, "Burn"),
                                     (BrushMode::Smudge, "Smudge"),
                                     (BrushMode::Saturate, "Sat+"),
                                     (BrushMode::Desaturate, "Sat−"),
+                                    (BrushMode::Blur, "Blur"),
+                                    (BrushMode::Sharpen, "Sharpen"),
+                                    (BrushMode::History, "History"),
                                 ];
                                 if tier == Tier::Wide {
                                     segmented(ui, &mut self.brush.mode, &MODES);
                                 } else {
-                                    // Narrow: the six modes fold into a menu.
+                                    // Narrow: the modes fold into a menu.
                                     let current = MODES
                                         .iter()
                                         .find(|(m, _)| *m == self.brush.mode)
@@ -255,17 +271,16 @@ impl App {
                                     a11y_name(&r, "Brush mode");
                                     r.on_hover_text("Brush mode");
                                 }
+                                if self.brush.mode == BrushMode::History {
+                                    self.history_source_ui(ui);
+                                }
                                 ui.separator();
                                 self.brush_presets_ui(ui, tier);
                                 ui.separator();
                             }
-                            if self.tool == Tool::Heal {
-                                check(ui, &mut self.heal_spot, "Spot").on_hover_text(
-                                    "Heal from the surroundings alone; untick to add texture from a picked source",
-                                );
-                            }
                             let needs_source = self.tool == Tool::Clone
-                                || (self.tool == Tool::Heal && !self.heal_spot);
+                                || (self.tool == Tool::Heal
+                                    && self.retouch.heal_mode == crate::retouch_ui::HealMode::Healing);
                             if needs_source {
                                 let picking = self.clone_picking || self.clone_source.is_none();
                                 let status = match self.clone_source {
@@ -290,12 +305,14 @@ impl App {
                                         None => text.color(MUTED),
                                     });
                                 }
-                                check(ui, &mut self.sample_merged, "All layers")
-                                    .on_hover_text("Sample the merged image instead of the active layer only");
+                                check(ui, &mut self.sample_merged, "All layers").on_hover_text(
+                                    "Sample the merged image instead of the active layer only",
+                                );
                             }
-                            if self.tool == Tool::Heal || needs_source {
+                            if needs_source {
                                 ui.separator();
                             }
+                            self.brush_settings_button(ui);
                             let mut size = self.brush.radius * 2.0;
                             if bar_slider(ui, "Size", &mut size, 2.0..=400.0, " px", true) {
                                 self.brush.radius = size / 2.0;
@@ -307,15 +324,21 @@ impl App {
                             // their (scrubbable) number fields and drop the
                             // sliders, so the row fits.
                             let tight = tier == Tier::Tight;
-                            let row = |ui: &mut egui::Ui, label: &str, v: &mut f32, r: RangeInclusive<f32>| {
-                                if tight {
-                                    bar_value(ui, label, v, r, "%")
-                                } else {
-                                    bar_slider(ui, label, v, r, "%", false)
-                                }
-                            };
+                            let row =
+                                |ui: &mut egui::Ui, label: &str, v: &mut f32, r: RangeInclusive<f32>| {
+                                    if tight {
+                                        bar_value(ui, label, v, r, "%")
+                                    } else {
+                                        bar_slider(ui, label, v, r, "%", false)
+                                    }
+                                };
                             let mut hard = self.brush.hardness * 100.0;
-                            if row(ui, "Hardness", &mut hard, 0.0..=100.0) {
+                            // A sampled tip carries its own edge.
+                            let round = self.brush.tip.is_none();
+                            if ui
+                                .add_enabled_ui(round, |ui| row(ui, "Hardness", &mut hard, 0.0..=100.0))
+                                .inner
+                            {
                                 self.brush.hardness = hard / 100.0;
                             }
                             let mut op = self.brush.color[3] * 100.0;
@@ -325,8 +348,10 @@ impl App {
                             if pen::toggle(ui, &mut self.prefs.pen_opacity, "Pen pressure controls opacity") {
                                 self.prefs.save();
                             }
+                            // On a tight bar Scatter lives in Brush settings
+                            // only, so the bar still fits.
                             let mut sc = self.brush.jitter * 100.0;
-                            if row(ui, "Scatter", &mut sc, 0.0..=100.0) {
+                            if tier != Tier::Tight && row(ui, "Scatter", &mut sc, 0.0..=400.0) {
                                 self.brush.jitter = sc / 100.0;
                             }
                             if self.tool == Tool::Brush && self.editing_mask {
@@ -413,9 +438,7 @@ impl App {
                                 .on_disabled_hover_text(need_path)
                                 .clicked()
                             {
-                                self.run(&PathToSelection {
-                                    op: self.select_op,
-                                });
+                                self.run(&PathToSelection { op: self.select_op });
                             }
                             if ui
                                 .add_enabled(has_path, egui::Button::new("Clear path"))
@@ -502,26 +525,19 @@ impl App {
         };
         if ui
             .button(save)
-            .on_hover_text("Save a brush preset: the current size, hardness, opacity, spacing and scatter")
+            .on_hover_text(
+                "Save a brush preset: the current tip, size, hardness, opacity, spacing and dynamics",
+            )
             .clicked()
         {
-            let name = format!(
-                "{} {:.0}",
-                if self.brush.hardness >= 0.5 {
-                    "Hard"
-                } else {
-                    "Soft"
-                },
-                self.brush.radius * 2.0
-            );
-            self.prefs.brush_presets.push(session::BrushPreset {
-                name,
-                radius: self.brush.radius,
-                hardness: self.brush.hardness,
-                spacing: self.brush.spacing,
-                jitter: self.brush.jitter,
-                opacity: self.brush.color[3],
-            });
+            let kind = match &self.brush.tip {
+                Some(t) => t.name().to_string(),
+                None if self.brush.hardness >= 0.5 => "Hard".into(),
+                None => "Soft".into(),
+            };
+            let name = format!("{kind} {:.0}", self.brush.radius * 2.0);
+            let preset = self.current_preset(name);
+            self.prefs.brush_presets.push(preset);
             self.prefs.save();
             self.status = "Brush preset saved".into();
         }
@@ -549,11 +565,7 @@ impl App {
         a11y_name(&r.response, "Brush presets");
         if let Some(i) = apply {
             let p = self.prefs.brush_presets[i].clone();
-            self.brush.radius = p.radius.clamp(0.5, 500.0);
-            self.brush.hardness = p.hardness.clamp(0.0, 1.0);
-            self.brush.spacing = p.spacing.clamp(0.02, 2.0);
-            self.brush.jitter = p.jitter.clamp(0.0, 1.0);
-            self.brush.color[3] = p.opacity.clamp(0.0, 1.0);
+            self.apply_preset(&p);
             self.status = format!("Brush preset \"{}\" applied", p.name);
         }
         if let Some(i) = delete {

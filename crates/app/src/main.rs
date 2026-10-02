@@ -24,6 +24,7 @@ use lumenply_tiles::{Affine, Raster, Rect};
 
 mod adjust_ui;
 mod brand;
+mod brush_panel;
 mod camera_raw;
 mod canvas;
 mod clipboard;
@@ -47,13 +48,17 @@ mod palette;
 mod pen;
 mod properties;
 mod quick_select_tool;
+mod retouch_ui;
 #[cfg(test)]
 mod select_fill_tests;
+mod select_mask;
 mod session;
 mod shape_tool;
 mod smart_contents;
+mod smart_filters_ui;
 mod start;
 mod status;
+mod text_edit;
 mod text_ui;
 mod theme;
 mod tools;
@@ -308,6 +313,10 @@ struct App {
     liquify: Option<Box<liquify::LiquifyState>>,
     /// The Camera Raw develop workspace, while a RAW file is being opened.
     camera_raw: Option<Box<camera_raw::CameraRawState>>,
+    /// Select ▸ Select and Mask's workspace, while open (it replaces the
+    /// editor UI), and the settings it remembers between openings.
+    select_mask: Option<Box<select_mask::SelectMaskState>>,
+    select_mask_prefs: select_mask::SelectMaskPrefs,
     /// Clone source point (document space), and whether the next click picks it.
     clone_source: Option<(f32, f32)>,
     clone_picking: bool,
@@ -374,8 +383,8 @@ struct App {
     pen_hit: Option<PenHit>,
     /// Pen: the selected node (its handles are shown and grabbable).
     pen_sel: Option<(usize, usize)>,
-    /// Healing brush: true = spot mode (no texture source needed).
-    heal_spot: bool,
+    /// Retouching modes of the Heal and Eraser tools (retouch_ui.rs).
+    retouch: retouch_ui::Retouch,
     /// Quick-mask mode: paint the selection itself under a red overlay.
     quick_mask: bool,
     /// Selection boundary pixels for the animated marching ants.
@@ -412,6 +421,10 @@ struct App {
     shape: shape_tool::ShapeTool,
     /// The Gradient tool's options, popover and drag (gradient_ui.rs).
     gradient: gradient_ui::GradientTool,
+    /// Brush tips for the picker: built-in and imported (brush_panel.rs).
+    brushes: brush_panel::BrushLibrary,
+    /// On-canvas text editing with the Text tool (text_edit.rs).
+    typer: text_edit::TypeTool,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -470,6 +483,7 @@ impl App {
                 spacing: 0.12,
                 jitter: 0.0,
                 mode: BrushMode::Paint,
+                ..Brush::default()
             },
             brush_rgb: [0.10, 0.18, 0.55],
             bg_rgb: [1.0, 1.0, 1.0],
@@ -492,6 +506,8 @@ impl App {
             quick: Default::default(),
             clip: None,
             camera_raw: None,
+            select_mask: None,
+            select_mask_prefs: Default::default(),
             clone_source: None,
             clone_picking: true,
             clone_offset: (0, 0),
@@ -533,7 +549,7 @@ impl App {
             pen_dragging: false,
             pen_hit: None,
             pen_sel: None,
-            heal_spot: true,
+            retouch: Default::default(),
             quick_mask: false,
             sel_points: Vec::new(),
             layer_drag: None,
@@ -574,6 +590,8 @@ impl App {
             aids: guides::ViewAids::default(),
             shape: Default::default(),
             gradient: Default::default(),
+            brushes: brush_panel::BrushLibrary::load(),
+            typer: text_edit::TypeTool::default(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -586,6 +604,7 @@ impl App {
         for p in &launch.places {
             app.place_image(p);
         }
+        app.restore_brush();
         if session::autosave_file().is_some_and(|p| p.exists()) {
             app.dialog = Some(Dialog::Recover);
         }
@@ -622,6 +641,7 @@ impl App {
         self.move_offset = (0, 0);
         self.crop.frame = None;
         self.aids = guides::ViewAids::default();
+        self.retouch.reset();
         if self.xform.take().is_some() {
             self.mark(None);
         }
@@ -891,8 +911,11 @@ impl App {
     }
 
     fn make_brush(&self) -> Brush {
-        let mut b = self.brush;
+        let mut b = self.brush.clone();
         b.color = linear_rgba(self.brush_rgb, self.brush.color[3].max(0.0));
+        // Colour dynamics mix toward the background colour.
+        let [br, bg, bb, _] = linear_rgba(self.bg_rgb, 1.0);
+        b.dynamics.background = [br, bg, bb];
         b.mode = match self.tool {
             Tool::Eraser => BrushMode::Erase,
             // The Brush tool keeps its chosen mode (Paint / Dodge / Burn).
@@ -951,7 +974,27 @@ impl App {
         }
         if self.tool == Tool::Heal {
             brush.mode = BrushMode::Paint;
-            let texture = !self.heal_spot && self.clone_source.is_some();
+            // Content-aware spot healing runs on release; while dragging
+            // the fast diffusion heal previews it.
+            if self.retouch.heal_mode == retouch_ui::HealMode::Spot
+                && self.retouch.spot_aware
+                && self.drag != Some(DragKind::Stroke)
+            {
+                let sample = self.retouch.sample;
+                return Box::new(SpotHealAware {
+                    layer,
+                    brush,
+                    points,
+                    sample,
+                });
+            }
+            let texture =
+                self.retouch.heal_mode == retouch_ui::HealMode::Healing && self.clone_source.is_some();
+            // On release the whole stroke heals as one region; while
+            // dragging, per-dab healing previews it.
+            if self.drag != Some(DragKind::Stroke) {
+                return Box::new(self.heal_region(layer, brush, points, texture));
+            }
             let sample = if self.sample_merged {
                 SampleSource::Merged
             } else {
@@ -980,6 +1023,15 @@ impl App {
                 offset: self.clone_offset,
                 sample,
             });
+        }
+        if self.tool == Tool::Eraser
+            && self.retouch.eraser_mode == retouch_ui::EraserMode::Background
+            && !self.editing_mask
+        {
+            return Box::new(self.background_erase(layer, brush, points));
+        }
+        if self.tool == Tool::Brush && brush.mode == BrushMode::History && !self.editing_mask {
+            return Box::new(self.history_stroke(layer, brush, points));
         }
         if self.editing_mask {
             Box::new(PaintMask { layer, brush, points })
@@ -1045,6 +1097,10 @@ impl App {
             // it goes first.
             if i.consume_key(M::COMMAND | M::SHIFT | M::ALT, Key::E) {
                 fired.push("stamp-visible");
+            }
+            // Select and Mask (Alt+Cmd+R) holds the rulers chord.
+            if i.consume_key(M::COMMAND | M::ALT, Key::R) {
+                fired.push("select-mask");
             }
             for (id, ..) in session::SHORTCUTS {
                 if let Some((m, k)) = session::resolve_chord(&self.prefs, id) {
@@ -1186,7 +1242,9 @@ impl App {
             if t == Tool::Wand && ctx.input(|i| i.modifiers.shift) {
                 self.quick.on = !self.quick.on;
             }
-            self.tool = t;
+            // Shift+J / Shift+E step through the Heal and Eraser modes.
+            let shift = ctx.input(|i| i.modifiers.shift);
+            self.select_tool_key(t, shift);
         }
         let quick = self.tool == Tool::Wand && self.quick.on;
         if bigger {
@@ -1315,6 +1373,7 @@ impl eframe::App for App {
         // An intentional exit needs no crash recovery; a stale backup would
         // only raise a misleading prompt next launch.
         session::remove_autosave();
+        self.remember_brush();
     }
 }
 
@@ -1328,6 +1387,11 @@ impl App {
         }
         if self.camera_raw.is_some() {
             self.camera_raw_ui(ctx);
+            self.debug_screenshot(ctx);
+            return;
+        }
+        if self.select_mask.is_some() {
+            self.select_mask_ui(ctx);
             self.debug_screenshot(ctx);
             return;
         }
@@ -1350,6 +1414,7 @@ impl App {
             self.dialog = Some(Dialog::ConfirmClose);
         }
         self.shortcuts(ctx);
+        self.text_edit_guard(ctx);
         self.menu_bar(ctx);
         if self.no_doc {
             self.welcome(ctx);
@@ -1444,6 +1509,7 @@ fn adjustment_presets() -> Vec<(&'static str, Adjustment)> {
             "Curves",
             Adjustment::Curves {
                 points: vec![[0.0, 0.0], [1.0, 1.0]],
+                channels: Default::default(),
             },
         ),
         (
@@ -1467,6 +1533,7 @@ fn adjustment_presets() -> Vec<(&'static str, Adjustment)> {
                 hue: 0.0,
                 saturation: 0.0,
                 lightness: 0.0,
+                colorize: false,
             },
         ),
         ("Color Balance", Adjustment::color_balance_default()),

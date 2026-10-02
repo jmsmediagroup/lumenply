@@ -18,8 +18,17 @@ pub use lumenply_doc::selection_ops::EdgeOp;
 pub use crate::crop::CropCanvas;
 pub use crate::guides::{AddGuide, ClearGuides, MoveGuide, RemoveGuide};
 
+pub use crate::erasers::{BackgroundErase, MagicErase};
 pub use crate::fill_cmds::{AddFillLayer, SetFill};
+pub use crate::retouch::{ContentAwareMove, HealRegion, PatchHeal, RedEye, RetouchSample, SpotHealAware};
+pub use crate::retouch_brush::HistoryStroke;
 pub use crate::shape_cmds::{AddShapeLayer, SetShape, ShapeFromWorkPath, ShapeToWorkPath};
+pub use crate::smart_filter_cmds::{
+    AddSmartFilter, RemoveSmartFilter, ReorderSmartFilter, SetSmartFilter, SetSmartFilterMask,
+    SetSmartFiltersEnabled,
+};
+
+pub use crate::brush_tip::{BrushDynamics, BrushTip, Dab};
 
 /// Add an empty pixel layer (or one filled from a raster) on top of the stack.
 pub struct AddPixelLayer {
@@ -266,7 +275,7 @@ impl Command for RasterizeLayer {
     }
 
     fn apply(&self, doc: &mut Document) -> EditResult {
-        let (w, h) = (doc.width, doc.height);
+        let (w, h, float) = (doc.width, doc.height, doc.float_mode);
         let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
         let store = match &mut l.content {
             LayerContent::Text(t) => {
@@ -292,6 +301,13 @@ impl Command for RasterizeLayer {
                 )))
             }
         };
+        // Smart filters bake into the pixels, as Photoshop does.
+        let store = if l.smart_filters.is_active() {
+            lumenply_render::smart_filters::bake(&store, &l.smart_filters, Rect::new(0, 0, w, h), float)
+        } else {
+            store
+        };
+        l.smart_filters = Default::default();
         l.content = LayerContent::Pixel(store);
         Ok(())
     }
@@ -882,6 +898,10 @@ impl Command for TransformLayer {
         if let Some(m) = l.mask.as_mut() {
             *m = lumenply_render::transform_mask(m, &self.transform);
         }
+        // The smart-filter mask follows the layer too (ADR 0011).
+        if let Some(m) = l.smart_filters.mask.as_mut() {
+            *m = lumenply_render::transform_mask(m, &self.transform);
+        }
         Ok(())
     }
 }
@@ -956,6 +976,10 @@ impl Command for PerspectiveLayer {
         if let Some(m) = l.mask.as_mut() {
             *m = lumenply_render::perspective_mask(m, &h);
         }
+        // The smart-filter mask follows the layer too (ADR 0011).
+        if let Some(m) = l.smart_filters.mask.as_mut() {
+            *m = lumenply_render::perspective_mask(m, &h);
+        }
         Ok(())
     }
 }
@@ -1022,6 +1046,10 @@ impl Command for WarpLayer {
         }
         *store = lumenply_render::warp_store(store, &self.grid);
         if let Some(m) = l.mask.as_mut() {
+            *m = lumenply_render::warp_mask(m, &self.grid);
+        }
+        // The smart-filter mask follows the layer too (ADR 0011).
+        if let Some(m) = l.smart_filters.mask.as_mut() {
             *m = lumenply_render::warp_mask(m, &self.grid);
         }
         Ok(())
@@ -1469,6 +1497,10 @@ impl Command for ResizeImage {
             if let Some(m) = l.mask.as_mut() {
                 *m = lumenply_render::transform_mask(m, &t);
             }
+            // The smart-filter mask follows the layer too (ADR 0011).
+            if let Some(m) = l.smart_filters.mask.as_mut() {
+                *m = lumenply_render::transform_mask(m, &t);
+            }
         });
         doc.width = self.width;
         doc.height = self.height;
@@ -1489,6 +1521,10 @@ fn shift_all(doc: &mut Document, dx: i32, dy: i32) {
             _ => {}
         }
         if let Some(m) = l.mask.as_mut() {
+            *m = lumenply_render::transform_mask(m, &Affine::translate(dx as f32, dy as f32));
+        }
+        // The smart-filter mask follows the layer too (ADR 0011).
+        if let Some(m) = l.smart_filters.mask.as_mut() {
             *m = lumenply_render::transform_mask(m, &Affine::translate(dx as f32, dy as f32));
         }
     });
@@ -1655,7 +1691,7 @@ pub fn flood_region(
     mask
 }
 
-fn sampler<'a>(
+pub(crate) fn sampler<'a>(
     doc: &'a Document,
     source: SampleSource,
 ) -> Result<Box<dyn Fn(i32, i32) -> Rgba + 'a>, EditError> {
@@ -2035,7 +2071,7 @@ impl Command for StrokeWorkPath {
             }
             PaintStroke {
                 layer: self.layer,
-                brush: self.brush,
+                brush: self.brush.clone(),
                 points,
             }
             .apply(doc)?;
@@ -2142,19 +2178,19 @@ impl Command for HealStroke {
 fn heal_dab(
     store: &mut lumenply_tiles::TileStore,
     brush: &Brush,
-    p: StrokePoint,
+    p: Dab,
     canvas: Rect,
     sel: Option<&Selection>,
     source: Option<&Raster>,
     offset: (i32, i32),
     strength: f32,
 ) {
-    let strength = strength * p.opacity.clamp(0.0, 1.0);
-    let r = brush.radius * p.pressure.clamp(0.0, 1.0);
+    let strength = strength * p.opacity;
+    let r = p.radius;
     if r <= 0.0 {
         return;
     }
-    let pad = r.ceil() as i32 + 2;
+    let pad = (r * brush.reach() + brush.margin()).ceil() as i32 + 2;
     let region = Rect::new(
         p.x as i32 - pad,
         p.y as i32 - pad,
@@ -2363,14 +2399,16 @@ impl Command for RotateImage {
                 LayerContent::Smart(sm) => smart_compose(sm, &t),
                 LayerContent::Shape(sh) => sh.transform_by(&t),
                 LayerContent::Text(tl) => {
-                    let (nx, ny) = t.apply(tl.x, tl.y);
-                    tl.x = nx;
-                    tl.y = ny;
+                    tl.map_position(|x, y| t.apply(x, y));
                     lumenply_render::text::refresh_cache(tl);
                 }
                 _ => {}
             }
             if let Some(m) = l.mask.as_mut() {
+                *m = lumenply_render::transform_mask(m, &t);
+            }
+            // The smart-filter mask follows the layer too (ADR 0011).
+            if let Some(m) = l.smart_filters.mask.as_mut() {
                 *m = lumenply_render::transform_mask(m, &t);
             }
         });
@@ -2410,14 +2448,16 @@ impl Command for FlipImage {
                 LayerContent::Smart(sm) => smart_compose(sm, &t),
                 LayerContent::Shape(sh) => sh.transform_by(&t),
                 LayerContent::Text(tl) => {
-                    let (nx, ny) = t.apply(tl.x, tl.y);
-                    tl.x = nx;
-                    tl.y = ny;
+                    tl.map_position(|x, y| t.apply(x, y));
                     lumenply_render::text::refresh_cache(tl);
                 }
                 _ => {}
             }
             if let Some(m) = l.mask.as_mut() {
+                *m = lumenply_render::transform_mask(m, &t);
+            }
+            // The smart-filter mask follows the layer too (ADR 0011).
+            if let Some(m) = l.smart_filters.mask.as_mut() {
                 *m = lumenply_render::transform_mask(m, &t);
             }
         });
@@ -2626,11 +2666,23 @@ pub enum BrushMode {
     Saturate,
     /// Drain saturation; `color[3]` acts as strength.
     Desaturate,
+    /// Soften what is there (a small box blur per dab); `color[3]` acts as
+    /// strength.
+    Blur,
+    /// Crisp up what is there (unsharp mask per dab); `color[3]` acts as
+    /// strength.
+    Sharpen,
+    /// Paint from a past state (the history brush). A `PaintStroke` cannot
+    /// carry the state, so it refuses this mode: use [`HistoryStroke`].
+    History,
 }
 
-/// A round brush. Pressure scales the radius; `hardness` 1.0 is a crisp
-/// (antialiased) edge, 0.0 a fully soft falloff.
-#[derive(Clone, Copy, Debug)]
+/// A brush: the computed round tip or a sampled one, with Photoshop's
+/// tip shape (angle, roundness) and per-dab dynamics. Pressure scales the
+/// radius; `hardness` 1.0 is a crisp (antialiased) edge, 0.0 a fully soft
+/// falloff (round tip only). Not `Copy`: a sampled tip is shared image
+/// data, so clone it (cheap, the tip is an `Arc`).
+#[derive(Clone, Debug)]
 pub struct Brush {
     pub radius: f32,
     pub hardness: f32,
@@ -2640,9 +2692,20 @@ pub struct Brush {
     pub spacing: f32,
     /// Scatter: each dab lands up to `jitter × radius` off the stroke, in
     /// a direction and distance hashed from its index, so replays are
-    /// deterministic. 0 keeps dabs on the line.
+    /// deterministic. 0 keeps dabs on the line; at most
+    /// [`crate::brush_tip::MAX_SCATTER`].
     pub jitter: f32,
     pub mode: BrushMode,
+    /// A sampled tip (grayscale coverage), or `None` for the computed
+    /// round tip.
+    pub tip: Option<std::sync::Arc<BrushTip>>,
+    /// Tip angle in degrees, counter-clockwise.
+    pub angle: f32,
+    /// Tip roundness in `(0, 1]`: 1 keeps its proportions, less squashes
+    /// it across its angle.
+    pub roundness: f32,
+    /// Shape dynamics, count and transfer jitter.
+    pub dynamics: BrushDynamics,
 }
 
 impl Default for Brush {
@@ -2654,6 +2717,30 @@ impl Default for Brush {
             spacing: 0.2,
             jitter: 0.0,
             mode: BrushMode::Paint,
+            tip: None,
+            angle: 0.0,
+            roundness: 1.0,
+            dynamics: BrushDynamics::default(),
+        }
+    }
+}
+
+impl Brush {
+    /// How far past the dab radius a dab can reach at any angle, as a
+    /// multiple of it: 1 for the round tip, half the diagonal over half
+    /// the longer side for a sampled one.
+    pub fn reach(&self) -> f32 {
+        self.tip.as_ref().map_or(1.0, |t| t.reach())
+    }
+
+    /// Canvas pixels a sampled tip can reach beyond `radius × reach()`
+    /// when stamped small ([`crate::brush_tip::TIP_MARGIN`]); 0 for the
+    /// round tip.
+    pub fn margin(&self) -> f32 {
+        if self.tip.is_some() {
+            crate::brush_tip::TIP_MARGIN
+        } else {
+            0.0
         }
     }
 }
@@ -2693,7 +2780,8 @@ pub struct PaintStroke {
 
 /// Bounding box of a stroke's dabs, grown by the brush radius.
 pub fn stroke_bounds(brush: &Brush, points: &[StrokePoint], canvas: Rect) -> Rect {
-    let r = (brush.radius * (1.0 + brush.jitter.clamp(0.0, 1.0))).ceil() as i32 + 2;
+    let scatter = brush.jitter.clamp(0.0, crate::brush_tip::MAX_SCATTER);
+    let r = (brush.radius * (brush.reach() + scatter) + brush.margin()).ceil() as i32 + 2;
     let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
     for p in points {
         x0 = x0.min(p.x.floor() as i32 - r);
@@ -2721,6 +2809,9 @@ impl Command for PaintStroke {
             BrushMode::Smudge => "Smudge".into(),
             BrushMode::Saturate => "Sponge (saturate)".into(),
             BrushMode::Desaturate => "Sponge (desaturate)".into(),
+            BrushMode::Blur => "Blur".into(),
+            BrushMode::Sharpen => "Sharpen".into(),
+            BrushMode::History => "History brush".into(),
         }
     }
 
@@ -2738,15 +2829,28 @@ impl Command for PaintStroke {
         let store = layer.pixels_mut().ok_or(EditError::NotPixel(self.layer))?;
         let [cr, cg, cb, ca] = self.brush.color;
         let mode = self.brush.mode;
+        match mode {
+            BrushMode::Blur | BrushMode::Sharpen => {
+                crate::retouch_brush::filter_stroke(store, &self.brush, &self.points, canvas, sel.as_ref());
+                return Ok(());
+            }
+            BrushMode::History => {
+                return Err(EditError::Invalid(
+                    "the history brush needs a source state".into(),
+                ))
+            }
+            _ => {}
+        }
         if mode == BrushMode::Smudge {
             // Each dab stamps the pixels from under the previous dab,
             // sampled from a snapshot so a dab never reads its own writes.
-            let mut prev: Option<StrokePoint> = None;
+            let mut prev: Option<Dab> = None;
             for d in interpolate_dabs(&self.brush, &self.points) {
                 if let Some(p) = prev {
                     let (ox, oy) = ((d.x - p.x).round() as i32, (d.y - p.y).round() as i32);
                     if ox != 0 || oy != 0 {
-                        let r = (self.brush.radius.ceil() as i32 + 2).max(1);
+                        let reach = self.brush.radius * self.brush.reach() + self.brush.margin();
+                        let r = (reach.ceil() as i32 + 2).max(1);
                         let (sx, sy) = (d.x.round() as i32 - ox - r, d.y.round() as i32 - oy - r);
                         let side = (2 * r + 1) as usize;
                         let mut snap = vec![Rgba::TRANSPARENT; side * side];
@@ -2778,6 +2882,8 @@ impl Command for PaintStroke {
             return Ok(());
         }
         for d in interpolate_dabs(&self.brush, &self.points) {
+            // Colour dynamics give a dab its own colour.
+            let [cr, cg, cb] = d.color.unwrap_or([cr, cg, cb]);
             dab_coverage(&self.brush, d, canvas, sel.as_ref(), |px, py, cover| {
                 let dst = store.get_pixel(px, py);
                 let out = match mode {
@@ -2820,7 +2926,9 @@ impl Command for PaintStroke {
                         let sat = |c: f32| dec((y + (c - y) * scale).clamp(0.0, 1.0));
                         Rgba::from_straight(sat(er), sat(eg), sat(eb), a)
                     }
-                    BrushMode::Smudge => unreachable!("handled above"),
+                    BrushMode::Smudge | BrushMode::Blur | BrushMode::Sharpen | BrushMode::History => {
+                        unreachable!("handled above")
+                    }
                 };
                 store.set_pixel(px, py, out);
             });
@@ -2921,72 +3029,104 @@ pub fn smooth_stroke(points: &[StrokePoint]) -> Vec<StrokePoint> {
     out
 }
 
-/// Dab centres along a polyline, spaced by the pressure-scaled radius so
-/// thin stroke ends stay continuous.
-fn interpolate_dabs(brush: &Brush, points: &[StrokePoint]) -> Vec<StrokePoint> {
+/// Dabs along a polyline, spaced by the pressure-scaled radius so thin
+/// stroke ends stay continuous, then varied by the brush's dynamics
+/// (scatter, count, size, angle, roundness, transfer). Each variation is
+/// a hash of the dab's index: deterministic, so undo previews and replays
+/// stamp identical pixels.
+pub(crate) fn interpolate_dabs(brush: &Brush, points: &[StrokePoint]) -> Vec<Dab> {
+    use crate::brush_tip::{size_curve, Station};
     let smoothed = smooth_stroke(points);
     let points = &smoothed[..];
-    let mut dabs = vec![points[0]];
+    // Direction of travel, counter-clockwise from rightwards (screen y
+    // points down); a lone dab faces right.
+    let heading = |a: StrokePoint, b: StrokePoint| (a.y - b.y).atan2(b.x - a.x);
+    let first_dir = points
+        .windows(2)
+        .find(|w| w[0].x != w[1].x || w[0].y != w[1].y)
+        .map_or(0.0, |w| heading(w[0], w[1]));
+    let station = |p: StrokePoint, direction: f32| Station {
+        x: p.x,
+        y: p.y,
+        pressure: p.pressure,
+        opacity: p.opacity,
+        direction,
+    };
+    let mut stations = vec![station(points[0], first_dir)];
     let mut carry = 0.0f32;
-    let jitter = brush.jitter.clamp(0.0, 1.0);
+    let min_d = brush.dynamics.min_diameter;
     for pair in points.windows(2) {
         let (a, b) = (pair[0], pair[1]);
         let len = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
         if len <= 0.0 {
             continue;
         }
-        let eff = brush.radius * (0.5 * (a.pressure + b.pressure)).clamp(0.0, 1.0);
+        let dir = heading(a, b);
+        let eff = brush.radius * size_curve(min_d, 0.5 * (a.pressure + b.pressure));
         let step = (brush.spacing * eff).max(0.5);
         let mut t = step - carry;
         while t <= len {
             let f = t / len;
-            dabs.push(
-                StrokePoint::new(
-                    a.x + (b.x - a.x) * f,
-                    a.y + (b.y - a.y) * f,
-                    a.pressure + (b.pressure - a.pressure) * f,
-                )
-                .with_opacity(a.opacity + (b.opacity - a.opacity) * f),
-            );
+            let p = StrokePoint::new(
+                a.x + (b.x - a.x) * f,
+                a.y + (b.y - a.y) * f,
+                a.pressure + (b.pressure - a.pressure) * f,
+            )
+            .with_opacity(a.opacity + (b.opacity - a.opacity) * f);
+            stations.push(station(p, dir));
             t += step;
         }
         carry = len - (t - step);
     }
-    if jitter > 0.0 {
-        // Scatter each dab by a hash of its index: deterministic, so undo
-        // previews and replays stamp identical pixels.
-        for (i, d) in dabs.iter_mut().enumerate() {
-            let angle = hash01(i as u32, 0x9E37_79B9) * std::f32::consts::TAU;
-            let dist = hash01(i as u32, 0x85EB_CA6B).sqrt() * jitter * brush.radius;
-            d.x += angle.cos() * dist;
-            d.y += angle.sin() * dist;
-        }
-    }
+    let mut dabs = crate::brush_tip::apply_dynamics(
+        brush.radius,
+        brush.jitter,
+        brush.angle,
+        brush.roundness,
+        &brush.dynamics,
+        &stations,
+    );
+    let [r, g, b, _] = brush.color;
+    crate::brush_tip::apply_color_dynamics(&mut dabs, [r, g, b], &brush.dynamics);
     dabs
 }
 
-/// Deterministic hash of (n, salt) onto [0, 1).
-fn hash01(n: u32, salt: u32) -> f32 {
-    let mut h = n.wrapping_mul(0x27D4_EB2F) ^ salt;
-    h ^= h >> 15;
-    h = h.wrapping_mul(0x2C1B_3C6D);
-    h ^= h >> 12;
-    (h >> 8) as f32 / (1u32 << 24) as f32
-}
-
 /// Call `f(x, y, coverage)` for every canvas pixel a dab touches, with the
-/// selection already applied to the coverage.
-fn dab_coverage(
+/// selection and the dab's opacity already applied to the coverage.
+pub(crate) fn dab_coverage(
     brush: &Brush,
-    p: StrokePoint,
+    p: impl std::borrow::Borrow<Dab>,
     canvas: Rect,
     sel: Option<&Selection>,
     mut f: impl FnMut(i32, i32, f32),
 ) {
-    let r = brush.radius * p.pressure.clamp(0.0, 1.0);
+    let p: &Dab = p.borrow();
+    let r = p.radius;
     if r <= 0.0 {
         return;
     }
+    let depth = brush.dynamics.texture_depth.clamp(0.0, 1.0);
+    if brush.tip.is_some() || p.roundness < 1.0 || depth > 0.0 {
+        let scale = brush.dynamics.texture_scale;
+        crate::brush_tip::stamp(
+            brush.tip.as_deref(),
+            brush.hardness,
+            p,
+            canvas,
+            |px, py, mut c| {
+                if depth > 0.0 {
+                    c *= crate::brush_tip::grain_mask(crate::brush_tip::grain(px, py, scale), depth);
+                }
+                let cover = c * sel.map_or(1.0, |s| s.value(px, py)) * p.opacity;
+                if cover > 0.0 {
+                    f(px, py, cover);
+                }
+            },
+        );
+        return;
+    }
+    // The computed round tip (angle can't change a circle), exactly as it
+    // has always rendered.
     let x0 = (p.x - r).floor() as i32;
     let y0 = (p.y - r).floor() as i32;
     let x1 = (p.x + r).ceil() as i32;
@@ -3032,6 +3172,7 @@ mod tests {
                 spacing: 0.3,
                 jitter: 0.0,
                 mode: BrushMode::Paint,
+                ..Brush::default()
             },
             points: vec![
                 StrokePoint::new(5.0, 25.0, 1.0),
@@ -3426,7 +3567,7 @@ mod tests {
         };
         PaintMask {
             layer: id,
-            brush: black,
+            brush: black.clone(),
             points: vec![StrokePoint::new(30.0, 30.0, 1.0)],
         }
         .apply(&mut doc)
@@ -4794,7 +4935,7 @@ mod tests {
         let mut ed = crate::Editor::new(doc);
         let dot = PaintStroke {
             layer: id,
-            brush,
+            brush: brush.clone(),
             points: vec![StrokePoint::new(8.5, 8.5, 1.0).with_opacity(0.5)],
         };
         ed.execute(&dot).unwrap();
@@ -4834,5 +4975,37 @@ mod tests {
         };
         stroke.apply(&mut doc).unwrap();
         assert!(doc.layer(id).unwrap().pixels().unwrap().is_empty());
+    }
+
+    #[test]
+    fn image_flips_and_rotations_keep_paragraph_boxes_over_the_same_spot() {
+        let mut doc = Document::new(400, 200);
+        AddTextLayer {
+            text: TextLayer {
+                box_size: Some([100.0, 40.0]),
+                ..TextLayer::new("box", 20.0, 30.0, 12.0, [0.0, 0.0, 0.0, 1.0])
+            },
+            above: None,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let id = doc.layers()[0].id;
+        let pos = |doc: &Document| {
+            let t = doc.layer(id).unwrap().text_layer().unwrap();
+            (t.x, t.y, t.box_size)
+        };
+        // Centre (70, 50) mirrors to (330, 50): the box spans 280..380.
+        FlipImage { horizontal: true }.apply(&mut doc).unwrap();
+        assert_eq!(pos(&doc), (280.0, 30.0, Some([100.0, 40.0])));
+        // A quarter turn clockwise on 400×200: (x, y) → (200 − y, x), so
+        // the centre (330, 50) lands on (150, 330); the box keeps its size.
+        RotateImage { quarter_turns: 1 }.apply(&mut doc).unwrap();
+        let (x, y, size) = pos(&doc);
+        assert!((x - 100.0).abs() < 1e-3 && (y - 310.0).abs() < 1e-3, "({x}, {y})");
+        assert_eq!(size, Some([100.0, 40.0]));
+        // Point text still maps its anchor.
+        let mut p = TextLayer::new("pt", 5.0, 7.0, 12.0, [0.0; 4]);
+        p.map_position(|x, y| (x + 1.0, y * 2.0));
+        assert_eq!((p.x, p.y), (6.0, 14.0));
     }
 }

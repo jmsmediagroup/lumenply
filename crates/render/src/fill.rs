@@ -75,6 +75,8 @@ pub fn refresh_stale(doc: &mut Document) {
         }
     });
     crate::shape::refresh_stale(doc);
+    // Last: smart filters read the caches refreshed above.
+    crate::smart_filters::refresh_stale(doc);
 }
 
 #[cfg(test)]

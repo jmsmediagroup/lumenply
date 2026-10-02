@@ -21,6 +21,7 @@ use crate::{linear_to_srgb, IoError};
 
 mod effects;
 mod extra;
+mod masks;
 mod shape;
 
 #[derive(Debug, thiserror::Error)]
@@ -500,16 +501,35 @@ fn adjustment_block(adj: &Adjustment) -> Option<Vec<u8>> {
             hue,
             saturation,
             lightness,
+            colorize,
         } => {
             put_u16(&mut d, 2); // version
-            d.push(0); // colorize
+            d.push(*colorize as u8);
             d.push(0);
-            for _ in 0..3 {
-                d.extend_from_slice(&0i16.to_be_bytes()); // colorization hue/sat/light
+            // Colorization hue/sat/light, then the master hue/sat/light.
+            let light = i16_of(*lightness, 100.0, -100, 100);
+            let (colorization, master) = if *colorize {
+                (
+                    [
+                        i16_of(hue.rem_euclid(360.0), 1.0, 0, 360),
+                        i16_of(*saturation, 100.0, 0, 100),
+                        light,
+                    ],
+                    [0, 0, 0],
+                )
+            } else {
+                (
+                    [0, 25, 0],
+                    [
+                        i16_of(*hue, 1.0, -180, 180),
+                        i16_of(*saturation, 100.0, -100, 100),
+                        light,
+                    ],
+                )
+            };
+            for v in colorization.into_iter().chain(master) {
+                d.extend_from_slice(&v.to_be_bytes());
             }
-            d.extend_from_slice(&i16_of(*hue, 1.0, -180, 180).to_be_bytes());
-            d.extend_from_slice(&i16_of(*saturation, 100.0, -100, 100).to_be_bytes());
-            d.extend_from_slice(&i16_of(*lightness, 100.0, -100, 100).to_be_bytes());
             // Six hextant records: ranges then settings (all neutral).
             let ranges: [[i16; 4]; 6] = [
                 [315, 345, 15, 45],
@@ -567,28 +587,41 @@ fn adjustment_block(adj: &Adjustment) -> Option<Vec<u8>> {
             }
             b"levl"
         }
-        Adjustment::Curves { points } => {
-            d.push(0); // padding
-            put_u16(&mut d, 1); // version
-            put_u32(&mut d, 1); // channel bitmask: composite only
-            let mut pts: Vec<[f32; 2]> = points.clone();
-            if pts.is_empty() {
-                pts = vec![[0.0, 0.0], [1.0, 1.0]];
+        Adjustment::Curves { points, channels } => {
+            // Channel 0 is the composite, 1-3 are R, G and B; straight
+            // channel curves are left out.
+            let mut curves: Vec<(u16, Vec<[f32; 2]>)> = vec![(0, points.clone())];
+            for (i, c) in channels.iter().enumerate() {
+                if !lumenply_doc::adjust::curve_is_identity(c) {
+                    curves.push((i as u16 + 1, c.clone()));
+                }
             }
-            let write_points = |d: &mut Vec<u8>| {
+            for (_, pts) in &mut curves {
+                if pts.is_empty() {
+                    *pts = vec![[0.0, 0.0], [1.0, 1.0]];
+                }
+            }
+            let write_points = |d: &mut Vec<u8>, pts: &[[f32; 2]]| {
                 put_u16(d, pts.len().min(19) as u16);
                 for p in pts.iter().take(19) {
                     put_u16(d, i16_of(p[1], 255.0, 0, 255) as u16); // output
                     put_u16(d, i16_of(p[0], 255.0, 0, 255) as u16); // input
                 }
             };
-            write_points(&mut d);
+            d.push(0); // not a lookup map
+            put_u16(&mut d, 1); // version
+            put_u32(&mut d, curves.iter().fold(0, |m, (id, _)| m | 1 << id));
+            for (_, pts) in &curves {
+                write_points(&mut d, pts);
+            }
             // Trailing "Crv " section that newer readers expect.
             d.extend_from_slice(b"Crv ");
             put_u16(&mut d, 4);
-            put_u32(&mut d, 1);
-            put_u16(&mut d, 0); // channel id: composite
-            write_points(&mut d);
+            put_u32(&mut d, curves.len() as u32);
+            for (id, pts) in &curves {
+                put_u16(&mut d, *id);
+                write_points(&mut d, pts);
+            }
             b"curv"
         }
         Adjustment::ColorBalance {
@@ -786,15 +819,24 @@ fn parse_adjustment(key: &[u8], data: &[u8]) -> Result<Option<Adjustment>, PsdEr
             if version != 2 {
                 return Ok(None);
             }
-            d.skip(2)?; // colorize + pad
-            d.skip(6)?; // colorization values
-            let h = d.i16()?;
-            let s = d.i16()?;
-            let l = d.i16()?;
-            Adjustment::HueSaturation {
-                hue: h as f32,
-                saturation: f(s, 100.0),
-                lightness: f(l, 100.0),
+            let colorize = d.u8()? != 0;
+            d.skip(1)?;
+            let (ch, cs, cl) = (d.i16()?, d.i16()?, d.i16()?);
+            let (h, s, l) = (d.i16()?, d.i16()?, d.i16()?);
+            if colorize {
+                Adjustment::HueSaturation {
+                    hue: ch as f32,
+                    saturation: f(cs, 100.0),
+                    lightness: f(cl, 100.0),
+                    colorize: true,
+                }
+            } else {
+                Adjustment::HueSaturation {
+                    hue: h as f32,
+                    saturation: f(s, 100.0),
+                    lightness: f(l, 100.0),
+                    colorize: false,
+                }
             }
         }
         b"levl" => {
@@ -839,23 +881,66 @@ fn parse_adjustment(key: &[u8], data: &[u8]) -> Result<Option<Adjustment>, PsdEr
             }
         }
         b"curv" => {
-            d.skip(1)?;
-            let version = d.u16()?;
-            if version != 1 {
+            // The undocumented lookup-table form is not supported.
+            if d.u8()? != 0 {
+                return Ok(None);
+            }
+            if d.u16()? != 1 {
                 return Ok(None);
             }
             let mask = d.u32()?;
-            if mask & 1 == 0 {
-                return Ok(None); // no composite curve
+            let read_points = |d: &mut Rd| -> Result<Vec<[f32; 2]>, PsdError> {
+                let n = (d.u16()? as usize).min(256);
+                let mut points = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let out = d.u16()? as f32 / 255.0;
+                    let input = d.u16()? as f32 / 255.0;
+                    points.push([input, out]);
+                }
+                Ok(points)
+            };
+            // Channel 0 is the composite, 1-3 are R, G and B.
+            let mut curves: [Vec<[f32; 2]>; 4] = Default::default();
+            for id in 0..32u32 {
+                if mask & (1 << id) != 0 {
+                    let pts = read_points(&mut d)?;
+                    if let Some(slot) = curves.get_mut(id as usize) {
+                        *slot = pts;
+                    }
+                }
             }
-            let n = d.u16()? as usize;
-            let mut points = Vec::with_capacity(n);
-            for _ in 0..n {
-                let out = d.u16()? as f32 / 255.0;
-                let input = d.u16()? as f32 / 255.0;
-                points.push([input, out]);
+            // The "Crv " section names each curve's channel explicitly.
+            if d.pos + 10 <= data.len() && d.bytes(4)? == b"Crv " {
+                let _version = d.u16()?;
+                let count = d.u32()?.min(64);
+                let mut extra: [Vec<[f32; 2]>; 4] = Default::default();
+                let mut ok = true;
+                for _ in 0..count {
+                    let Ok(id) = d.u16() else {
+                        ok = false;
+                        break;
+                    };
+                    let Ok(pts) = read_points(&mut d) else {
+                        ok = false;
+                        break;
+                    };
+                    if let Some(slot) = extra.get_mut(id as usize) {
+                        *slot = pts;
+                    }
+                }
+                if ok {
+                    curves = extra;
+                }
             }
-            Adjustment::Curves { points }
+            let [points, r, g, b] = curves;
+            Adjustment::Curves {
+                points: if points.is_empty() {
+                    vec![[0.0, 0.0], [1.0, 1.0]]
+                } else {
+                    points
+                },
+                channels: [r, g, b],
+            }
         }
         b"blnc" => {
             let mut tones = [[0f32; 3]; 3];
@@ -1083,6 +1168,23 @@ fn collect_records(
                     }
                     _ => unreachable!(),
                 };
+                // PSD smart filters are not written (ADR 0011): the layer
+                // carries its filtered pixels instead, without fill or
+                // shape settings that would make readers re-render it.
+                let sf_baked;
+                let store: &TileStore = if l.smart_filters.is_active() {
+                    warnings.push(format!(
+                        "layer '{}': smart filters were baked into its pixels",
+                        l.name
+                    ));
+                    blocks.clear();
+                    sf_baked = l.smart_filters.filtered().cloned().unwrap_or_else(|| {
+                        lumenply_render::smart_filters::bake(store, &l.smart_filters, canvas, false)
+                    });
+                    &sf_baked
+                } else {
+                    store
+                };
                 let (bounds, chans) = if deep {
                     match layer_planes16(store) {
                         Some((b, planes)) => (
@@ -1130,7 +1232,9 @@ fn collect_records(
                         blocks
                     },
                 ));
-                if let (LayerContent::Shape(_), Some(rec)) = (&l.content, out.last_mut()) {
+                if let (LayerContent::Shape(_), Some(rec), false) =
+                    (&l.content, out.last_mut(), l.smart_filters.is_active())
+                {
                     shape::mark_pixel_data_irrelevant(&mut rec.record);
                 }
             }
@@ -1351,7 +1455,8 @@ struct RawLayer {
     clip: bool,
     opacity: f32,
     visible: bool,
-    mask: Option<(Rect, Vec<u16>, u8, bool)>,
+    /// The pixel and vector masks as stored (combined by `build_mask`).
+    masks: masks::LayerMasks,
     section: u32, // 0 none, 1/2 group open, 3 close
     is_adjustment: bool,
     adjustment: Option<Adjustment>,
@@ -1479,7 +1584,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 if rd.bytes(4)? != b"8BIM" {
                     return Err(PsdError::Corrupt("layer record signature".into()));
                 }
-                let key = rd.bytes(4)?.to_vec();
+                let mut key = rd.bytes(4)?.to_vec();
                 let opacity = rd.u8()? as f32 / 255.0;
                 let clipping = rd.u8()?;
                 let flags = rd.u8()?;
@@ -1488,20 +1593,14 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let extra_end = rd.pos + extra_len;
 
                 let mask_len = rd.u32()? as usize;
-                let mut mask = None;
-                if mask_len >= 20 {
-                    let mt = rd.i32()?;
-                    let ml = rd.i32()?;
-                    let mb = rd.i32()?;
-                    let mr = rd.i32()?;
-                    let default = rd.u8()?;
-                    let mflags = rd.u8()?;
-                    rd.skip(mask_len - 18)?;
-                    let r = checked_rect(ml, mt, mr, mb, max_dim, "mask")?;
-                    mask = Some((r, Vec::new(), default, mflags & 0x02 == 0));
-                } else {
-                    rd.skip(mask_len)?;
-                }
+                // The "real" pixel-mask fields are there only with a −3 channel.
+                let has_real = chans.iter().any(|&(id, _)| id == -3);
+                let mut layer_masks = masks::LayerMasks {
+                    record: masks::read_record(rd.bytes(mask_len)?, has_real, |l, t, r, b| {
+                        checked_rect(l, t, r, b, max_dim, "mask").ok()
+                    }),
+                    ..Default::default()
+                };
                 let ranges_len = rd.u32()? as usize;
                 rd.skip(ranges_len)?;
                 let plen = rd.u8()? as usize;
@@ -1563,16 +1662,24 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         b"lsct" => {
                             let mut d = Rd::new(data);
                             section = d.u32()?;
+                            // A group's real blend mode (Pass Through
+                            // included) lives here; the record says "norm".
+                            if data.len() >= 12 && &data[4..8] == b"8BIM" {
+                                key = data[8..12].to_vec();
+                            }
                         }
                         b"lspf" => {
                             let mut d = Rd::new(data);
                             locks = locks_from_flags(d.u32()?);
                         }
-                        b"SoCo" | b"GdFl" => match extra::parse_fill(&k, data) {
-                            Some(f) => fill = Some(f),
-                            // An unreadable fill keeps its rendered pixels.
-                            None => warnings.push(format!("fill layer '{name}': settings not readable")),
-                        },
+                        b"SoCo" | b"GdFl" => {
+                            layer_masks.shaped = true;
+                            match extra::parse_fill(&k, data) {
+                                Some(f) => fill = Some(f),
+                                // An unreadable fill keeps its rendered pixels.
+                                None => warnings.push(format!("fill layer '{name}': settings not readable")),
+                            }
+                        }
                         // A vector mask makes a fill a shape layer.
                         b"vmsk" | b"vsms" => {
                             vector_mask = true;
@@ -1582,8 +1689,13 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         b"lfx2" | b"lfxs" => lfx2 = Some(data.to_vec()),
                         b"lmfx" => lmfx = Some(data.to_vec()),
                         b"iOpa" => fill_opacity = effects::parse_fill_opacity(data).unwrap_or(1.0),
+                        // Shape content in newer files: pixels come clipped.
+                        b"vscg" => layer_masks.shaped = true,
                         // Pattern fills keep their rendered pixels.
-                        b"PtFl" => pattern = true,
+                        b"PtFl" => {
+                            pattern = true;
+                            layer_masks.shaped = true;
+                        }
                         b"levl" | b"curv" | b"brit" | b"CgEd" | b"hue2" | b"hue " | b"blnc" | b"blwh"
                         | b"expA" | b"vibA" | b"thrs" | b"post" | b"nvrt" | b"phfl" | b"mixr" | b"clrL"
                         | b"grdm" | b"selc" => {
@@ -1599,14 +1711,37 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 // Shape layers (a fill clipped by vector paths) and pattern
                 // fills come in as the pixels Photoshop rendered for them.
                 let mut shape_layer = None;
+                layer_masks.vector = vmsk.clone();
+                layer_masks.shaped &= vector_mask;
                 if let Some(f) = fill.take_if(|_| vector_mask) {
-                    shape_layer = vmsk
-                        .as_deref()
-                        .and_then(|m| shape::parse_shape(f, m, vstk.as_deref(), width, height));
+                    // A feathered or faded vector mask isn't a crisp outline.
+                    let soft = layer_masks.record.as_ref().is_some_and(|r| {
+                        r.vector_density.is_some_and(|d| d < 255) || r.vector_feather.is_some_and(|f| f > 0.0)
+                    });
+                    if !soft {
+                        shape_layer = vmsk
+                            .as_deref()
+                            .and_then(|m| shape::parse_shape(f.clone(), m, vstk.as_deref(), width, height));
+                    }
                     if shape_layer.is_none() {
-                        warnings.push(format!(
-                            "shape layer '{name}' was imported as pixels (its vector mask is not readable)"
-                        ));
+                        let stroked = vstk
+                            .as_deref()
+                            .and_then(shape::parse_stroke)
+                            .is_some_and(|(stroke, _)| stroke.is_some());
+                        let drawable = vmsk
+                            .as_deref()
+                            .is_some_and(|m| masks::rasterize(m, width, height).is_some());
+                        if stroked || !drawable {
+                            warnings.push(format!(
+                                "shape layer '{name}' was imported as pixels (its outline uses path operations a Lumenply shape can't hold yet)"
+                            ));
+                        } else {
+                            // Still editable: the fill clipped by the vector
+                            // mask, drawn from its path (Photoshop may not
+                            // have stored pixels at all).
+                            fill = Some(f);
+                            layer_masks.shaped = false;
+                        }
                     }
                 }
                 if pattern {
@@ -1628,7 +1763,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         blend_known: known,
                         opacity,
                         visible: flags & 0x02 == 0,
-                        mask,
+                        masks: layer_masks,
                         section,
                         is_adjustment,
                         adjustment,
@@ -1647,26 +1782,22 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     // Bounds-checked: a declared length past the end of the
                     // file is an error, not a slice panic.
                     let data = rd.bytes(len)?;
-                    let (w, h) = if id == -2 {
-                        layer
-                            .mask
-                            .as_ref()
-                            .map_or((0, 0), |m| (m.0.w as usize, m.0.h as usize))
-                    } else {
-                        (layer.bounds.w as usize, layer.bounds.h as usize)
+                    let rec = layer.masks.record.as_ref();
+                    let (w, h) = match id {
+                        -2 => rec.map_or((0, 0), |m| (m.rect.w as usize, m.rect.h as usize)),
+                        -3 => rec
+                            .and_then(|m| m.real)
+                            .map_or((0, 0), |(r, ..)| (r.w as usize, r.h as usize)),
+                        _ => (layer.bounds.w as usize, layer.bounds.h as usize),
                     };
                     if w > 0 && h > 0 && len >= 2 {
                         let mut sub = Rd::new(data);
                         match decode_channel(&mut sub, w, h, depth_bytes, psb) {
-                            Ok(plane) => {
-                                if id == -2 {
-                                    if let Some(m) = layer.mask.as_mut() {
-                                        m.1 = plane;
-                                    }
-                                } else {
-                                    layer.channels.push((id, plane));
-                                }
-                            }
+                            Ok(plane) => match id {
+                                -2 => layer.masks.minus2 = Some(plane),
+                                -3 => layer.masks.minus3 = Some(plane),
+                                _ => layer.channels.push((id, plane)),
+                            },
                             Err(e) => warnings.push(format!("layer '{}' channel {id}: {e}", layer.name)),
                         }
                     }
@@ -1785,7 +1916,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 g.opacity = rl.opacity;
                 g.visible = rl.visible;
                 g.collapsed = rl.section == 2;
-                g.mask = build_mask(&rl);
+                g.mask = build_mask(&rl, width, height);
                 g.locks = rl.locks;
                 rl.style(&mut g);
                 if !rl.blend_known {
@@ -1807,7 +1938,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                             l.clip = rl.clip;
                             l.opacity = rl.opacity;
                             l.visible = rl.visible;
-                            l.mask = build_mask(&rl);
+                            l.mask = build_mask(&rl, width, height);
                             l.locks = rl.locks;
                             stack.last_mut().expect("root").push(l);
                         }
@@ -1828,7 +1959,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     l.clip = rl.clip;
                     l.opacity = rl.opacity;
                     l.visible = rl.visible;
-                    l.mask = build_mask(&rl);
+                    l.mask = build_mask(&rl, width, height);
                     l.locks = rl.locks;
                     stack.last_mut().expect("root").push(l);
                     continue;
@@ -1843,7 +1974,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     l.clip = rl.clip;
                     l.opacity = rl.opacity;
                     l.visible = rl.visible;
-                    l.mask = build_mask(&rl);
+                    l.mask = build_mask(&rl, width, height);
                     stack.last_mut().expect("root").push(l);
                     continue;
                 }
@@ -1885,7 +2016,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     }
                     *l.pixels_mut().expect("pixel") = TileStore::from_raster(&raster, b.x, b.y);
                 }
-                l.mask = build_mask(&rl);
+                l.mask = build_mask(&rl, width, height);
                 stack.last_mut().expect("root").push(l);
             }
         }
@@ -1904,23 +2035,8 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     Ok(Report { value: doc, warnings })
 }
 
-fn build_mask(rl: &RawLayer) -> Option<Mask> {
-    let (r, plane, default, enabled) = rl.mask.as_ref()?;
-    let mut m = Mask {
-        tiles: TileStore::new(),
-        default: *default as f32 / 255.0,
-        enabled: *enabled,
-    };
-    if r.w > 0 && r.h > 0 && plane.len() == (r.w * r.h) as usize {
-        for y in 0..r.h as i32 {
-            for x in 0..r.w as i32 {
-                let v = plane[(y as u32 * r.w + x as u32) as usize] as f32 / 65535.0;
-                m.set_value(r.x + x, r.y + y, v);
-            }
-        }
-        m.prune_uniform();
-    }
-    Some(m)
+fn build_mask(rl: &RawLayer, width: u32, height: u32) -> Option<Mask> {
+    rl.masks.build(width, height, rl.shape.is_some())
 }
 
 /// Convenience for callers that only need a flat raster of a PSD.
@@ -2076,6 +2192,45 @@ mod tests {
         let p = l.pixels().expect("pixel layer").get_pixel(1, 1);
         assert!(p.r > 0.99 && p.g < 0.01, "the rendered red shape: {p:?}");
         assert_eq!(l.pixels().unwrap().get_pixel(3, 3).a, 0.0);
+
+        // An outline with path operations stays an editable fill layer,
+        // clipped by the vector mask drawn from its path: here two squares
+        // intersected leave only x = 1 of the 4×4 canvas.
+        let fixed = |v: f32| ((v / 4.0) * (1 << 24) as f32) as i32;
+        let mut vmsk = Vec::new();
+        put_u32(&mut vmsk, 3);
+        put_u32(&mut vmsk, 0);
+        for x0 in [0.0f32, 1.0] {
+            put_u16(&mut vmsk, 0);
+            put_u16(&mut vmsk, 4);
+            vmsk.extend_from_slice(&3i16.to_be_bytes()); // intersect
+            vmsk.extend_from_slice(&[0; 20]);
+            for (x, y) in [(x0, 0.0), (x0 + 2.0, 0.0), (x0 + 2.0, 4.0), (x0, 4.0)] {
+                put_u16(&mut vmsk, 1);
+                for _ in 0..3 {
+                    put_i32(&mut vmsk, fixed(y));
+                    put_i32(&mut vmsk, fixed(x));
+                }
+            }
+        }
+        let (rec, chans) = record_with_blocks(&[
+            (
+                key,
+                extra::fill_block(&lumenply_doc::Fill::Solid {
+                    color: [0.0, 1.0, 0.0],
+                })
+                .1,
+            ),
+            (b"vmsk", vmsk),
+        ]);
+        let doc = load_bytes("fill-ops.psd", &craft_psd(3, 4, 4, &rec, &chans)).unwrap();
+        let l = &doc.value.layers()[0];
+        assert!(l.fill_layer().is_some(), "an editable fill layer");
+        let m = l.mask.as_ref().expect("the vector mask");
+        assert_eq!(
+            (m.value(0, 2), m.value(1, 2), m.value(2, 2), m.value(3, 2)),
+            (0.0, 1.0, 0.0, 0.0)
+        );
 
         // Pattern fills keep their pixels too.
         let (rec, chans) = record_with_blocks(&[(b"PtFl", vec![0; 8])]);
@@ -2377,6 +2532,20 @@ mod tests {
         ));
         let grp = &back.layers()[1];
         assert!(grp.pass_through, "the 'pass' blend key round-trips");
+        // Photoshop writes "norm" in a group's record and its real mode in
+        // the section divider block; the divider wins.
+        let mut bytes = std::fs::read(&path).unwrap();
+        let at = bytes
+            .windows(8)
+            .position(|w| w == b"8BIMpass")
+            .expect("record key");
+        bytes[at + 4..at + 8].copy_from_slice(b"norm");
+        assert!(
+            bytes.windows(8).any(|w| w == b"8BIMpass"),
+            "the divider still says pass"
+        );
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(load(&path).unwrap().value.layers()[1].pass_through);
         let kids: Vec<&str> = grp.children().unwrap().iter().map(|l| l.name.as_str()).collect();
         assert_eq!(kids, ["Red square", "Hidden"]);
         let red = &grp.children().unwrap()[0];
@@ -2421,6 +2590,89 @@ mod tests {
     }
 
     #[test]
+    fn colorize_survives_the_trip() {
+        let mut doc = Document::new(8, 8);
+        doc.add_pixel_layer("bg");
+        doc.add_adjustment(Adjustment::HueSaturation {
+            hue: 200.0,
+            saturation: 0.4,
+            lightness: -0.1,
+            colorize: true,
+        });
+        let path = temp("colorize.psd");
+        save(&path, &doc).unwrap();
+        let back = load(&path).unwrap().value;
+        let _ = std::fs::remove_file(&path);
+        let LayerContent::Adjustment(Adjustment::HueSaturation {
+            hue,
+            saturation,
+            lightness,
+            colorize,
+        }) = back.layers()[1].content
+        else {
+            panic!("hue/saturation lost");
+        };
+        assert!(colorize);
+        assert_eq!((hue, saturation, lightness), (200.0, 0.4, -0.1));
+    }
+
+    #[test]
+    fn curves_keep_their_channel_curves_both_ways() {
+        let mut doc = Document::new(8, 8);
+        doc.add_pixel_layer("bg");
+        let curves = Adjustment::Curves {
+            points: vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]],
+            channels: [
+                vec![[0.0, 0.0], [0.4, 0.2], [1.0, 1.0]],
+                vec![],
+                vec![[0.0, 0.1], [1.0, 0.9]],
+            ],
+        };
+        doc.add_adjustment(curves);
+        let path = temp("curves-rgb.psd");
+        save(&path, &doc).unwrap();
+        // For checking with an independent reader (psd-tools).
+        if let Ok(dir) = std::env::var("LUMENPLY_KEEP_PSD") {
+            let _ = std::fs::copy(&path, format!("{dir}/curves-rgb.psd"));
+        }
+        let back = load(&path).unwrap().value;
+        let _ = std::fs::remove_file(&path);
+        let LayerContent::Adjustment(Adjustment::Curves { points, channels }) = &back.layers()[1].content
+        else {
+            panic!("curves lost");
+        };
+        let q = |v: f32| (v * 255.0).round() / 255.0;
+        assert_eq!(points, &vec![[0.0, 0.0], [q(0.5), q(0.6)], [1.0, 1.0]]);
+        assert_eq!(channels[0], vec![[0.0, 0.0], [q(0.4), q(0.2)], [1.0, 1.0]]);
+        assert!(channels[1].is_empty(), "a straight green stays out");
+        assert_eq!(channels[2], vec![[0.0, q(0.1)], [1.0, q(0.9)]]);
+        // Photoshop's own layout for channel-only curves: no composite bit.
+        let mut d = vec![0u8];
+        d.extend_from_slice(&1u16.to_be_bytes());
+        d.extend_from_slice(&0b1110u32.to_be_bytes());
+        // R straight, G lifted to 51 at black, B down to 204 at white;
+        // each point is (output, input).
+        for curve in [
+            [(0u16, 0u16), (255, 255)],
+            [(51, 0), (255, 255)],
+            [(0, 0), (204, 255)],
+        ] {
+            d.extend_from_slice(&2u16.to_be_bytes());
+            for (out, inp) in curve {
+                d.extend_from_slice(&out.to_be_bytes());
+                d.extend_from_slice(&inp.to_be_bytes());
+            }
+        }
+        let Some(Adjustment::Curves { points, channels }) = parse_adjustment(b"curv", &d).unwrap() else {
+            panic!("channel-only curves are supported");
+        };
+        assert_eq!(points, vec![[0.0, 0.0], [1.0, 1.0]]);
+        assert_eq!(channels[0], vec![[0.0, 0.0], [1.0, 1.0]]);
+        assert_eq!(channels[1], vec![[0.0, 0.2], [1.0, 1.0]]);
+        assert_eq!(channels[2], vec![[0.0, 0.0], [1.0, 0.8]]);
+    }
+
+    #[test]
     fn adjustment_layers_survive_the_trip() {
         let mut doc = Document::new(8, 8);
         doc.add_pixel_layer("bg");
@@ -2433,6 +2685,7 @@ mod tests {
                 hue: 40.0,
                 saturation: 0.3,
                 lightness: -0.2,
+                colorize: false,
             },
             Adjustment::Levels {
                 in_black: 0.1,
@@ -2455,6 +2708,7 @@ mod tests {
             },
             Adjustment::Curves {
                 points: vec![[0.0, 0.0], [0.25, 0.15], [0.75, 0.85], [1.0, 1.0]],
+                channels: Default::default(),
             },
             Adjustment::ColorBalance {
                 shadows: [0.1, 0.0, -0.2],
@@ -2515,6 +2769,7 @@ mod tests {
                 hue,
                 saturation,
                 lightness,
+                colorize: false,
             } => {
                 assert!(close(*hue, 40.0) && close(*saturation, 0.3) && close(*lightness, -0.2))
             }
@@ -2539,7 +2794,7 @@ mod tests {
             _ => panic!("levels lost"),
         }
         match &got[3] {
-            Adjustment::Curves { points } => {
+            Adjustment::Curves { points, .. } => {
                 assert_eq!(points.len(), 4);
                 assert!(close(points[1][0], 0.25) && close(points[1][1], 0.15));
             }
