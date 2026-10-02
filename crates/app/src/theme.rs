@@ -798,7 +798,18 @@ fn menu_pos(anchor: egui::Rect, size: Vec2, screen: egui::Rect, gap: f32) -> egu
 /// macOS ("⇧⌘Z" when the UI font has the symbols), "Ctrl+Shift+Z"
 /// elsewhere.
 pub(crate) fn shortcut_text(ctx: &egui::Context, modifiers: egui::Modifiers, key: Key) -> String {
-    ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, key))
+    let text = ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, key));
+    // Punctuation reads as itself: "Cmd+;" rather than "Cmd+Semicolon".
+    let sym = match key {
+        Key::Quote => "'",
+        k => k.symbol_or_name(),
+    };
+    match text.strip_suffix(key.name()) {
+        Some(head) if sym.len() == 1 && sym.chars().all(|c| c.is_ascii_punctuation()) => {
+            format!("{head}{sym}")
+        }
+        _ => text,
+    }
 }
 
 /// Remember where a named menu, item or trigger was drawn this frame, so

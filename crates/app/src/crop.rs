@@ -378,9 +378,24 @@ impl App {
             self.crop.drag = None;
             return;
         }
-        let (w, h) = (self.editor.doc().width, self.editor.doc().height);
+        let doc = self.editor.doc();
+        let (w, h) = (doc.width, doc.height);
         if self.crop.frame.is_none_or(|f| f.canvas != (w, h)) {
-            self.crop.frame = Some(Frame::whole(w, h));
+            // A selection made before picking the tool becomes the frame.
+            let sel = doc
+                .selection
+                .as_ref()
+                .map(|s| s.tight_bounds(doc.canvas()))
+                .filter(|r| !r.is_empty());
+            let mut f = Frame::whole(w, h);
+            if let Some(r) = sel {
+                f.cx = r.x as f32 + r.w as f32 / 2.0;
+                f.cy = r.y as f32 + r.h as f32 / 2.0;
+                f.w = r.w as f32;
+                f.h = r.h as f32;
+                f.pristine = false;
+            }
+            self.crop.frame = Some(f);
             self.crop.drag = None;
         }
     }
@@ -1005,6 +1020,27 @@ mod tests {
         assert!(app.crop.frame.is_none());
         app.run_menu_action("undo");
         assert_eq!((app.editor.doc().width, app.editor.doc().height), (1800, 1205));
+    }
+
+    #[test]
+    fn a_selection_becomes_the_first_frame() {
+        let mut app = demo_app();
+        app.run(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(100, 50, 400, 300))),
+        });
+        app.tool = Tool::Crop;
+        app.crop_sync();
+        let f = app.crop.frame.unwrap();
+        assert_eq!(f.rect(), Rect::new(100, 50, 400, 300));
+        assert!(!f.pristine, "a drag inside moves it rather than drawing anew");
+        // Punctuation shortcuts read as themselves in menus.
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |_| {}); // fonts load on the first frame
+        let semi = theme::shortcut_text(&ctx, egui::Modifiers::COMMAND, Key::Semicolon);
+        let quote = theme::shortcut_text(&ctx, egui::Modifiers::COMMAND, Key::Quote);
+        assert!(semi.ends_with(';') && !semi.contains("Semicolon"), "{semi}");
+        assert!(quote.ends_with('\'') && !quote.contains("Quote"), "{quote}");
+        assert!(theme::shortcut_text(&ctx, egui::Modifiers::COMMAND, Key::R).ends_with('R'));
     }
 
     #[test]
