@@ -18,6 +18,24 @@ pub(crate) enum Handle {
     Rotate,
 }
 
+/// Which part of a path node a pen drag grabbed.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum PenPart {
+    Anchor,
+    In,
+    Out,
+}
+
+/// An in-progress pen edit of an existing node.
+#[derive(Clone, Copy)]
+pub(crate) struct PenHit {
+    pub(crate) sub: usize,
+    pub(crate) node: usize,
+    pub(crate) part: PenPart,
+    /// The handles were symmetric when grabbed, so keep them so.
+    pub(crate) mirrored: bool,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum DragKind {
     Stroke,
@@ -625,70 +643,174 @@ impl App {
                 }
                 let mut path = self.editor.doc().work_path.clone().unwrap_or_default();
                 let mut changed = false;
+                let hit_r = 8.0 / self.zoom.max(0.01);
+                let near =
+                    |a: (f32, f32), x: f32, y: f32| ((a.0 - x).powi(2) + (a.1 - y).powi(2)).sqrt() < hit_r;
+                // Handles are only grabbable where they are drawn: on the
+                // selected node and on the open subpath's newest node.
+                let handle_hit = |path: &lumenply_doc::VectorPath, x: f32, y: f32| -> Option<PenHit> {
+                    let mut spots: Vec<(usize, usize)> = self.pen_sel.into_iter().collect();
+                    if self.pen_open {
+                        if let Some(sp) = path.subpaths.last() {
+                            if !sp.nodes.is_empty() {
+                                spots.push((path.subpaths.len() - 1, sp.nodes.len() - 1));
+                            }
+                        }
+                    }
+                    for (si, ni) in spots {
+                        let n = path.subpaths.get(si)?.nodes.get(ni)?;
+                        let mirrored = near(
+                            (2.0 * n.point.0 - n.handle_out.0, 2.0 * n.point.1 - n.handle_out.1),
+                            n.handle_in.0,
+                            n.handle_in.1,
+                        );
+                        for (part, h) in [(PenPart::In, n.handle_in), (PenPart::Out, n.handle_out)] {
+                            if h != n.point && near(h, x, y) {
+                                return Some(PenHit {
+                                    sub: si,
+                                    node: ni,
+                                    part,
+                                    mirrored,
+                                });
+                            }
+                        }
+                    }
+                    None
+                };
+                let anchor_hit = |path: &lumenply_doc::VectorPath, x: f32, y: f32| {
+                    path.subpaths.iter().enumerate().find_map(|(si, sp)| {
+                        sp.nodes
+                            .iter()
+                            .position(|n| near(n.point, x, y))
+                            .map(|ni| (si, ni))
+                    })
+                };
 
-                // Drag places a smooth node and pulls its handles out.
+                // Drag: grab a handle or an anchor if one is under the
+                // pointer, else place a smooth node and pull its handles out.
                 if resp.drag_started_by(primary) {
                     if let Some(q) = ctx.input(|i| i.pointer.press_origin()) {
                         let (x, y) = to_doc(q);
-                        if !self.pen_open {
-                            path.subpaths.push(lumenply_doc::SubPath::default());
-                            self.pen_open = true;
-                        }
-                        if let Some(sp) = path.subpaths.last_mut() {
-                            sp.nodes.push(lumenply_doc::PathNode::corner(x, y));
-                        }
-                        self.pen_dragging = true;
-                        changed = true;
-                    }
-                }
-                if self.pen_dragging && resp.dragged_by(primary) {
-                    if let Some(q) = resp.interact_pointer_pos() {
-                        let (hx, hy) = to_doc(q);
-                        if let Some(n) = path.subpaths.last_mut().and_then(|sp| sp.nodes.last_mut()) {
-                            n.handle_out = (hx, hy);
-                            n.handle_in = (2.0 * n.point.0 - hx, 2.0 * n.point.1 - hy);
-                            changed = true;
-                        }
-                    }
-                }
-                if resp.drag_stopped() {
-                    self.pen_dragging = false;
-                }
-
-                // A click adds a corner node, or closes on the first node.
-                if resp.clicked_by(primary) {
-                    if let Some(q) = resp.interact_pointer_pos() {
-                        let (x, y) = to_doc(q);
-                        let close = self.pen_open
-                            && path.subpaths.last().is_some_and(|sp| {
-                                sp.nodes.len() >= 2 && {
-                                    let f = sp.nodes[0].point;
-                                    ((f.0 - x).powi(2) + (f.1 - y).powi(2)).sqrt() * self.zoom < 8.0
-                                }
+                        if let Some(hit) = handle_hit(&path, x, y) {
+                            self.pen_sel = Some((hit.sub, hit.node));
+                            self.pen_hit = Some(hit);
+                        } else if let Some((si, ni)) = anchor_hit(&path, x, y) {
+                            self.pen_sel = Some((si, ni));
+                            self.pen_hit = Some(PenHit {
+                                sub: si,
+                                node: ni,
+                                part: PenPart::Anchor,
+                                mirrored: false,
                             });
-                        if close {
-                            if let Some(sp) = path.subpaths.last_mut() {
-                                sp.closed = true;
-                            }
-                            self.pen_open = false;
                         } else {
                             if !self.pen_open {
                                 path.subpaths.push(lumenply_doc::SubPath::default());
                                 self.pen_open = true;
                             }
+                            let si = path.subpaths.len() - 1;
                             if let Some(sp) = path.subpaths.last_mut() {
                                 sp.nodes.push(lumenply_doc::PathNode::corner(x, y));
+                                self.pen_sel = Some((si, sp.nodes.len() - 1));
+                            }
+                            self.pen_dragging = true;
+                            changed = true;
+                        }
+                    }
+                }
+                if resp.dragged_by(primary) {
+                    if let (Some(hit), Some(q)) = (self.pen_hit, resp.interact_pointer_pos()) {
+                        let (x, y) = to_doc(q);
+                        if let Some(n) = path
+                            .subpaths
+                            .get_mut(hit.sub)
+                            .and_then(|sp| sp.nodes.get_mut(hit.node))
+                        {
+                            match hit.part {
+                                PenPart::Anchor => {
+                                    let (dx, dy) = (x - n.point.0, y - n.point.1);
+                                    n.point = (x, y);
+                                    n.handle_in = (n.handle_in.0 + dx, n.handle_in.1 + dy);
+                                    n.handle_out = (n.handle_out.0 + dx, n.handle_out.1 + dy);
+                                }
+                                PenPart::In => {
+                                    n.handle_in = (x, y);
+                                    if hit.mirrored {
+                                        n.handle_out = (2.0 * n.point.0 - x, 2.0 * n.point.1 - y);
+                                    }
+                                }
+                                PenPart::Out => {
+                                    n.handle_out = (x, y);
+                                    if hit.mirrored {
+                                        n.handle_in = (2.0 * n.point.0 - x, 2.0 * n.point.1 - y);
+                                    }
+                                }
+                            }
+                            changed = true;
+                        }
+                    } else if self.pen_dragging {
+                        if let Some(q) = resp.interact_pointer_pos() {
+                            let (hx, hy) = to_doc(q);
+                            if let Some(n) = path.subpaths.last_mut().and_then(|sp| sp.nodes.last_mut()) {
+                                n.handle_out = (hx, hy);
+                                n.handle_in = (2.0 * n.point.0 - hx, 2.0 * n.point.1 - hy);
+                                changed = true;
                             }
                         }
-                        changed = true;
+                    }
+                }
+                if resp.drag_stopped() {
+                    self.pen_dragging = false;
+                    if self.pen_hit.take().is_some() {
+                        self.editor.end_coalescing();
                     }
                 }
 
-                // Enter finishes the path; Esc drops the open subpath.
-                let (enter, esc) = if ctx.wants_keyboard_input() {
-                    (false, false)
+                // A click closes on the first node, selects an anchor it
+                // lands on, or adds a corner node.
+                if resp.clicked_by(primary) {
+                    if let Some(q) = resp.interact_pointer_pos() {
+                        let (x, y) = to_doc(q);
+                        let close = self.pen_open
+                            && path
+                                .subpaths
+                                .last()
+                                .is_some_and(|sp| sp.nodes.len() >= 2 && near(sp.nodes[0].point, x, y));
+                        if close {
+                            if let Some(sp) = path.subpaths.last_mut() {
+                                sp.closed = true;
+                            }
+                            self.pen_open = false;
+                            changed = true;
+                        } else if let Some((si, ni)) = anchor_hit(&path, x, y) {
+                            self.pen_sel = Some((si, ni));
+                            self.status = "Drag the anchor or its handles; Backspace deletes it".into();
+                        } else {
+                            if !self.pen_open {
+                                path.subpaths.push(lumenply_doc::SubPath::default());
+                                self.pen_open = true;
+                            }
+                            let si = path.subpaths.len() - 1;
+                            if let Some(sp) = path.subpaths.last_mut() {
+                                sp.nodes.push(lumenply_doc::PathNode::corner(x, y));
+                                self.pen_sel = Some((si, sp.nodes.len() - 1));
+                            }
+                            changed = true;
+                        }
+                    }
+                }
+
+                // Enter finishes the path; Esc drops the open subpath;
+                // Backspace removes the selected anchor.
+                let (enter, esc, back) = if ctx.wants_keyboard_input() {
+                    (false, false, false)
                 } else {
-                    ctx.input(|i| (i.key_pressed(Key::Enter), i.key_pressed(Key::Escape)))
+                    ctx.input(|i| {
+                        (
+                            i.key_pressed(Key::Enter),
+                            i.key_pressed(Key::Escape),
+                            i.key_pressed(Key::Backspace) || i.key_pressed(Key::Delete),
+                        )
+                    })
                 };
                 if enter && self.pen_open {
                     self.pen_open = false;
@@ -698,7 +820,24 @@ impl App {
                 if esc && self.pen_open {
                     path.subpaths.pop();
                     self.pen_open = false;
+                    self.pen_sel = None;
                     changed = true;
+                }
+                if back {
+                    if let Some((si, ni)) = self.pen_sel.take() {
+                        if let Some(sp) = path.subpaths.get_mut(si) {
+                            if ni < sp.nodes.len() {
+                                sp.nodes.remove(ni);
+                                if sp.nodes.is_empty() {
+                                    path.subpaths.remove(si);
+                                    if self.pen_open && si == path.subpaths.len() {
+                                        self.pen_open = false;
+                                    }
+                                }
+                                changed = true;
+                            }
+                        }
+                    }
                 }
 
                 if changed {
@@ -1257,18 +1396,24 @@ impl App {
                     for (ni, n) in sp.nodes.iter().enumerate() {
                         let c = ts(n.point.0, n.point.1);
                         let first_of_open = open_last && ni == 0 && sp.nodes.len() >= 2;
-                        let fill = if first_of_open { ACCENT } else { Color32::WHITE };
+                        let selected = self.pen_sel == Some((si, ni));
+                        let fill = if first_of_open || selected {
+                            ACCENT
+                        } else {
+                            Color32::WHITE
+                        };
                         painter.rect_filled(egui::Rect::from_center_size(c, Vec2::splat(6.0)), 1.0, fill);
                         painter.rect_stroke(
                             egui::Rect::from_center_size(c, Vec2::splat(6.0)),
                             1.0,
                             Stroke::new(1.0, Color32::from_black_alpha(180)),
                         );
-                        if open_last && ni + 1 == sp.nodes.len() && n.handle_out != n.point {
+                        let newest_of_open = open_last && ni + 1 == sp.nodes.len();
+                        if (selected || newest_of_open) && n.handle_out != n.point {
                             for h in [n.handle_in, n.handle_out] {
                                 let hp = ts(h.0, h.1);
                                 painter.line_segment([c, hp], Stroke::new(1.0, MUTED));
-                                painter.circle_filled(hp, 2.5, MUTED);
+                                painter.circle_filled(hp, 2.5, if selected { ACCENT } else { MUTED });
                             }
                         }
                     }

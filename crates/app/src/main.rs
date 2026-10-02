@@ -229,6 +229,10 @@ struct App {
     pen_open: bool,
     /// Pen: dragging out the handles of the just-placed node.
     pen_dragging: bool,
+    /// Pen: an existing anchor or handle being dragged.
+    pen_hit: Option<PenHit>,
+    /// Pen: the selected node (its handles are shown and grabbable).
+    pen_sel: Option<(usize, usize)>,
     /// Healing brush: true = spot mode (no texture source needed).
     heal_spot: bool,
     /// Quick-mask mode: paint the selection itself under a red overlay.
@@ -357,6 +361,8 @@ impl App {
             prefs: session::Prefs::load(),
             pen_open: false,
             pen_dragging: false,
+            pen_hit: None,
+            pen_sel: None,
             heal_spot: true,
             quick_mask: false,
             sel_points: Vec::new(),
@@ -424,6 +430,8 @@ impl App {
         self.drag = None;
         self.pen_open = false;
         self.pen_dragging = false;
+        self.pen_hit = None;
+        self.pen_sel = None;
         self.drag_start = None;
         self.stroke.clear();
         self.lasso.clear();

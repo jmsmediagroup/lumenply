@@ -129,8 +129,10 @@ None of these could be tested in the container.
 - [x] Pen tool and paths: cubic-bezier work path (click corners, drag curves,
       close on the first point; one undo step per path), fill / stroke /
       selection-from-path, saved in .nge
-- [ ] Path editing (move anchors/handles after placing), multiple named paths,
-      holes via even-odd across subpaths
+- [~] Path editing: drag anchors and handles after placing (click selects a
+      node and shows its handles, symmetric handles stay mirrored, Backspace
+      deletes the node). Still to do: multiple named paths, holes via
+      even-odd across subpaths
 - [x] Skew and non-uniform scale in free transform (edge handles stretch one
       axis, mirror across the centre; W/H/Rotate/Skew fields in the options bar)
 - [ ] Perspective and warp transforms (non-affine; needs a mesh resampler)
@@ -165,8 +167,8 @@ None of these could be tested in the container.
 
 - [ ] Multiple open documents (the top bar shows a single document tab for now)
 - [x] Command palette (Ctrl+K) searching every menu action
-- [ ] New layer from selection (the selection action bar shows it disabled;
-      needs a new engine command in crates/core)
+- [x] New layer from selection (`NewLayerFromSelection` command; selection
+      action bar "New layer" and palette "Layer via copy")
 
 
 - [x] Native file dialogs (`rfd`) instead of typed paths
