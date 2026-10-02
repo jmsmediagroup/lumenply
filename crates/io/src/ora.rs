@@ -47,8 +47,11 @@ const MAX_DIM: u32 = 100_000;
 /// Largest decompressed entry (a 16k × 16k RGBA PNG).
 const MAX_ENTRY: u64 = 1 << 30;
 
-fn blend_to_ora(mode: BlendMode) -> &'static str {
-    match mode {
+/// The OpenRaster `composite-op` for a mode; `None` for the modes the
+/// spec lacks (Dissolve, the linear/vivid/pin lights, Hard Mix, Darker/
+/// Lighter Color, Subtract, Divide), which export as normal with a warning.
+fn blend_to_ora(mode: BlendMode) -> Option<&'static str> {
+    Some(match mode {
         BlendMode::Normal => "svg:src-over",
         BlendMode::Multiply => "svg:multiply",
         BlendMode::Screen => "svg:screen",
@@ -59,7 +62,27 @@ fn blend_to_ora(mode: BlendMode) -> &'static str {
         BlendMode::Add => "svg:plus",
         BlendMode::HardLight => "svg:hard-light",
         BlendMode::SoftLight => "svg:soft-light",
-    }
+        BlendMode::ColorBurn => "svg:color-burn",
+        BlendMode::ColorDodge => "svg:color-dodge",
+        BlendMode::Exclusion => "svg:exclusion",
+        BlendMode::Hue => "svg:hue",
+        BlendMode::Saturation => "svg:saturation",
+        BlendMode::Color => "svg:color",
+        BlendMode::Luminosity => "svg:luminosity",
+        _ => return None,
+    })
+}
+
+/// [`blend_to_ora`], falling back to normal with a warning.
+fn ora_op(layer: &Layer, warnings: &mut Vec<String>) -> &'static str {
+    blend_to_ora(layer.blend).unwrap_or_else(|| {
+        warnings.push(format!(
+            "layer '{}': OpenRaster has no {} blend mode; exported as normal",
+            layer.name,
+            layer.blend.label()
+        ));
+        "svg:src-over"
+    })
 }
 
 fn blend_from_ora(op: &str) -> Option<BlendMode> {
@@ -74,6 +97,13 @@ fn blend_from_ora(op: &str) -> Option<BlendMode> {
         "svg:plus" | "svg:add" => BlendMode::Add,
         "svg:hard-light" => BlendMode::HardLight,
         "svg:soft-light" => BlendMode::SoftLight,
+        "svg:color-burn" => BlendMode::ColorBurn,
+        "svg:color-dodge" => BlendMode::ColorDodge,
+        "svg:exclusion" => BlendMode::Exclusion,
+        "svg:hue" => BlendMode::Hue,
+        "svg:saturation" => BlendMode::Saturation,
+        "svg:color" => BlendMode::Color,
+        "svg:luminosity" => BlendMode::Luminosity,
         _ => return None,
     })
 }
@@ -152,7 +182,7 @@ fn write_layer<W: Write + std::io::Seek>(
                  composite-op=\"{}\" isolation=\"{}\">\n",
                 xml_escape(&layer.name),
                 layer.opacity,
-                blend_to_ora(layer.blend),
+                ora_op(layer, warnings),
                 if layer.pass_through { "auto" } else { "isolate" },
             ));
             if layer.mask.is_some() {
@@ -235,7 +265,7 @@ fn write_layer<W: Write + std::io::Seek>(
                 bounds.x,
                 bounds.y,
                 layer.opacity,
-                blend_to_ora(layer.blend),
+                ora_op(layer, warnings),
             ));
         }
     }

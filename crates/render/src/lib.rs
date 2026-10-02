@@ -13,6 +13,7 @@
 //! formulas will be ported to WGSL for the GPU path; this CPU path stays as
 //! the reference and fallback.
 
+pub mod blend;
 pub mod cache;
 pub mod develop;
 pub mod fill;
@@ -30,6 +31,7 @@ pub mod text;
 pub mod text_layout;
 pub mod transform;
 
+pub use blend::{blend_color, blend_pixel_at, blend_tile_at};
 pub use cache::BelowCache;
 pub use filters::{apply_filter, apply_filter_in_canvas, filter_raster, Filter};
 pub use gpu::GpuCompositor;
@@ -314,12 +316,12 @@ pub fn render_tile_over(
                             None => src,
                         };
                         if member.effects.is_empty() {
-                            blend_tile(&mut unit, &masked, member.blend, member.opacity);
+                            blend_tile_at(&mut unit, &masked, member.blend, member.opacity, coord);
                         } else {
                             // A member's effects render inside the unit; the
                             // alpha force-back below clips them to the base.
                             render_effects_under(&mut unit, member, coord, canvas);
-                            blend_tile(&mut unit, &masked, member.blend, member.opacity);
+                            blend_tile_at(&mut unit, &masked, member.blend, member.opacity, coord);
                             render_overlays_over(&mut unit, member, coord, canvas);
                             render_bevel_over(&mut unit, member, coord, canvas);
                             render_inner_over(&mut unit, member, coord, canvas);
@@ -341,14 +343,14 @@ pub fn render_tile_over(
             }
             let d = dst.get_or_insert_with(Tile::new);
             if layer.effects.is_empty() {
-                blend_tile(d, &unit, layer.blend, layer.opacity);
+                blend_tile_at(d, &unit, layer.blend, layer.opacity, coord);
             } else {
                 // The base's own effects come from the base's coverage:
                 // shadow and glow under the whole unit, the rest above it
                 // (so an opaque overlay covers clipped content, as in
                 // Photoshop).
                 render_effects_under(d, layer, coord, canvas);
-                blend_tile(d, &unit, layer.blend, layer.opacity);
+                blend_tile_at(d, &unit, layer.blend, layer.opacity, coord);
                 render_overlays_over(d, layer, coord, canvas);
                 render_bevel_over(d, layer, coord, canvas);
                 render_inner_over(d, layer, coord, canvas);
@@ -439,7 +441,7 @@ pub fn render_tile_over(
             };
             let d = dst.get_or_insert_with(Tile::new);
             render_effects_under(d, layer, coord, canvas);
-            blend_tile(d, &masked, layer.blend, layer.opacity);
+            blend_tile_at(d, &masked, layer.blend, layer.opacity, coord);
             render_overlays_over(d, layer, coord, canvas);
             render_bevel_over(d, layer, coord, canvas);
             render_inner_over(d, layer, coord, canvas);
@@ -450,9 +452,9 @@ pub fn render_tile_over(
         match mask {
             Some(m) => {
                 let masked = apply_mask(src.clone(), m, coord);
-                blend_tile(d, &masked, layer.blend, layer.opacity);
+                blend_tile_at(d, &masked, layer.blend, layer.opacity, coord);
             }
-            None => blend_tile(d, src, layer.blend, layer.opacity),
+            None => blend_tile_at(d, src, layer.blend, layer.opacity, coord),
         }
     }
     dst
@@ -931,14 +933,18 @@ pub fn adjust_in_place(
         if p.a <= 0.0 {
             continue;
         }
-        let w = opacity * mask_px.as_ref().map_or(mask_default, |m| m[i].a);
+        let mut w = opacity * mask_px.as_ref().map_or(mask_default, |m| m[i].a);
+        if mode == BlendMode::Dissolve {
+            let (ox, oy) = coord.origin();
+            w = blend::dissolve_weight(w, ox + (i % TILE_SIZE) as i32, oy + (i / TILE_SIZE) as i32);
+        }
         if w <= 0.0 {
             continue;
         }
         let [r, g, b, a] = p.to_straight();
-        let [ar, ag, ab] = adj.apply([r, g, b]);
-        let mix = |c: f32, ac: f32| c + (blend_channel(mode, c, ac) - c) * w;
-        *p = Rgba::from_straight(mix(r, ar), mix(g, ag), mix(b, ab), a);
+        let m = blend::blend_color(mode, [r, g, b], adj.apply([r, g, b]));
+        let mix = |c: f32, bc: f32| c + (bc - c) * w;
+        *p = Rgba::from_straight(mix(r, m[0]), mix(g, m[1]), mix(b, m[2]), a);
     }
 }
 
@@ -1021,9 +1027,9 @@ pub fn blend_pixel(backdrop: Rgba, source: Rgba, mode: BlendMode, opacity: f32) 
     let cb = [b.r / ab, b.g / ab, b.b / ab];
     let cs = [s.r / as_, s.g / as_, s.b / as_];
     let both = as_ * ab;
-    let mix = |c_s: f32, c_b: f32, i: usize| -> f32 {
-        c_s * (1.0 - ab) + c_b * (1.0 - as_) + both * blend_channel(mode, cb[i], cs[i])
-    };
+    let mixed = blend::blend_color(mode, cb, cs);
+    let mix =
+        |c_s: f32, c_b: f32, i: usize| -> f32 { c_s * (1.0 - ab) + c_b * (1.0 - as_) + both * mixed[i] };
     Rgba::new(
         mix(s.r, b.r, 0),
         mix(s.g, b.g, 1),
@@ -1033,6 +1039,8 @@ pub fn blend_pixel(backdrop: Rgba, source: Rgba, mode: BlendMode, opacity: f32) 
 }
 
 /// Separable blend function `B(Cb, Cs)` on straight colour in `[0, 1]`.
+/// The non-separable modes need the whole colour: use
+/// [`blend_color`] (this returns their value for grey inputs).
 #[inline]
 pub fn blend_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
     match mode {
@@ -1046,6 +1054,7 @@ pub fn blend_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
         BlendMode::Add => (cb + cs).min(1.0),
         BlendMode::HardLight => hard_light(cb, cs),
         BlendMode::SoftLight => soft_light(cb, cs),
+        _ => blend::extra_channel(mode, cb, cs),
     }
 }
 

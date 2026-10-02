@@ -5,7 +5,8 @@
 //! kernel by kernel against `composite_rect`.
 //!
 //! Scope of the GPU path (anything else returns `None` and the caller uses
-//! the CPU): pixel and text layers, masks, opacity, all ten blend modes,
+//! the CPU): pixel and text layers, masks, opacity, every blend mode but
+//! Dissolve (its noise needs canvas coordinates; it stays on the CPU),
 //! isolated and pass-through groups, and adjustment layers that compile to
 //! a LUT in Normal blend mode (Levels, Curves, Invert, Brightness/Contrast,
 //! Posterize — the slider-heavy ones, uploaded as a 1024-entry table).
@@ -62,7 +63,31 @@ fn soft_light(cb: f32, cs: f32) -> f32 {
     return cb + (2.0 * cs - 1.0) * (d - cb);
 }
 
-// Separable blend function B(Cb, Cs); indices match BlendMode's order.
+// Mirrors blend::EDGE.
+const EDGE: f32 = 1e-6;
+
+fn color_burn(cb: f32, cs: f32) -> f32 {
+    if cb >= 1.0 - EDGE {
+        return 1.0;
+    }
+    if cs <= EDGE {
+        return 0.0;
+    }
+    return 1.0 - min((1.0 - cb) / cs, 1.0);
+}
+
+fn color_dodge(cb: f32, cs: f32) -> f32 {
+    if cb <= EDGE {
+        return 0.0;
+    }
+    if cs >= 1.0 - EDGE {
+        return 1.0;
+    }
+    return min(cb / (1.0 - cs), 1.0);
+}
+
+// Separable blend function B(Cb, Cs); indices match BlendMode's
+// discriminants. Mirrors blend_channel + blend::extra_channel.
 fn blend_channel(mode: u32, cb: f32, cs: f32) -> f32 {
     switch mode {
         case 0u: { return cs; }                         // Normal
@@ -74,7 +99,115 @@ fn blend_channel(mode: u32, cb: f32, cs: f32) -> f32 {
         case 6u: { return abs(cb - cs); }               // Difference
         case 7u: { return min(cb + cs, 1.0); }          // Add
         case 8u: { return hard_light(cb, cs); }         // HardLight
-        default: { return soft_light(cb, cs); }         // SoftLight
+        case 9u: { return soft_light(cb, cs); }         // SoftLight
+        case 11u: { return color_burn(cb, cs); }        // ColorBurn
+        case 12u: { return max(cb + cs - 1.0, 0.0); }   // LinearBurn
+        case 14u: { return color_dodge(cb, cs); }       // ColorDodge
+        case 16u: {                                     // VividLight
+            if cs <= EDGE {
+                return 0.0;
+            }
+            if cs >= 1.0 - EDGE {
+                return 1.0;
+            }
+            if cs <= 0.5 {
+                return color_burn(cb, 2.0 * cs);
+            }
+            return color_dodge(cb, 2.0 * cs - 1.0);
+        }
+        case 17u: { return clamp(cb + 2.0 * cs - 1.0, 0.0, 1.0); } // LinearLight
+        case 18u: {                                     // PinLight
+            if cs <= 0.5 {
+                return min(cb, 2.0 * cs);
+            }
+            return max(cb, 2.0 * cs - 1.0);
+        }
+        case 19u: {                                     // HardMix
+            if cs >= 1.0 - EDGE {
+                return select(0.0, 1.0, cb > EDGE);
+            }
+            if cs <= EDGE {
+                return select(0.0, 1.0, cb >= 1.0 - EDGE);
+            }
+            return select(0.0, 1.0, cb + cs >= 1.0 - EDGE);
+        }
+        case 20u: { return cb + cs - 2.0 * cb * cs; }   // Exclusion
+        case 21u: { return max(cb - cs, 0.0); }         // Subtract
+        case 22u: {                                     // Divide
+            if cs <= 0.0 {
+                return select(0.0, 1.0, cb > 0.0);
+            }
+            return min(cb / cs, 1.0);
+        }
+        default: { return cs; }                         // Dissolve (CPU only)
+    }
+}
+
+// Non-separable modes (W3C SetLum/SetSat/ClipColor, Rec. 601 luma).
+fn lum(c: vec3f) -> f32 {
+    return 0.3 * c.x + 0.59 * c.y + 0.11 * c.z;
+}
+
+fn clip_color(c: vec3f) -> vec3f {
+    let l = lum(c);
+    let n = min(min(c.x, c.y), c.z);
+    let x = max(max(c.x, c.y), c.z);
+    var out = c;
+    if n < 0.0 && l - n > 1e-12 {
+        out = vec3f(l) + (out - vec3f(l)) * (l / (l - n));
+    }
+    if x > 1.0 && x - l > 1e-12 {
+        out = vec3f(l) + (out - vec3f(l)) * ((1.0 - l) / (x - l));
+    }
+    return out;
+}
+
+fn set_lum(c: vec3f, l: f32) -> vec3f {
+    return clip_color(c + vec3f(l - lum(c)));
+}
+
+fn sat(c: vec3f) -> f32 {
+    return max(max(c.x, c.y), c.z) - min(min(c.x, c.y), c.z);
+}
+
+fn set_sat(c: vec3f, s: f32) -> vec3f {
+    var lo = 0u;
+    var mid = 1u;
+    var hi = 2u;
+    if c[lo] > c[mid] {
+        let t = lo; lo = mid; mid = t;
+    }
+    if c[mid] > c[hi] {
+        let t = mid; mid = hi; hi = t;
+    }
+    if c[lo] > c[mid] {
+        let t = lo; lo = mid; mid = t;
+    }
+    var out = vec3f(0.0);
+    let range = c[hi] - c[lo];
+    if range > 0.0 {
+        out[mid] = (c[mid] - c[lo]) * s / range;
+        out[hi] = s;
+    }
+    return out;
+}
+
+// The whole-colour blend B(Cb, Cs); mirrors blend::blend_color.
+fn blend_color(mode: u32, cb: vec3f, cs: vec3f) -> vec3f {
+    switch mode {
+        case 13u: { return select(cb, cs, lum(cs) < lum(cb)); }   // DarkerColor
+        case 15u: { return select(cb, cs, lum(cs) > lum(cb)); }   // LighterColor
+        case 23u: { return set_lum(set_sat(cs, sat(cb)), lum(cb)); } // Hue
+        case 24u: { return set_lum(set_sat(cb, sat(cs)), lum(cb)); } // Saturation
+        case 25u: { return set_lum(cs, lum(cb)); }                // Color
+        case 26u: { return set_lum(cb, lum(cs)); }                // Luminosity
+        default: {
+            return vec3f(
+                blend_channel(mode, cb.x, cs.x),
+                blend_channel(mode, cb.y, cs.y),
+                blend_channel(mode, cb.z, cs.z),
+            );
+        }
     }
 }
 
@@ -94,11 +227,7 @@ fn blend_pixel(b: vec4f, source: vec4f, mode: u32, opacity: f32) -> vec4f {
     let cb = b.rgb / b.a;
     let cs = s.rgb / s.a;
     let both = s.a * b.a;
-    let mixed = vec3f(
-        blend_channel(mode, cb.x, cs.x),
-        blend_channel(mode, cb.y, cs.y),
-        blend_channel(mode, cb.z, cs.z),
-    );
+    let mixed = blend_color(mode, cb, cs);
     let rgb = s.rgb * (1.0 - b.a) + b.rgb * (1.0 - s.a) + both * mixed;
     return vec4f(rgb, s.a + b.a - both);
 }
@@ -344,6 +473,7 @@ impl GpuCompositor {
                     && l.effects.is_empty()
                     // Smart filters render on the CPU (ADR 0011).
                     && !l.smart_filters.is_active()
+                    && l.blend != lumenply_doc::BlendMode::Dissolve
                     && match &l.content {
                         LayerContent::Pixel(_)
                         | LayerContent::Text(_)
@@ -762,23 +892,29 @@ mod tests {
         );
     }
 
-    /// Every blend mode over a gradient backdrop, with opacity and a mask.
+    /// Every GPU blend mode (all but Dissolve) over a gradient backdrop,
+    /// with opacity and a mask.
     #[test]
     fn gpu_matches_cpu_for_blends_masks_and_opacity() {
-        let mut doc = Document::new(300, 200);
+        let modes: Vec<BlendMode> = BlendMode::ALL
+            .into_iter()
+            .filter(|m| *m != BlendMode::Dissolve)
+            .collect();
+        let w = 30 * modes.len() as u32 + 30;
+        let mut doc = Document::new(w, 200);
         let bg = doc.add_pixel_layer("bg");
-        let mut fill = Raster::new(300, 200);
+        let mut fill = Raster::new(w, 200);
         for y in 0..200 {
-            for x in 0..300 {
-                fill.set(
-                    x,
-                    y,
-                    Rgba::from_straight(x as f32 / 300.0, y as f32 / 200.0, 0.4, 1.0),
-                );
+            for x in 0..w {
+                // Irrational-ish steps keep Hard Mix and Darker/Lighter
+                // Color away from exact ties, where GPU and CPU division
+                // rounding could pick different sides of the step.
+                let t = (x as f32 * 0.618_034 + 0.013) % 1.0;
+                fill.set(x, y, Rgba::from_straight(t, y as f32 / 200.0 + 0.0021, 0.4, 1.0));
             }
         }
         *doc.layer_mut(bg).unwrap().pixels_mut().unwrap() = TileStore::from_raster(&fill, 0, 0);
-        for (i, mode) in BlendMode::ALL.into_iter().enumerate() {
+        for (i, mode) in modes.into_iter().enumerate() {
             let id = doc.add_pixel_layer("top");
             let mut r = Raster::new(60, 200);
             for y in 0..200 {
@@ -796,7 +932,19 @@ mod tests {
                 l.mask = Some(m);
             }
         }
-        assert_matches_cpu(&doc, "ten blend modes");
+        assert_matches_cpu(&doc, "every GPU blend mode");
+    }
+
+    /// Dissolve stays on the CPU: its noise is keyed to canvas pixels.
+    #[test]
+    fn dissolve_falls_back_to_the_cpu() {
+        let mut doc = Document::new(64, 64);
+        let id = doc.add_pixel_layer("a");
+        assert!(GpuCompositor::supports(&doc));
+        doc.layer_mut(id).unwrap().blend = BlendMode::Dissolve;
+        assert!(!GpuCompositor::supports(&doc));
+        let Some(mut g) = gpu() else { return };
+        assert!(g.composite_rect(&doc, doc.canvas()).is_none());
     }
 
     /// Groups (isolated and pass-through) and LUT adjustments.

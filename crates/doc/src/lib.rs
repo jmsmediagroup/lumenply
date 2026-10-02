@@ -17,6 +17,10 @@ use serde::{Deserialize, Serialize};
 pub type LayerId = u64;
 
 /// How a layer combines with everything below it.
+///
+/// The discriminants are stable (the GPU shader indexes modes by them and
+/// the serde names are the file format): new modes are appended, never
+/// inserted. Menus use [`BlendMode::GROUPS`] for Photoshop's order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BlendMode {
@@ -28,13 +32,34 @@ pub enum BlendMode {
     Darken,
     Lighten,
     Difference,
+    /// Photoshop's Linear Dodge (Add).
     Add,
     HardLight,
     SoftLight,
+    /// Layer alpha × opacity becomes a per-pixel hard threshold against a
+    /// fixed noise pattern in canvas coordinates.
+    Dissolve,
+    ColorBurn,
+    LinearBurn,
+    DarkerColor,
+    ColorDodge,
+    LighterColor,
+    VividLight,
+    LinearLight,
+    PinLight,
+    HardMix,
+    Exclusion,
+    Subtract,
+    Divide,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
 }
 
 impl BlendMode {
-    pub const ALL: [BlendMode; 10] = [
+    /// Every mode in declaration (discriminant) order.
+    pub const ALL: [BlendMode; 27] = [
         BlendMode::Normal,
         BlendMode::Multiply,
         BlendMode::Screen,
@@ -45,8 +70,68 @@ impl BlendMode {
         BlendMode::Add,
         BlendMode::HardLight,
         BlendMode::SoftLight,
+        BlendMode::Dissolve,
+        BlendMode::ColorBurn,
+        BlendMode::LinearBurn,
+        BlendMode::DarkerColor,
+        BlendMode::ColorDodge,
+        BlendMode::LighterColor,
+        BlendMode::VividLight,
+        BlendMode::LinearLight,
+        BlendMode::PinLight,
+        BlendMode::HardMix,
+        BlendMode::Exclusion,
+        BlendMode::Subtract,
+        BlendMode::Divide,
+        BlendMode::Hue,
+        BlendMode::Saturation,
+        BlendMode::Color,
+        BlendMode::Luminosity,
     ];
 
+    /// The modes as Photoshop's blend menu groups them (menus draw a
+    /// separator between groups): normal, darken, lighten, contrast,
+    /// inversion, component.
+    pub const GROUPS: [&'static [BlendMode]; 6] = [
+        &[BlendMode::Normal, BlendMode::Dissolve],
+        &[
+            BlendMode::Darken,
+            BlendMode::Multiply,
+            BlendMode::ColorBurn,
+            BlendMode::LinearBurn,
+            BlendMode::DarkerColor,
+        ],
+        &[
+            BlendMode::Lighten,
+            BlendMode::Screen,
+            BlendMode::ColorDodge,
+            BlendMode::Add,
+            BlendMode::LighterColor,
+        ],
+        &[
+            BlendMode::Overlay,
+            BlendMode::SoftLight,
+            BlendMode::HardLight,
+            BlendMode::VividLight,
+            BlendMode::LinearLight,
+            BlendMode::PinLight,
+            BlendMode::HardMix,
+        ],
+        &[
+            BlendMode::Difference,
+            BlendMode::Exclusion,
+            BlendMode::Subtract,
+            BlendMode::Divide,
+        ],
+        &[
+            BlendMode::Hue,
+            BlendMode::Saturation,
+            BlendMode::Color,
+            BlendMode::Luminosity,
+        ],
+    ];
+
+    /// The stable identifier (serde name, CLI argument).
     pub fn name(self) -> &'static str {
         match self {
             BlendMode::Normal => "normal",
@@ -59,15 +144,84 @@ impl BlendMode {
             BlendMode::Add => "add",
             BlendMode::HardLight => "hard-light",
             BlendMode::SoftLight => "soft-light",
+            BlendMode::Dissolve => "dissolve",
+            BlendMode::ColorBurn => "color-burn",
+            BlendMode::LinearBurn => "linear-burn",
+            BlendMode::DarkerColor => "darker-color",
+            BlendMode::ColorDodge => "color-dodge",
+            BlendMode::LighterColor => "lighter-color",
+            BlendMode::VividLight => "vivid-light",
+            BlendMode::LinearLight => "linear-light",
+            BlendMode::PinLight => "pin-light",
+            BlendMode::HardMix => "hard-mix",
+            BlendMode::Exclusion => "exclusion",
+            BlendMode::Subtract => "subtract",
+            BlendMode::Divide => "divide",
+            BlendMode::Hue => "hue",
+            BlendMode::Saturation => "saturation",
+            BlendMode::Color => "color",
+            BlendMode::Luminosity => "luminosity",
         }
+    }
+
+    /// Photoshop's display name, for menus.
+    pub fn label(self) -> &'static str {
+        match self {
+            BlendMode::Normal => "Normal",
+            BlendMode::Multiply => "Multiply",
+            BlendMode::Screen => "Screen",
+            BlendMode::Overlay => "Overlay",
+            BlendMode::Darken => "Darken",
+            BlendMode::Lighten => "Lighten",
+            BlendMode::Difference => "Difference",
+            BlendMode::Add => "Linear Dodge (Add)",
+            BlendMode::HardLight => "Hard Light",
+            BlendMode::SoftLight => "Soft Light",
+            BlendMode::Dissolve => "Dissolve",
+            BlendMode::ColorBurn => "Color Burn",
+            BlendMode::LinearBurn => "Linear Burn",
+            BlendMode::DarkerColor => "Darker Color",
+            BlendMode::ColorDodge => "Color Dodge",
+            BlendMode::LighterColor => "Lighter Color",
+            BlendMode::VividLight => "Vivid Light",
+            BlendMode::LinearLight => "Linear Light",
+            BlendMode::PinLight => "Pin Light",
+            BlendMode::HardMix => "Hard Mix",
+            BlendMode::Exclusion => "Exclusion",
+            BlendMode::Subtract => "Subtract",
+            BlendMode::Divide => "Divide",
+            BlendMode::Hue => "Hue",
+            BlendMode::Saturation => "Saturation",
+            BlendMode::Color => "Color",
+            BlendMode::Luminosity => "Luminosity",
+        }
+    }
+
+    /// Whether the mode mixes whole colours (hue, saturation, luma) rather
+    /// than each channel on its own.
+    pub fn is_non_separable(self) -> bool {
+        matches!(
+            self,
+            BlendMode::DarkerColor
+                | BlendMode::LighterColor
+                | BlendMode::Hue
+                | BlendMode::Saturation
+                | BlendMode::Color
+                | BlendMode::Luminosity
+        )
     }
 }
 
 impl FromStr for BlendMode {
     type Err = String;
 
+    /// Accepts the stable names, `_` or spaces for `-`, and the display
+    /// labels ("Color Burn", "Linear Dodge (Add)", "linear-dodge").
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let key = s.trim().to_ascii_lowercase().replace('_', "-");
+        let key = s.trim().to_ascii_lowercase().replace(['_', ' '], "-");
+        if matches!(key.as_str(), "linear-dodge" | "linear-dodge-(add)") {
+            return Ok(BlendMode::Add);
+        }
         BlendMode::ALL
             .iter()
             .copied()
@@ -1165,6 +1319,49 @@ mod tests {
         }
         assert_eq!("Hard_Light".parse::<BlendMode>().unwrap(), BlendMode::HardLight);
         assert!("glow".parse::<BlendMode>().is_err());
+        for m in BlendMode::ALL {
+            assert_eq!(m.label().parse::<BlendMode>().unwrap(), m, "{}", m.label());
+        }
+        assert_eq!("linear-dodge".parse::<BlendMode>().unwrap(), BlendMode::Add);
+    }
+
+    #[test]
+    fn blend_mode_serde_names_and_order_are_stable() {
+        // The original ten keep their discriminants and file names.
+        let old = [
+            (BlendMode::Normal, "normal"),
+            (BlendMode::Multiply, "multiply"),
+            (BlendMode::Screen, "screen"),
+            (BlendMode::Overlay, "overlay"),
+            (BlendMode::Darken, "darken"),
+            (BlendMode::Lighten, "lighten"),
+            (BlendMode::Difference, "difference"),
+            (BlendMode::Add, "add"),
+            (BlendMode::HardLight, "hard-light"),
+            (BlendMode::SoftLight, "soft-light"),
+        ];
+        for (i, (m, n)) in old.into_iter().enumerate() {
+            assert_eq!(m as usize, i);
+            assert_eq!(serde_json::to_string(&m).unwrap(), format!("\"{n}\""));
+            assert_eq!(serde_json::from_str::<BlendMode>(&format!("\"{n}\"")).unwrap(), m);
+        }
+        for (i, m) in BlendMode::ALL.into_iter().enumerate() {
+            assert_eq!(m as usize, i, "ALL is in discriminant order");
+            assert_eq!(serde_json::to_string(&m).unwrap(), format!("\"{}\"", m.name()));
+        }
+        assert_eq!(BlendMode::Dissolve as usize, 10);
+        assert_eq!(BlendMode::Luminosity as usize, 26);
+        assert_eq!(
+            serde_json::to_string(&BlendMode::ColorBurn).unwrap(),
+            "\"color-burn\""
+        );
+        // Every mode appears exactly once in the menu groups.
+        let mut seen: Vec<BlendMode> = BlendMode::GROUPS.iter().flat_map(|g| g.iter().copied()).collect();
+        assert_eq!(seen.len(), 27);
+        seen.sort_by_key(|m| *m as usize);
+        assert_eq!(seen, BlendMode::ALL.to_vec());
+        assert_eq!(BlendMode::Add.label(), "Linear Dodge (Add)");
+        assert_eq!(BlendMode::ALL.iter().filter(|m| m.is_non_separable()).count(), 6);
     }
 
     #[test]

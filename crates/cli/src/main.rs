@@ -79,7 +79,8 @@ enum Cmd {
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// List the supported blend modes.
+    /// List the supported blend modes (name, then Photoshop's label), in
+    /// Photoshop's menu order with a blank line between its groups.
     Blends,
     /// Convert many files at once (Photoshop's Image Processor): images,
     /// camera RAW, PSD and projects in; PNG, JPEG or WebP out.
@@ -188,8 +189,13 @@ fn main() -> Result<()> {
             normal,
         } => bench(size, layers, runs, normal),
         Cmd::Blends => {
-            for m in BlendMode::ALL {
-                println!("{}", m.name());
+            for (i, group) in BlendMode::GROUPS.iter().enumerate() {
+                if i > 0 {
+                    println!();
+                }
+                for m in group.iter() {
+                    println!("{:<14} {}", m.name(), m.label());
+                }
             }
             Ok(())
         }
