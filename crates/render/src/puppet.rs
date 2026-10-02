@@ -425,6 +425,10 @@ impl PuppetMesh {
                     continue;
                 }
                 let p = self.rest[v];
+                // Already snug (a small search settles it for most).
+                if opaque.nearest(p, want + 0.25).is_some() {
+                    continue;
+                }
                 let Some((d, q)) = opaque.nearest(p, 1.5 * step + want) else {
                     continue;
                 };
