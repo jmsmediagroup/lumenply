@@ -280,7 +280,9 @@ None of these could be tested in the container.
       Rotate by angle (canvas grows to fit, transparent corners) — all through
       CropCanvas, so masks, guides, paths and smart objects follow. Text
       layers stay upright when the canvas turns (as in a straightened crop)
-- [ ] Merge selected layers (Cmd+E with a multi-selection)
+- [x] Merge selected layers (Cmd+E with several layers selected, "Merge
+      layers"): the selected visible siblings composite into the topmost
+      one's slot and name; hidden ones stay; picture unchanged (tested)
 - [ ] Lock-aware Properties transform controls
 - [ ] Shape layers (vector shape + fill), pattern fills (PSD imports them as pixels)
 - [~] Text: searchable font picker (system fonts via fontdb, .ttc face index
