@@ -46,7 +46,18 @@ impl App {
                             .doc()
                             .layer(x.layer)
                             .is_some_and(|l| l.smart_layer().is_some());
-                        let affine_only = "Smart objects keep affine transforms; rasterize first";
+                        // Shapes too: their outline takes an affine only.
+                        let shape = self
+                            .editor
+                            .doc()
+                            .layer(x.layer)
+                            .is_some_and(|l| l.shape_layer().is_some());
+                        let affine_only = if shape {
+                            "Shapes stay vector through affine transforms; rasterize first"
+                        } else {
+                            "Smart objects keep affine transforms; rasterize first"
+                        };
+                        let smart = smart || shape;
                         ui.add_enabled_ui(!persp && !warping, |ui| {
                             let mut sx = x.sx * 100.0;
                             let mut sy = x.sy * 100.0;
@@ -164,14 +175,15 @@ impl App {
                     ui.separator();
                     match self.tool {
                         Tool::Move => {
+                            let block = self.action_block("xform");
                             if ui
                                 .add_enabled(
-                                    self.active_is_pixel(),
+                                    block.is_none(),
                                     egui::Button::new("Free transform")
                                         .shortcut_text(self.action_keys(ui.ctx(), "xform")),
                                 )
                                 .on_hover_text("Scale, rotate, skew, distort or warp the active layer")
-                                .on_disabled_hover_text("Select a pixel layer to transform it")
+                                .on_disabled_hover_text(block.unwrap_or("Select a pixel layer to transform it"))
                                 .clicked()
                             {
                                 self.begin_free_transform();

@@ -656,7 +656,7 @@ impl App {
     /// (document pixels, as a drag would); `shape:drag=X0:Y0:X1:Y1` shows
     /// the live preview of that drag without committing it;
     /// `shape:frompath` converts the work path; `shape:dash` dashes the
-    /// active shape's stroke.
+    /// active shape's stroke; `shape:xform=SX:SY:DEG` transforms it.
     pub(crate) fn debug_shape(&mut self, ctx: &egui::Context, tok: &str) -> bool {
         let Some(rest) = tok.strip_prefix("shape:") else {
             return false;
@@ -723,6 +723,33 @@ impl App {
                 }
             }
             "frompath" => self.shape_from_path(),
+            // `shape:xform=SX:SY:DEG`: free-transform the active layer about
+            // its centre, as committing the on-canvas box would.
+            "xform" if nums.len() == 3 => {
+                // (A pixel layer works too, for before/after comparisons.)
+                let bounds = |l: &Layer| match l.shape_layer() {
+                    Some(s) => s.bounds(),
+                    None => l
+                        .raster_store()?
+                        .content_bounds()
+                        .map(|b| [b.x as f32, b.y as f32, b.right() as f32, b.bottom() as f32]),
+                };
+                if let Some((id, [x0, y0, x1, y1])) =
+                    self.active_layer().and_then(|l| bounds(l).map(|b| (l.id, b)))
+                {
+                    let t = Affine::around(
+                        (x0 + x1) / 2.0,
+                        (y0 + y1) / 2.0,
+                        nums[0],
+                        nums[1],
+                        nums[2].to_radians(),
+                    );
+                    self.run(&TransformLayer {
+                        layer: id,
+                        transform: t,
+                    });
+                }
+            }
             "dash" => {
                 if let Some((id, mut s)) = self
                     .active_layer()
