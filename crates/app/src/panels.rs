@@ -117,6 +117,34 @@ pub(crate) struct PanelState {
     pub(crate) info_cache: crate::info_panel::InfoCache,
 }
 
+impl PanelState {
+    /// A live preview (a brush stroke in progress) patched the composite
+    /// over `r` with `patch`: patch a colour-channel view the same way,
+    /// so painting shows while one channel is viewed alone.
+    pub(crate) fn preview_patch(&mut self, r: Rect, patch: &Raster) {
+        let Some(ch) = self.view.colour_index() else {
+            return;
+        };
+        if self.overlay.is_some() || self.view_shown != Some((self.view, None)) {
+            return;
+        }
+        let Some(tex) = self.view_tex.as_mut() else { return };
+        let [tw, th] = tex.size();
+        if r.right() > tw as i32 || r.bottom() > th as i32 || r.x < 0 || r.y < 0 {
+            return;
+        }
+        let img = egui::ColorImage {
+            size: [patch.width as usize, patch.height as usize],
+            pixels: patch
+                .pixels
+                .iter()
+                .map(|p| Color32::from_gray(channel_gray(*p, ch)))
+                .collect(),
+        };
+        tex.set_partial([r.x as usize, r.y as usize], img, nearest_when_zoomed());
+    }
+}
+
 /// A row in the Channels or Paths panel: the click target, its spoken
 /// name and the active / hover / focus look of a layer row.
 pub(crate) fn panel_row(
@@ -313,7 +341,7 @@ impl App {
                     format!("{} panel", tab.name()),
                 )
             });
-            note_target(ui.ctx(), &format!("tab:{}", tab.name()), r);
+            note_target(ui.ctx(), &format!("tab-{}", tab.name()), r);
             let p = ui.painter();
             if on {
                 p.rect_filled(r, RADIUS, RAISED);

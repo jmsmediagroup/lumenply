@@ -356,6 +356,7 @@ impl App {
                         raster_to_image(&patch),
                         nearest_when_zoomed(),
                     );
+                    self.panels.preview_patch(r, &patch);
                 }
             }
             _ => {
