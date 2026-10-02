@@ -141,10 +141,11 @@ fn write_layer<W: Write + std::io::Seek>(
         LayerContent::Group(children) => {
             xml.push_str(&format!(
                 "{indent}<stack name=\"{}\" visibility=\"{vis}\" opacity=\"{:.4}\" \
-                 composite-op=\"{}\" isolation=\"isolate\">\n",
+                 composite-op=\"{}\" isolation=\"{}\">\n",
                 xml_escape(&layer.name),
                 layer.opacity,
                 blend_to_ora(layer.blend),
+                if layer.pass_through { "auto" } else { "isolate" },
             ));
             if layer.mask.is_some() {
                 warnings.push(format!(
@@ -303,6 +304,8 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, OraError> {
                             let id = alloc();
                             let mut g = Layer::group(id, attrs("name").unwrap_or_else(|| "Group".into()));
                             apply_common(&mut g, &attrs, &mut warnings);
+                            // "auto" means non-isolated; our pass-through.
+                            g.pass_through = attrs("isolation").as_deref() == Some("auto");
                             groups.push(g);
                             stacks.push(Vec::new());
                         }
@@ -435,6 +438,7 @@ mod tests {
         inner.blend = BlendMode::Multiply;
         doc.layer_mut(g).unwrap().children_mut().unwrap().push(inner);
         doc.layer_mut(g).unwrap().visible = false;
+        doc.layer_mut(g).unwrap().pass_through = true;
 
         let top = doc.add_pixel_layer("Offset");
         doc.layer_mut(top).unwrap().pixels_mut().unwrap().set_pixel(
@@ -455,6 +459,7 @@ mod tests {
         assert_eq!(layers[0].name, "Background");
         assert_eq!(layers[1].name, "Group ü <&>");
         assert!(!layers[1].visible);
+        assert!(layers[1].pass_through, "isolation=auto round-trips");
         let inner = &layers[1].children().unwrap()[0];
         assert!((inner.opacity - 0.5).abs() < 1e-3);
         assert_eq!(inner.blend, BlendMode::Multiply);

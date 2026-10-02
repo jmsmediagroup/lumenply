@@ -294,6 +294,10 @@ pub struct Layer {
     /// 0.0 (invisible) to 1.0 (opaque).
     pub opacity: f32,
     pub blend: BlendMode,
+    /// Groups only: composite the children straight onto the backdrop
+    /// instead of as an isolated unit, so adjustments and blend modes
+    /// inside the group reach the layers below it.
+    pub pass_through: bool,
     pub mask: Option<Mask>,
     pub content: LayerContent,
     /// UI state for groups: children hidden in the layer list.
@@ -358,6 +362,7 @@ impl Layer {
             visible: true,
             opacity: 1.0,
             blend: BlendMode::Normal,
+            pass_through: false,
             mask: None,
             content,
             collapsed: false,

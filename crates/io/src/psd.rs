@@ -620,11 +620,11 @@ fn parse_adjustment(key: &[u8], data: &[u8]) -> Result<Option<Adjustment>, PsdEr
     }))
 }
 
-fn section_divider_block(kind: u32, blend: BlendMode) -> Vec<u8> {
+fn section_divider_block(kind: u32, key: &[u8; 4]) -> Vec<u8> {
     let mut data = Vec::new();
     put_u32(&mut data, kind);
     data.extend_from_slice(b"8BIM");
-    data.extend_from_slice(blend_key(blend));
+    data.extend_from_slice(key);
     additional_block(b"lsct", &data)
 }
 
@@ -635,6 +635,7 @@ fn layer_record(
     bounds: Rect,
     channels: Vec<(i16, Vec<u8>)>, // (channel id, encoded data)
     blend: BlendMode,
+    pass_through: bool,
     opacity: f32,
     visible: bool,
     mask: Option<(Rect, Vec<u8>, u8)>, // (rect, encoded data, default colour)
@@ -658,7 +659,7 @@ fn layer_record(
         channel_data.push(data.clone());
     }
     rec.extend_from_slice(b"8BIM");
-    rec.extend_from_slice(blend_key(blend));
+    rec.extend_from_slice(if pass_through { b"pass" } else { blend_key(blend) });
     rec.push((opacity.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
     rec.push(0); // clipping: base
     let mut flags = 0u8;
@@ -751,6 +752,7 @@ fn collect_records(
                     bounds,
                     chans,
                     l.blend,
+                    false,
                     l.opacity,
                     l.visible,
                     mask,
@@ -765,11 +767,12 @@ fn collect_records(
                     Rect::new(0, 0, 0, 0),
                     empty_channels(),
                     BlendMode::Normal,
+                    false,
                     1.0,
                     true,
                     None,
                     true,
-                    vec![section_divider_block(3, BlendMode::Normal)],
+                    vec![section_divider_block(3, blend_key(BlendMode::Normal))],
                 ));
                 collect_records(children, canvas, out, warnings);
                 out.push(layer_record(
@@ -777,11 +780,19 @@ fn collect_records(
                     Rect::new(0, 0, 0, 0),
                     empty_channels(),
                     l.blend,
+                    l.pass_through,
                     l.opacity,
                     l.visible,
                     mask,
                     mask_enabled,
-                    vec![section_divider_block(if l.collapsed { 2 } else { 1 }, l.blend)],
+                    vec![section_divider_block(
+                        if l.collapsed { 2 } else { 1 },
+                        if l.pass_through {
+                            b"pass"
+                        } else {
+                            blend_key(l.blend)
+                        },
+                    )],
                 ));
             }
             LayerContent::Filter(f) => warnings.push(format!(
@@ -803,6 +814,7 @@ fn collect_records(
                         Rect::new(0, 0, 0, 0),
                         empty_channels(),
                         l.blend,
+                        false,
                         l.opacity,
                         l.visible,
                         mask,
@@ -901,6 +913,7 @@ struct RawLayer {
     channels: Vec<(i16, Vec<u8>)>, // decoded planes
     blend: BlendMode,
     blend_known: bool,
+    pass_through: bool,
     opacity: f32,
     visible: bool,
     mask: Option<(Rect, Vec<u8>, u8, bool)>,
@@ -1074,6 +1087,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let (blend, known) = blend_from_key(&key);
                 heads.push((
                     RawLayer {
+                        pass_through: &key[..] == b"pass",
                         name,
                         bounds: checked_rect(left, top, right, bottom, "layer")?,
                         channels: Vec::new(),
@@ -1202,6 +1216,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let mut g = Layer::group(id, rl.name.clone());
                 *g.children_mut().expect("group") = children;
                 g.blend = rl.blend;
+                g.pass_through = rl.pass_through;
                 g.opacity = rl.opacity;
                 g.visible = rl.visible;
                 g.collapsed = rl.section == 2;
@@ -1456,6 +1471,7 @@ mod tests {
         let grp = doc.layer_mut(g).unwrap();
         grp.children_mut().unwrap().push(a);
         grp.children_mut().unwrap().push(b);
+        grp.pass_through = true;
         doc.add_adjustment(nge_doc::Adjustment::Invert);
 
         let path = temp("rt.psd");
@@ -1475,6 +1491,7 @@ mod tests {
             LayerContent::Adjustment(Adjustment::Invert)
         ));
         let grp = &back.layers()[1];
+        assert!(grp.pass_through, "the 'pass' blend key round-trips");
         let kids: Vec<&str> = grp.children().unwrap().iter().map(|l| l.name.as_str()).collect();
         assert_eq!(kids, ["Red square", "Hidden"]);
         let red = &grp.children().unwrap()[0];

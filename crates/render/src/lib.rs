@@ -105,13 +105,29 @@ pub fn render_tile_over(
                     None => continue,
                 }
             }
-            LayerContent::Group(children) => match render_tile(children, coord, canvas) {
-                Some(t) => {
-                    owned = t;
-                    &owned
+            LayerContent::Group(children) => {
+                // Pass-through: the children composite straight onto the
+                // backdrop, so adjustments and blend modes inside the group
+                // reach the layers below it. A live filter child still
+                // needs the isolated path (it reads its backdrop from the
+                // child slice alone, see render_tile_over).
+                let has_filter = children
+                    .iter()
+                    .any(|c| c.visible && c.opacity > 0.0 && matches!(c.content, LayerContent::Filter(_)));
+                if layer.pass_through && !has_filter {
+                    let before = dst.clone();
+                    let after = render_tile_over(before.clone(), children, coord, canvas);
+                    dst = mix_tiles(before, after, layer.opacity, mask, coord);
+                    continue;
                 }
-                None => continue,
-            },
+                match render_tile(children, coord, canvas) {
+                    Some(t) => {
+                        owned = t;
+                        &owned
+                    }
+                    None => continue,
+                }
+            }
             LayerContent::Adjustment(adj) => {
                 // Adjustments modify the backdrop in place rather than
                 // compositing over it, so alpha is never accumulated.
@@ -184,6 +200,38 @@ pub fn render_tile_over(
         }
     }
     dst
+}
+
+/// Mix `after` over `before` by `opacity × mask`: the result of a
+/// pass-through group at partial strength. `None` means a transparent tile.
+fn mix_tiles(
+    before: Option<Tile>,
+    after: Option<Tile>,
+    opacity: f32,
+    mask: Option<&Mask>,
+    coord: TileCoord,
+) -> Option<Tile> {
+    if opacity >= 1.0 && mask.is_none() {
+        return after;
+    }
+    let (mut out, b) = match (before, after) {
+        (None, None) => return None,
+        (b, a) => (a.unwrap_or_default(), b.unwrap_or_default()),
+    };
+    let mask_px = mask.and_then(|m| m.tiles.tile(coord)).map(|t| t.pixels());
+    let mask_default = mask.map_or(1.0, |m| m.default);
+    let bp = b.pixels();
+    for (i, p) in out.pixels_mut().iter_mut().enumerate() {
+        let w = opacity * mask_px.as_ref().map_or(mask_default, |m| m[i].a);
+        let q = bp[i];
+        *p = Rgba::new(
+            q.r + (p.r - q.r) * w,
+            q.g + (p.g - q.g) * w,
+            q.b + (p.b - q.b) * w,
+            q.a + (p.a - q.a) * w,
+        );
+    }
+    Some(out)
 }
 
 /// Apply an adjustment layer to a backdrop tile in place. The adjusted
@@ -423,6 +471,80 @@ mod tests {
         assert!(close(p[0], 0.75), "got {p:?}");
         let untouched = straight(out.get(0, 0));
         assert!(close(untouched[0], 1.0));
+    }
+
+    #[test]
+    fn pass_through_groups_reach_the_layers_below() {
+        // A grey background with a group holding only an Invert adjustment.
+        let mut doc = Document::new(8, 8);
+        let bg = doc.add_pixel_layer("bg");
+        for y in 0..8 {
+            for x in 0..8 {
+                doc.layer_mut(bg).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(0.2, 0.2, 0.2, 1.0),
+                );
+            }
+        }
+        let g = doc.add_group("g");
+        let id = doc.alloc_id();
+        doc.layer_mut(g)
+            .unwrap()
+            .children_mut()
+            .unwrap()
+            .push(Layer::adjustment(id, Adjustment::Invert));
+
+        // Isolated: the adjustment has nothing inside the group to act on.
+        let p = straight(composite_raster(&doc).get(4, 4));
+        assert!(close(p[0], 0.2), "isolated group leaves the backdrop: {p:?}");
+
+        // Pass-through: it inverts the background.
+        doc.layer_mut(g).unwrap().pass_through = true;
+        let p = straight(composite_raster(&doc).get(4, 4));
+        assert!(close(p[0], 0.8), "pass-through reaches below: {p:?}");
+
+        // Group opacity scales the effect.
+        doc.layer_mut(g).unwrap().opacity = 0.5;
+        let p = straight(composite_raster(&doc).get(4, 4));
+        assert!(close(p[0], 0.5), "half-strength pass-through: {p:?}");
+
+        // A mask gates where it applies.
+        doc.layer_mut(g).unwrap().opacity = 1.0;
+        let mut mask = nge_doc::Mask::hide_all();
+        mask.fill_rect(Rect::new(0, 0, 4, 8), 1.0);
+        doc.layer_mut(g).unwrap().mask = Some(mask);
+        let out = composite_raster(&doc);
+        assert!(close(straight(out.get(2, 4))[0], 0.8), "masked-in side inverted");
+        assert!(
+            close(straight(out.get(6, 4))[0], 0.2),
+            "masked-out side untouched"
+        );
+
+        // A multiply child blends against the backdrop, not against an
+        // isolated transparent buffer.
+        let mut doc2 = Document::new(4, 4);
+        let bg = doc2.add_pixel_layer("bg");
+        doc2.layer_mut(bg).unwrap().pixels_mut().unwrap().set_pixel(
+            1,
+            1,
+            Rgba::from_straight(0.5, 0.5, 0.5, 1.0),
+        );
+        let g = doc2.add_group("g");
+        let cid = doc2.alloc_id();
+        let mut child = Layer::pixel(cid, "mul");
+        child
+            .pixels_mut()
+            .unwrap()
+            .set_pixel(1, 1, Rgba::from_straight(0.5, 1.0, 0.0, 1.0));
+        child.blend = BlendMode::Multiply;
+        doc2.layer_mut(g).unwrap().children_mut().unwrap().push(child);
+        doc2.layer_mut(g).unwrap().pass_through = true;
+        let p = straight(composite_raster(&doc2).get(1, 1));
+        assert!(
+            close(p[0], 0.25) && close(p[1], 0.5),
+            "multiply against backdrop: {p:?}"
+        );
     }
 
     #[test]

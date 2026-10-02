@@ -120,7 +120,8 @@ None of these could be tested in the container.
 - [ ] Brush engine: presets, textures, spacing jitter, smudge, dodge/burn, sponge
 - [ ] Layer styles (drop shadow, stroke, glow) as non-destructive effects
 - [ ] Smart objects (embedded documents with transforms)
-- [ ] Clipping masks; pass-through blend mode for groups
+- [ ] Clipping masks
+- [x] Pass-through groups (compositor, Blend dropdown, .nge/.psd/.ora round trip)
 - [x] Histogram panel (composite luminance, in Properties); auto contrast as a
       Levels adjustment layer
 - [ ] Per-channel auto levels/colour (needs per-channel Levels first)

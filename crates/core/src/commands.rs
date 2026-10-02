@@ -860,6 +860,35 @@ impl Command for UngroupLayer {
     }
 }
 
+/// Toggle a group's pass-through compositing.
+pub struct SetPassThrough {
+    pub layer: LayerId,
+    pub pass_through: bool,
+}
+
+impl Command for SetPassThrough {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn label(&self) -> String {
+        if self.pass_through {
+            "Pass through".into()
+        } else {
+            "Isolate group".into()
+        }
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
+        if l.children().is_none() {
+            return Err(EditError::NotGroup(self.layer));
+        }
+        l.pass_through = self.pass_through;
+        Ok(())
+    }
+}
+
 pub struct SetCollapsed {
     pub layer: LayerId,
     pub collapsed: bool,

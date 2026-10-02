@@ -28,6 +28,8 @@ impl App {
             });
         });
         let blend = layer.blend;
+        let is_group = layer.children().is_some();
+        let pass = layer.pass_through;
         let adj = match &layer.content {
             LayerContent::Adjustment(a) => Some(a.clone()),
             _ => None,
@@ -57,16 +59,36 @@ impl App {
             self.editor.end_coalescing();
         }
 
-        let mut b = blend;
+        // Groups offer Pass Through above the regular modes: the children
+        // then composite straight onto the backdrop.
+        let mut sel = if is_group && pass { None } else { Some(blend) };
         egui::ComboBox::from_label("Blend mode")
-            .selected_text(b.name())
+            .selected_text(sel.map_or("Pass Through", |m| m.name()))
             .show_ui(ui, |ui| {
+                if is_group {
+                    ui.selectable_value(&mut sel, None, "Pass Through");
+                }
                 for m in BlendMode::ALL {
-                    ui.selectable_value(&mut b, m, m.name());
+                    ui.selectable_value(&mut sel, Some(m), m.name());
                 }
             });
-        if b != blend {
-            self.run(&SetBlendMode { layer: id, blend: b });
+        match sel {
+            None if !pass => self.run(&SetPassThrough {
+                layer: id,
+                pass_through: true,
+            }),
+            Some(m) => {
+                if pass {
+                    self.run(&SetPassThrough {
+                        layer: id,
+                        pass_through: false,
+                    });
+                }
+                if m != blend {
+                    self.run(&SetBlendMode { layer: id, blend: m });
+                }
+            }
+            _ => {}
         }
 
         if let Some(adj) = adj {

@@ -536,6 +536,34 @@ mod tests {
     }
 
     #[test]
+    fn set_pass_through_is_group_only_and_undoable() {
+        let mut ed = Editor::new(Document::new(8, 8));
+        ed.execute(&AddPixelLayer::new("px")).unwrap();
+        let px = ed.doc().layers()[0].id;
+        assert!(matches!(
+            ed.execute(&SetPassThrough {
+                layer: px,
+                pass_through: true
+            }),
+            Err(EditError::NotGroup(_))
+        ));
+        ed.execute(&GroupLayers {
+            layers: vec![px],
+            name: "g".into(),
+        })
+        .unwrap();
+        let g = ed.doc().layers()[0].id;
+        ed.execute(&SetPassThrough {
+            layer: g,
+            pass_through: true,
+        })
+        .unwrap();
+        assert!(ed.doc().layer(g).unwrap().pass_through);
+        ed.undo();
+        assert!(!ed.doc().layer(g).unwrap().pass_through);
+    }
+
+    #[test]
     fn history_limit_is_enforced() {
         let mut ed = Editor::new(Document::new(8, 8));
         ed.history_limit = 3;
