@@ -361,46 +361,56 @@ impl App {
             } else {
                 section_title(ui, "TRANSFORM");
             }
-            slider_row(ui, "Scale", &mut self.xform_scale, 10.0..=400.0, "%");
-            slider_row(ui, "Rotate", &mut self.xform_angle, -180.0..=180.0, "°");
+            // A position or pixel lock rules out every transform here, as
+            // the menus and canvas already say.
+            let locked = self.lock_block(crate::layer_actions::LockNeed::Reshape);
+            if let Some(why) = locked {
+                ui.label(RichText::new(why).small().color(MUTED));
+            }
+            ui.add_enabled_ui(locked.is_none(), |ui| {
+                slider_row(ui, "Scale", &mut self.xform_scale, 10.0..=400.0, "%");
+                slider_row(ui, "Rotate", &mut self.xform_angle, -180.0..=180.0, "°");
+            });
             let pending = (self.xform_scale - 100.0).abs() > 0.01 || self.xform_angle.abs() > 0.01;
             let mut apply = false;
             let mut flip = None;
             let mut free = false;
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-                if ui
-                    .add_enabled(pending, primary_button("Apply"))
-                    .on_hover_text("Scale and rotate the layer about its centre")
-                    .on_disabled_hover_text("Set a scale or angle first")
-                    .clicked()
-                {
-                    apply = true;
-                }
-                if ui
-                    .button("Flip H")
-                    .on_hover_text("Flip the layer horizontally")
-                    .clicked()
-                {
-                    flip = Some(true);
-                }
-                if ui
-                    .button("Flip V")
-                    .on_hover_text("Flip the layer vertically")
-                    .clicked()
-                {
-                    flip = Some(false);
-                }
-                if ui
-                    .add(
-                        egui::Button::new("Free transform…")
-                            .shortcut_text(self.action_keys(ui.ctx(), "xform")),
-                    )
-                    .on_hover_text("Transform on the canvas with handles")
-                    .clicked()
-                {
-                    free = true;
-                }
+            ui.add_enabled_ui(locked.is_none(), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    if ui
+                        .add_enabled(pending, primary_button("Apply"))
+                        .on_hover_text("Scale and rotate the layer about its centre")
+                        .on_disabled_hover_text("Set a scale or angle first")
+                        .clicked()
+                    {
+                        apply = true;
+                    }
+                    if ui
+                        .button("Flip H")
+                        .on_hover_text("Flip the layer horizontally")
+                        .clicked()
+                    {
+                        flip = Some(true);
+                    }
+                    if ui
+                        .button("Flip V")
+                        .on_hover_text("Flip the layer vertically")
+                        .clicked()
+                    {
+                        flip = Some(false);
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new("Free transform…")
+                                .shortcut_text(self.action_keys(ui.ctx(), "xform")),
+                        )
+                        .on_hover_text("Transform on the canvas with handles")
+                        .clicked()
+                    {
+                        free = true;
+                    }
+                })
             });
             // Scale and rotate about the painted centre (smart objects
             // compose this into their transform).

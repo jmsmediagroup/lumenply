@@ -283,7 +283,7 @@ None of these could be tested in the container.
 - [x] Merge selected layers (Cmd+E with several layers selected, "Merge
       layers"): the selected visible siblings composite into the topmost
       one's slot and name; hidden ones stay; picture unchanged (tested)
-- [ ] Lock-aware Properties transform controls
+- [x] Lock-aware Properties transform controls (dimmed with the reason)
 - [ ] Shape layers (vector shape + fill), pattern fills (PSD imports them as pixels)
 - [~] Text: searchable font picker (system fonts via fontdb, .ttc face index
       honoured), bold/italic/bold-italic (real faces, else synthetic oblique
