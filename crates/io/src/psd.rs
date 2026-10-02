@@ -15,10 +15,11 @@
 use std::path::Path;
 
 use lumenply_doc::{Adjustment, BlendMode, Document, Layer, LayerContent, LayerLocks, Mask};
-use lumenply_tiles::{Raster, Rect, Rgba, TileStore};
+use lumenply_tiles::{Raster, Rect, TileStore};
 
 use crate::{linear_to_srgb, IoError};
 
+mod color_modes;
 mod extra;
 mod shape;
 
@@ -236,6 +237,16 @@ fn encode_channel_rle(plane: &[u8], w: usize, h: usize) -> Vec<u8> {
 /// Raw plane bytes → samples scaled to the full u16 range (8-bit values
 /// multiply by 257, so 255 → 65535 exactly; 16-bit values are big-endian).
 fn bytes_to_samples(bytes: &[u8], depth_bytes: usize) -> Vec<u16> {
+    if depth_bytes == 4 {
+        // 32-bit floats (transparency, masks): clamped to 0..1.
+        return bytes
+            .chunks_exact(4)
+            .map(|p| {
+                let v = f32::from_be_bytes([p[0], p[1], p[2], p[3]]);
+                (if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 } * 65535.0).round() as u16
+            })
+            .collect();
+    }
     if depth_bytes == 2 {
         bytes
             .chunks_exact(2)
@@ -267,6 +278,11 @@ fn decode_channel(
     depth_bytes: usize,
     psb: bool,
 ) -> Result<Vec<u16>, PsdError> {
+    if depth_bytes == 4 {
+        // 32-bit transparency and masks: floats, clamped to 0..1.
+        let bytes = color_modes::decode_plane_bytes(rd, w, h, 32, psb)?;
+        return Ok(bytes_to_samples(&bytes, 4));
+    }
     let compression = rd.u16()?;
     let plane_len = w * h * depth_bytes;
     match compression {
@@ -1384,6 +1400,9 @@ struct RawLayer {
     fill: Option<lumenply_doc::Fill>,
     /// A shape layer: a fill with a readable vector mask (and stroke).
     shape: Option<lumenply_doc::ShapeLayer>,
+    /// Colour planes of a 32-bit file, as floats (`channels` keeps the
+    /// transparency).
+    float_channels: Vec<(i16, Vec<f32>)>,
 }
 
 /// Largest dimension the PSD v1 format allows for the canvas, a layer or a
@@ -1440,33 +1459,29 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
             "canvas {width}×{height} is outside the format's limits"
         )));
     }
-    if !(3..=56).contains(&channels) {
-        return Err(PsdError::Corrupt(format!("{channels} channels in an RGB file")));
-    }
-    if depth != 8 && depth != 16 {
-        return Err(PsdError::Unsupported(format!(
-            "{depth}-bit depth; only 8- and 16-bit are supported yet"
-        )));
-    }
-    let depth_bytes = depth as usize / 8;
-    if mode != 3 {
-        return Err(PsdError::Unsupported(format!(
-            "colour mode {mode}; only RGB is supported yet"
-        )));
-    }
+    // Colour modes other than RGB and 32-bit depth convert on import.
+    let mut cm = color_modes::ColorMode::from_header(mode, depth, channels)?;
+    let depth_bytes = (depth as usize / 8).max(1);
     let cmd_len = rd.u32()? as usize;
-    rd.skip(cmd_len)?;
+    let mode_data = rd.bytes(cmd_len)?;
     let res_len = rd.u32()? as usize;
     let resources = rd.bytes(res_len)?;
+    cm.read_sections(mode_data, resources);
     let guides = crate::psd_guides::read_guides(resources);
     let alpha_names = crate::psd_channels::read_names(resources);
 
-    let mut warnings = Vec::new();
+    let mut warnings: Vec<String> = cm.warning().into_iter().collect();
     let lm_len = rd.len_of(psb)?;
     let lm_start = rd.pos;
     let mut raw: Vec<RawLayer> = Vec::new();
     if lm_len > 0 {
-        let li_len = rd.len_of(psb)?;
+        let mut li_len = rd.len_of(psb)?;
+        if li_len == 0 {
+            // 16/32-bit Photoshop files keep their layers in Lr16/Lr32.
+            if let Some((at, len)) = color_modes::deep_layer_info(&buf, rd.pos, lm_start + lm_len, psb) {
+                (rd.pos, li_len) = (at, len);
+            }
+        }
         if li_len > 0 {
             let li_start = rd.pos;
             let count = rd.i16()?;
@@ -1594,7 +1609,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         | b"grdm" | b"selc" => {
                             is_adjustment = true;
                             if adjustment.is_none() {
-                                adjustment = parse_adjustment(&k, data)?;
+                                adjustment = cm.adjustment(&k, data)?;
                             }
                         }
                         _ => {}
@@ -1636,6 +1651,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         locks,
                         fill,
                         shape: shape_layer,
+                        float_channels: Vec::new(),
                     },
                     chans,
                 ));
@@ -1656,6 +1672,14 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     };
                     if w > 0 && h > 0 && len >= 2 {
                         let mut sub = Rd::new(data);
+                        if depth == 32 && id >= 0 {
+                            // 32-bit colour keeps its floats (HDR values).
+                            match color_modes::decode_f32(&mut sub, w, h, psb) {
+                                Ok(plane) => layer.float_channels.push((id, plane)),
+                                Err(e) => warnings.push(format!("layer '{}' channel {id}: {e}", layer.name)),
+                            }
+                            continue;
+                        }
                         match decode_channel(&mut sub, w, h, depth_bytes, psb) {
                             Ok(plane) => {
                                 if id == -2 {
@@ -1681,78 +1705,33 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     // alpha channels (saved selections) when it names any.
     let composite = if (raw.is_empty() || !alpha_names.is_empty()) && rd.pos + 2 <= buf.len() {
         let (w, h) = (width as usize, height as usize);
-        let compression = rd.u16()?;
-        let nch = channels as usize; // header-validated: 3..=56
-        let planes: Vec<Vec<u16>> = match compression {
-            0 => (0..nch)
-                .map(|_| {
-                    rd.bytes(w * h * depth_bytes)
-                        .map(|b| bytes_to_samples(b, depth_bytes))
-                })
-                .collect::<Result<_, _>>()?,
-            1 => {
-                let mut counts = Vec::with_capacity(h * nch);
-                for _ in 0..h * nch {
-                    counts.push(if psb {
-                        rd.u32()? as usize
-                    } else {
-                        rd.u16()? as usize
-                    });
-                }
-                let mut planes = Vec::new();
-                for c in 0..nch {
-                    let remaining = buf.len().saturating_sub(rd.pos);
-                    let mut plane =
-                        Vec::with_capacity((w * h * depth_bytes).min(remaining.saturating_mul(128)));
-                    for y in 0..h {
-                        let row = rd.bytes(counts[c * h + y])?;
-                        plane.extend(unpackbits(row, w * depth_bytes)?);
-                    }
-                    planes.push(bytes_to_samples(&plane, depth_bytes));
-                }
-                planes
-            }
-            other => return Err(PsdError::Unsupported(format!("composite compression {other}"))),
-        };
-        Some(planes)
+        let nch = channels as usize; // header-validated: 1..=56
+        Some(color_modes::read_composite(&mut rd, w, h, nch, depth, psb)?)
     } else {
         None
     };
 
     let mut doc = Document::new(width, height);
     doc.guides = guides;
+    // 32-bit files are linear float: keep values above 1 (HDR).
+    doc.float_mode = cm.is_float();
     // The named alpha channels are the composite's last planes.
     let n_alpha = composite
         .as_ref()
-        .map_or(0, |p| alpha_names.len().min(p.len().saturating_sub(3)));
+        .map_or(0, |p| alpha_names.len().min(p.len().saturating_sub(cm.n_color())));
     if let Some(planes) = &composite {
         let start = planes.len() - n_alpha;
         for (k, name) in alpha_names.iter().take(n_alpha).enumerate() {
             doc.saved_selections.push(crate::psd_channels::from_plane(
                 name.clone(),
-                &planes[start + k],
+                &planes[start + k].to_u16(),
                 width,
                 height,
             ));
         }
     }
     if let Some(planes) = composite.filter(|_| raw.is_empty()) {
-        let mut r = Raster::new(width, height);
-        let n = (width * height) as usize;
-        for i in 0..n {
-            // A fourth plane is transparency unless it is a named channel.
-            let a = if planes.len() > 3 + n_alpha {
-                planes[3][i] as f32 / 65535.0
-            } else {
-                1.0
-            };
-            r.pixels[i] = Rgba::from_straight(
-                crate::srgb_to_linear_f(planes[0][i] as f32 / 65535.0),
-                crate::srgb_to_linear_f(planes[1][i] as f32 / 65535.0),
-                crate::srgb_to_linear_f(planes[2][i] as f32 / 65535.0),
-                a,
-            );
-        }
+        let r = cm.composite_raster(&planes, n_alpha, width, height);
         let id = doc.alloc_id();
         let mut l = Layer::pixel(id, "Background");
         *l.pixels_mut().expect("pixel") = TileStore::from_raster(&r, 0, 0);
@@ -1858,26 +1837,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 }
                 let b = rl.bounds;
                 if b.w > 0 && b.h > 0 {
-                    let n = (b.w * b.h) as usize;
-                    let get = |id: i16| {
-                        rl.channels
-                            .iter()
-                            .find(|(i, _)| *i == id)
-                            .map(|(_, p)| p.as_slice())
-                    };
-                    let (r, g, bl) = (get(0), get(1), get(2));
-                    let a = get(-1);
-                    let mut raster = Raster::new(b.w, b.h);
-                    for i in 0..n {
-                        let ch = |p: Option<&[u16]>| p.map_or(0.0, |p| p[i] as f32 / 65535.0);
-                        let alpha = a.map_or(1.0, |p| p[i] as f32 / 65535.0);
-                        raster.pixels[i] = Rgba::from_straight(
-                            crate::srgb_to_linear_f(ch(r)),
-                            crate::srgb_to_linear_f(ch(g)),
-                            crate::srgb_to_linear_f(ch(bl)),
-                            alpha,
-                        );
-                    }
+                    let raster = cm.layer_raster(&rl.channels, &rl.float_channels, b.w, b.h);
                     *l.pixels_mut().expect("pixel") = TileStore::from_raster(&raster, b.x, b.y);
                 }
                 l.mask = build_mask(&rl);
@@ -1894,6 +1854,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     let top = stack.pop().unwrap_or_default();
     for l in top {
         doc.add_layer(l);
+    }
+    if cm.is_float() {
+        color_modes::linear_descriptor_colors(&mut doc);
     }
     lumenply_render::fill::refresh_stale(&mut doc);
     Ok(Report { value: doc, warnings })
@@ -1927,6 +1890,7 @@ pub fn load_flat(path: impl AsRef<Path>) -> Result<Raster, PsdError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumenply_tiles::Rgba;
 
     fn temp(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join("nge-psd-test");

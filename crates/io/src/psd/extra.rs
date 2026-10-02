@@ -505,8 +505,8 @@ pub(super) fn rgbc(c: [f32; 3]) -> Val {
     )
 }
 
-/// Straight linear RGB from a colour object (RGB or greyscale; other
-/// models read as mid grey).
+/// Straight linear RGB from a colour object (RGB, greyscale, CMYK or Lab;
+/// other models read as mid grey).
 pub(super) fn color_of(o: &Desc) -> [f32; 3] {
     let lin = |v: f64| srgb_to_linear_f((v / 255.0).clamp(0.0, 1.0) as f32);
     match &o.class[..] {
@@ -520,6 +520,19 @@ pub(super) fn color_of(o: &Desc) -> [f32; 3] {
             let k = 1.0 - (o.num(b"Gry ").unwrap_or(50.0) / 100.0).clamp(0.0, 1.0);
             [srgb_to_linear_f(k as f32); 3]
         }
+        // CMYK ink percentages and Lab (CMYK / Lab documents).
+        b"CMYC" => super::color_modes::cmyk_percent_to_linear([
+            o.num(b"Cyn ").unwrap_or(0.0),
+            o.num(b"Mgnt").unwrap_or(0.0),
+            o.num(b"Ylw ").unwrap_or(0.0),
+            o.num(b"Blck").unwrap_or(0.0),
+        ]),
+        b"LbCl" => super::color_modes::lab_to_linear_srgb(
+            o.num(b"Lmnc").unwrap_or(50.0) as f32,
+            o.num(b"A   ").unwrap_or(0.0) as f32,
+            o.num(b"B   ").unwrap_or(0.0) as f32,
+        )
+        .map(|v| v.clamp(0.0, 1.0)),
         _ => [srgb_to_linear_f(0.5); 3],
     }
 }
