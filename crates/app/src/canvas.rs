@@ -476,6 +476,7 @@ impl App {
                 if let Some(tex) = &self.canvas_tex {
                     painter.image(tex.id(), doc_rect, uv, Color32::WHITE);
                 }
+                self.paint_panels_on_canvas(&painter, rect, doc_rect);
                 if let Some(tex) = &self.overlay_tex {
                     painter.image(tex.id(), doc_rect, uv, Color32::WHITE);
                 } else if !self.sel_points.is_empty() {

@@ -25,6 +25,7 @@ impl App {
             || self.debug_brush(ctx, tok)
             || self.debug_smart_filters(ctx, tok)
             || self.debug_retouch(ctx, tok)
+            || self.debug_panels(ctx, tok)
     }
 
     /// Selections and what acts on them (`select:...`):
