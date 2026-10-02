@@ -280,6 +280,7 @@ impl App {
                 hardness: 0.7,
                 color: [0.0, 0.0, 0.0, 1.0],
                 spacing: 0.12,
+                jitter: 0.0,
                 mode: BrushMode::Paint,
             },
             brush_rgb: [0.10, 0.18, 0.55],

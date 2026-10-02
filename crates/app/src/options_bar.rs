@@ -143,6 +143,18 @@ impl App {
                             ui.label(RichText::new("Drag on the canvas").weak());
                         }
                         Tool::Brush | Tool::Eraser | Tool::Clone => {
+                            if self.tool == Tool::Brush {
+                                for (m, label) in [
+                                    (BrushMode::Paint, "Paint"),
+                                    (BrushMode::Dodge, "Dodge"),
+                                    (BrushMode::Burn, "Burn"),
+                                ] {
+                                    if ui.selectable_label(self.brush.mode == m, label).clicked() {
+                                        self.brush.mode = m;
+                                    }
+                                }
+                                ui.separator();
+                            }
                             if self.tool == Tool::Clone {
                                 let picking = self.clone_picking || self.clone_source.is_none();
                                 if ui
@@ -186,6 +198,14 @@ impl App {
                                 .changed()
                             {
                                 self.brush.color[3] = op / 100.0;
+                            }
+                            let mut sc = self.brush.jitter * 100.0;
+                            ui.label("Scatter");
+                            if ui
+                                .add(egui::Slider::new(&mut sc, 0.0..=100.0).suffix("%"))
+                                .changed()
+                            {
+                                self.brush.jitter = sc / 100.0;
                             }
                             if self.tool == Tool::Brush && self.editing_mask {
                                 if ui.small_button("White").clicked() {
