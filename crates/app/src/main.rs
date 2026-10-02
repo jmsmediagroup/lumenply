@@ -24,6 +24,7 @@ use lumenply_tiles::{Affine, Raster, Rect};
 
 mod adjust_ui;
 mod brand;
+mod brush_panel;
 mod camera_raw;
 mod canvas;
 mod color_picker;
@@ -367,6 +368,8 @@ struct App {
     crop: crop::CropTool,
     /// Rulers, guides, grid and snapping state (guides.rs).
     aids: guides::ViewAids,
+    /// Brush tips for the picker: built-in and imported (brush_panel.rs).
+    brushes: brush_panel::BrushLibrary,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -520,6 +523,7 @@ impl App {
             start_thumb: None,
             crop: crop::CropTool::default(),
             aids: guides::ViewAids::default(),
+            brushes: brush_panel::BrushLibrary::load(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.

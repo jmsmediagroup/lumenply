@@ -155,6 +155,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Snap on or off", "snap"),
     ("New fill layer: solid color", "fill-solid"),
     ("New fill layer: gradient", "fill-gradient"),
+    ("Import brushes (.abr)...", "import-brushes"),
 ];
 
 /// The id of the destructive filter dialog for a filter kind.
@@ -551,6 +552,7 @@ impl App {
             "open" => self.pick_open(),
             "demo" => self.open_demo(),
             "place" => self.pick_place(),
+            "import-brushes" => self.pick_import_brushes(),
             "save" => match self.path.clone() {
                 Some(p) => self.save_path(&p.to_string_lossy()),
                 None => self.pick_save(),
@@ -738,7 +740,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 103); // + liquify, layer ops, locks, align, select modify, fill, view aids, fill layers
+        assert_eq!(n, 104); // + liquify, layer ops, locks, align, select modify, fill, view aids, fill layers, brushes
     }
 
     #[test]

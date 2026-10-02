@@ -357,6 +357,7 @@ impl App {
         self.act(ui, "Open demo document", "demo");
         menu_separator(ui);
         self.act(ui, "Place image as layer...", "place");
+        self.act(ui, "Import brushes...", "import-brushes");
         menu_separator(ui);
         self.act(ui, "Save", "save");
         self.act(ui, "Save as...", "saveas");

@@ -117,6 +117,14 @@ pub(crate) struct BrushPreset {
     pub spacing: f32,
     pub jitter: f32,
     pub opacity: f32,
+    /// Tip id: "" is the round tip, `builtin:<name>` a generated one,
+    /// `abr-<hash>` an imported one (brush_panel.rs).
+    pub tip: String,
+    /// Tip angle in degrees, counter-clockwise.
+    pub angle: f32,
+    /// Tip roundness, 0.01–1.
+    pub roundness: f32,
+    pub dynamics: crate::brush_panel::PresetDynamics,
 }
 
 impl Default for BrushPreset {
@@ -128,6 +136,10 @@ impl Default for BrushPreset {
             spacing: 0.2,
             jitter: 0.0,
             opacity: 1.0,
+            tip: String::new(),
+            angle: 0.0,
+            roundness: 1.0,
+            dynamics: Default::default(),
         }
     }
 }
@@ -376,6 +388,7 @@ mod tests {
             spacing: 0.15,
             jitter: 0.4,
             opacity: 0.7,
+            ..BrushPreset::default()
         });
         let json = serde_json::to_string(&p).unwrap();
         let back: Prefs = serde_json::from_str(&json).unwrap();

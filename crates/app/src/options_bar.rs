@@ -291,6 +291,7 @@ impl App {
                             if self.tool == Tool::Heal || needs_source {
                                 ui.separator();
                             }
+                            self.brush_settings_button(ui);
                             let mut size = self.brush.radius * 2.0;
                             if bar_slider(ui, "Size", &mut size, 2.0..=400.0, " px", true) {
                                 self.brush.radius = size / 2.0;
@@ -310,7 +311,7 @@ impl App {
                                 self.prefs.save();
                             }
                             let mut sc = self.brush.jitter * 100.0;
-                            if bar_slider(ui, "Scatter", &mut sc, 0.0..=100.0, "%", false) {
+                            if bar_slider(ui, "Scatter", &mut sc, 0.0..=400.0, "%", false) {
                                 self.brush.jitter = sc / 100.0;
                             }
                             if self.tool == Tool::Brush && self.editing_mask {
@@ -486,26 +487,19 @@ impl App {
         };
         if ui
             .button(save)
-            .on_hover_text("Save a brush preset: the current size, hardness, opacity, spacing and scatter")
+            .on_hover_text(
+                "Save a brush preset: the current tip, size, hardness, opacity, spacing and dynamics",
+            )
             .clicked()
         {
-            let name = format!(
-                "{} {:.0}",
-                if self.brush.hardness >= 0.5 {
-                    "Hard"
-                } else {
-                    "Soft"
-                },
-                self.brush.radius * 2.0
-            );
-            self.prefs.brush_presets.push(session::BrushPreset {
-                name,
-                radius: self.brush.radius,
-                hardness: self.brush.hardness,
-                spacing: self.brush.spacing,
-                jitter: self.brush.jitter,
-                opacity: self.brush.color[3],
-            });
+            let kind = match &self.brush.tip {
+                Some(t) => t.name().to_string(),
+                None if self.brush.hardness >= 0.5 => "Hard".into(),
+                None => "Soft".into(),
+            };
+            let name = format!("{kind} {:.0}", self.brush.radius * 2.0);
+            let preset = self.current_preset(name);
+            self.prefs.brush_presets.push(preset);
             self.prefs.save();
             self.status = "Brush preset saved".into();
         }
@@ -533,11 +527,7 @@ impl App {
         a11y_name(&r.response, "Brush presets");
         if let Some(i) = apply {
             let p = self.prefs.brush_presets[i].clone();
-            self.brush.radius = p.radius.clamp(0.5, 500.0);
-            self.brush.hardness = p.hardness.clamp(0.0, 1.0);
-            self.brush.spacing = p.spacing.clamp(0.02, 2.0);
-            self.brush.jitter = p.jitter.clamp(0.0, 1.0);
-            self.brush.color[3] = p.opacity.clamp(0.0, 1.0);
+            self.apply_preset(&p);
             self.status = format!("Brush preset \"{}\" applied", p.name);
         }
         if let Some(i) = delete {
