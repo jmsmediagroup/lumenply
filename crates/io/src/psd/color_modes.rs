@@ -518,7 +518,10 @@ fn gray_curve(data: &[u8]) -> Option<Adjustment> {
         let input = d.u16().ok()? as f32 / 255.0;
         points.push([input, out]);
     }
-    Some(Adjustment::Curves { points })
+    Some(Adjustment::Curves {
+        points,
+        channels: Default::default(),
+    })
 }
 
 fn palette_index(v: f32) -> usize {

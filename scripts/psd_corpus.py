@@ -94,7 +94,7 @@ def one(path, out):
             d = np.abs(over_white(ours) - over_white(ref))
             rec["mean_diff"] = round(float(d.mean()) * 255, 2)
             rec["p99_diff"] = round(float(np.percentile(d.max(axis=2), 99)) * 255, 1)
-            ref.save(png[:-4] + ".ref.png")
+            ref.convert("RGBA").save(png[:-4] + ".ref.png")
     return rec
 
 
