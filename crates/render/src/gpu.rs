@@ -175,6 +175,13 @@ fn mix_main(@builtin(global_invocation_id) gid: vec3u) {
 "#;
 
 pub struct GpuCompositor {
+    /// Cached backdrop (everything below the edited top-level layer) for
+    /// `cache_rect`, mirroring [`crate::BelowCache`] on the GPU: it kills
+    /// the per-call re-upload of every lower layer while one layer is
+    /// being edited. Driven by [`GpuCompositor::note_change`].
+    cache_key: Option<nge_doc::LayerId>,
+    cache_rect: Rect,
+    backdrop: Option<wgpu::Texture>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
@@ -314,6 +321,9 @@ impl GpuCompositor {
         });
 
         Some(GpuCompositor {
+            cache_key: None,
+            cache_rect: Rect::default(),
+            backdrop: None,
             device,
             queue,
             layout,
@@ -345,14 +355,54 @@ impl GpuCompositor {
         ok(doc.layers())
     }
 
+    /// Tell the cache which layer an edit touched (`None` = anything).
+    /// Consecutive edits inside the same top-level layer keep the cached
+    /// backdrop; clip chains never split (same rule as the CPU cache).
+    pub fn note_change(&mut self, doc: &Document, changed: Option<nge_doc::LayerId>) {
+        let key = changed.and_then(|id| {
+            let layers = doc.layers();
+            let mut i = layers.iter().position(|l| contains_layer(l, id))?;
+            while i > 0 && layers[i].clip {
+                i -= 1;
+            }
+            Some(layers[i].id)
+        });
+        if key != self.cache_key || key.is_none() {
+            self.cache_key = key;
+            self.backdrop = None;
+        }
+    }
+
+    /// Whether a warm backdrop is held (for tests and stats).
+    pub fn backdrop_cached(&self) -> bool {
+        self.backdrop.is_some()
+    }
+
     /// Composite `rect` on the GPU. `None` when the document needs a CPU
     /// feature or the rect is too large; output matches
     /// [`crate::composite_rect`] within float tolerance.
-    pub fn composite_rect(&self, doc: &Document, rect: Rect) -> Option<TileStore> {
+    pub fn composite_rect(&mut self, doc: &Document, rect: Rect) -> Option<TileStore> {
         if rect.is_empty() || rect.w > MAX_SIDE || rect.h > MAX_SIDE || !Self::supports(doc) {
             return None;
         }
-        let acc = self.render_layers(doc.layers(), rect, None);
+        if rect != self.cache_rect {
+            self.cache_rect = rect;
+            self.backdrop = None;
+        }
+        let layers = doc.layers();
+        let split = self
+            .cache_key
+            .and_then(|k| layers.iter().position(|l| l.id == k))
+            .filter(|s| *s > 0);
+        let acc = match split {
+            Some(split) => {
+                if self.backdrop.is_none() {
+                    self.backdrop = Some(self.render_layers(&layers[..split], rect, None));
+                }
+                self.render_layers(&layers[split..], rect, self.backdrop.as_ref())
+            }
+            None => self.render_layers(layers, rect, None),
+        };
         let flat = self.read_back(&acc, rect.w, rect.h);
         let mut out = TileStore::from_raster(&flat, rect.x, rect.y);
         out.prune_blank();
@@ -643,6 +693,12 @@ impl GpuCompositor {
     }
 }
 
+fn contains_layer(l: &Layer, id: nge_doc::LayerId) -> bool {
+    l.id == id
+        || l.children()
+            .is_some_and(|c| c.iter().any(|ch| contains_layer(ch, id)))
+}
+
 /// Plain-old-data byte view (all inputs here are `f32`/`u32` slices).
 fn bytemuck_cast<T: Copy>(v: &[T]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
@@ -664,7 +720,11 @@ mod tests {
     }
 
     fn assert_matches_cpu(doc: &Document, what: &str) {
-        let Some(gpu) = gpu() else { return };
+        let Some(mut gpu) = gpu() else { return };
+        assert_gpu_matches(&mut gpu, doc, what);
+    }
+
+    fn assert_gpu_matches(gpu: &mut GpuCompositor, doc: &Document, what: &str) {
         let rect = doc.canvas();
         let g = gpu
             .composite_rect(doc, rect)
@@ -770,10 +830,64 @@ mod tests {
         assert_matches_cpu(&doc, "groups and adjustments");
     }
 
+    /// The cached backdrop reuses lower layers across edits and stays
+    /// exact; re-keying and invalidation keep it honest.
+    #[test]
+    fn gpu_backdrop_cache_stays_exact_across_edits() {
+        let Some(mut gpu) = gpu() else { return };
+        let mut doc = Document::new(200, 150);
+        let bg = doc.add_pixel_layer("bg");
+        let fill = Raster::filled(200, 150, Rgba::from_straight(0.3, 0.45, 0.6, 1.0));
+        *doc.layer_mut(bg).unwrap().pixels_mut().unwrap() = TileStore::from_raster(&fill, 0, 0);
+        doc.add_adjustment(Adjustment::Levels {
+            in_black: 0.05,
+            in_white: 0.95,
+            gamma: 1.2,
+            out_black: 0.0,
+            out_white: 1.0,
+        });
+        let top = doc.add_pixel_layer("top");
+        doc.layer_mut(top).unwrap().pixels_mut().unwrap().set_pixel(
+            100,
+            75,
+            Rgba::from_straight(0.9, 0.1, 0.2, 0.8),
+        );
+
+        gpu.note_change(&doc, Some(top));
+        assert_gpu_matches(&mut gpu, &doc, "cold with key");
+        assert!(gpu.backdrop_cached(), "backdrop cached after the cold pass");
+
+        // Edit the top layer repeatedly: the backdrop is reused.
+        doc.layer_mut(top).unwrap().pixels_mut().unwrap().set_pixel(
+            20,
+            20,
+            Rgba::from_straight(0.1, 0.8, 0.3, 1.0),
+        );
+        doc.layer_mut(top).unwrap().opacity = 0.65;
+        gpu.note_change(&doc, Some(top));
+        assert!(gpu.backdrop_cached(), "same-layer edit keeps the backdrop");
+        assert_gpu_matches(&mut gpu, &doc, "warm");
+
+        // Editing a lower layer re-keys and drops the stale backdrop.
+        doc.layer_mut(bg)
+            .unwrap()
+            .pixels_mut()
+            .unwrap()
+            .set_pixel(10, 10, Rgba::WHITE);
+        gpu.note_change(&doc, Some(bg));
+        assert!(!gpu.backdrop_cached(), "re-key invalidates");
+        assert_gpu_matches(&mut gpu, &doc, "re-keyed");
+
+        // A structural change clears everything.
+        gpu.note_change(&doc, None);
+        assert!(!gpu.backdrop_cached());
+        assert_gpu_matches(&mut gpu, &doc, "cleared");
+    }
+
     /// Unsupported documents hand back None instead of a wrong answer.
     #[test]
     fn gpu_declines_unsupported_documents() {
-        let Some(gpu) = gpu() else { return };
+        let Some(mut gpu) = gpu() else { return };
         let mut doc = Document::new(64, 64);
         doc.add_pixel_layer("bg");
         doc.add_filter(nge_doc::Filter::GaussianBlur { radius: 4.0 });

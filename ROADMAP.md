@@ -84,8 +84,10 @@ None of these could be tested in the container.
 - [x] GPU compositor with wgpu (render::GpuCompositor): blend modes, masks, groups
       (incl. pass-through) and LUT adjustments in WGSL, equality-tested against the
       CPU reference; falls back to CPU for live filters and per-pixel adjustments
-- [ ] GPU follow-up: persistent per-layer textures, dirty uploads, render into the
-      UI surface (eframe wgpu backend) — the speed is here, not in the milestone
+- [~] GPU follow-up: the backdrop below the edited layer is now cached on the
+      GPU (note_change-driven, clip-aware, equality-tested warm and cold);
+      still to come: dirty-rect uploads of the edited layer itself, and
+      rendering into the UI surface (eframe wgpu backend) to drop the readback
 - [x] Per-layer composite caching (render::BelowCache): consecutive edits to one
       layer reuse the composited backdrop below it; live filters above the edit
       fall back to the reference path
