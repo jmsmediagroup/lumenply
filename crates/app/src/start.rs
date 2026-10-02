@@ -542,13 +542,17 @@ impl App {
                 text_w,
             ));
             p.galley(egui::pos2(text_x, rect.top() + 6.0), name_galley, TEXT);
-            let dir_galley = p.layout_job(one_line(
-                &display_dir(path, home.as_deref()),
-                FontId::proportional(11.5),
+            // Folders lose their middle, not their end: the last folder
+            // is usually the one that identifies the file.
+            let dir_font = FontId::proportional(11.5);
+            let dir = fit_middle(p, &display_dir(path, home.as_deref()), &dir_font, text_w);
+            p.text(
+                egui::pos2(text_x, rect.top() + 26.0),
+                Align2::LEFT_TOP,
+                dir,
+                dir_font,
                 MUTED,
-                text_w,
-            ));
-            p.galley(egui::pos2(text_x, rect.top() + 26.0), dir_galley, MUTED);
+            );
 
             if missing {
                 let x_hot = ui.rect_contains_pointer(x_rect);
@@ -603,6 +607,40 @@ fn one_line(text: &str, font: FontId, color: Color32, max_w: f32) -> egui::text:
         egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat::simple(font, color));
     job.wrap = egui::text::TextWrapping::truncate_at_width(max_w);
     job
+}
+
+/// `text` cut to `keep` characters by removing its middle: a third of the
+/// budget for the head, the rest for the tail, joined by an ellipsis.
+pub(crate) fn elide_middle(text: &str, keep: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= keep {
+        return text.to_string();
+    }
+    let budget = keep.saturating_sub(1); // room for the ellipsis
+    let head = budget / 3;
+    let tail = budget - head;
+    let mut out: String = chars[..head].iter().collect();
+    out.push('…');
+    out.extend(&chars[chars.len() - tail..]);
+    out
+}
+
+/// The longest middle-elided form of `text` that fits `max_w`.
+fn fit_middle(p: &egui::Painter, text: &str, font: &FontId, max_w: f32) -> String {
+    let width = |s: &str| p.layout_no_wrap(s.to_string(), font.clone(), MUTED).size().x;
+    if width(text) <= max_w {
+        return text.to_string();
+    }
+    let (mut lo, mut hi) = (1, text.chars().count());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if width(&elide_middle(text, mid)) <= max_w {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    elide_middle(text, lo)
 }
 
 fn semibold() -> egui::FontFamily {
@@ -881,6 +919,31 @@ mod tests {
             "an opened image is not an undo step"
         );
         assert_eq!(app.tab_infos(), [("dot.png".to_string(), false)]);
+    }
+
+    #[test]
+    fn a_file_that_fails_to_open_leaves_its_error_on_the_welcome_screen() {
+        let missing = std::env::temp_dir()
+            .join("lumenply-no-such-dir")
+            .join("gone.lumen");
+        let app = App::launch(&args(&[&missing.to_string_lossy()]));
+        assert!(app.no_doc);
+        assert!(app.status.starts_with("Could not open"), "{}", app.status);
+        assert!(!app.recent.iter().any(|r| r.ends_with("gone.lumen")));
+    }
+
+    #[test]
+    fn long_folders_lose_their_middle() {
+        let abc = "abcdefghijklmnopqrstuvwxyz";
+        assert_eq!(elide_middle(abc, 26), abc);
+        assert_eq!(elide_middle(abc, 40), abc);
+        assert_eq!(elide_middle(abc, 10), "abc…uvwxyz");
+        assert_eq!(elide_middle(abc, 10).chars().count(), 10);
+        assert_eq!(elide_middle(abc, 1), "…");
+        assert_eq!(
+            elide_middle("~/Pictures/2026/Trips/New Zealand", 20),
+            "~/Pict…s/New Zealand"
+        );
     }
 
     #[test]
