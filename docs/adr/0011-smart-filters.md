@@ -107,9 +107,10 @@ filters turns a pixel layer into a smart object.
   Parameter slider drags on very large layers therefore update at a few
   frames per second. Rendering only the visible area, or a
   reduced-resolution preview during drags, would change no file format.
-- The filter mask does not yet follow move, transform, flip or crop
-  commands, as layer masks do. It stays in canvas space. It can be
-  painted only by recreating it from a selection.
+- The filter mask follows every command that moves the layer mask: move,
+  free transform, flip, perspective, warp, align, crop, image size and
+  rotation. It cannot be painted yet. It can only be recreated from a
+  selection.
 - Photoshop smart filters in PSD files (`SoLd` / `filterFX`) are not
   read or written. Smart-filter layers export as baked pixels.
 - Memory: a filtered layer keeps its own pixels plus the cache, about

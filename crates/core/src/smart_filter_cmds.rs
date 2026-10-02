@@ -560,4 +560,41 @@ mod tests {
         assert!(ed.execute(&AddSmartFilter::new(id, blur())).is_err());
         assert!(ed.execute(&AddSmartFilter::new(999, blur())).is_err());
     }
+
+    #[test]
+    fn the_filter_mask_moves_with_the_layer() {
+        let (mut ed, id) = step_doc();
+        ed.execute(&AddSmartFilter::new(id, blur())).unwrap();
+        // Mask the filters out of the top half, then move the layer down
+        // 8 px: the mask's edge follows from y = 32 to y = 40.
+        ed.execute(&SetSelection {
+            selection: Some(lumenply_doc::Selection::rect(Rect::new(0, 32, 128, 32))),
+        })
+        .unwrap();
+        ed.execute(&SetSmartFilterMask {
+            layer: id,
+            mask: None,
+            from_selection: true,
+        })
+        .unwrap();
+        ed.execute(&crate::commands::MoveLayer {
+            layer: id,
+            dx: 0,
+            dy: 8,
+        })
+        .unwrap();
+        let m = ed.doc().layer(id).unwrap().smart_filters.mask.as_ref().unwrap();
+        assert_eq!((m.value(10, 39), m.value(10, 40)), (0.0, 1.0));
+        let px = |y: i32| {
+            ed.doc()
+                .layer(id)
+                .unwrap()
+                .raster_store()
+                .unwrap()
+                .get_pixel(64, y)
+                .r
+        };
+        assert_eq!(px(36), 0.0, "still masked after the move");
+        assert!((px(50) - 0.4).abs() < 1e-4);
+    }
 }

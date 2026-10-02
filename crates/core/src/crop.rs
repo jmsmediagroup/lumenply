@@ -107,6 +107,10 @@ impl Command for CropCanvas {
             if let Some(m) = l.mask.as_mut() {
                 *m = lumenply_render::transform_mask(m, &t);
             }
+            // The smart-filter mask follows the layer too (ADR 0011).
+            if let Some(m) = l.smart_filters.mask.as_mut() {
+                *m = lumenply_render::transform_mask(m, &t);
+            }
         });
         let map_path = |p: &mut VectorPath| {
             for sp in &mut p.subpaths {
