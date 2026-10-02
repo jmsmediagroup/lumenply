@@ -83,6 +83,13 @@ pub fn set_sat(c: [f32; 3], s: f32) -> [f32; 3] {
     out
 }
 
+/// How close to 0 or 1 a value must be to count as the end of the
+/// range in the burn/dodge family's special cases (the steps there jump
+/// from 0 to 1). Far below 16-bit resolution (1.5e-5), but above the
+/// float noise a colour picks up from (un)premultiplying or a transfer
+/// curve, which would otherwise flip whole channels.
+const EDGE: f32 = 1e-6;
+
 /// The separable modes [`crate::blend_channel`] hands over (everything
 /// past the original ten). For the non-separable modes this is their
 /// value when both colours are grey (which is all a single channel can
@@ -100,9 +107,9 @@ pub(crate) fn extra_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
         // the backdrop), unlike plain Color Burn/Dodge where b = 1 / b = 0
         // win; measured on psd-tools' blend-modes/vivid-light.psd.
         BlendMode::VividLight => {
-            if cs <= 0.0 {
+            if cs <= EDGE {
                 0.0
-            } else if cs >= 1.0 {
+            } else if cs >= 1.0 - EDGE {
                 1.0
             } else if cs <= 0.5 {
                 color_burn(cb, 2.0 * cs)
@@ -122,12 +129,12 @@ pub(crate) fn extra_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
         // Color Burn/Dodge's own edges, so b = 0 under s = 1 stays 0 and
         // b = 1 over s = 0 stays 1, as Photoshop renders hard-mix.psd.
         BlendMode::HardMix => {
-            let on = if cs >= 1.0 {
-                cb > 0.0
-            } else if cs <= 0.0 {
-                cb >= 1.0
+            let on = if cs >= 1.0 - EDGE {
+                cb > EDGE
+            } else if cs <= EDGE {
+                cb >= 1.0 - EDGE
             } else {
-                cb + cs >= 1.0
+                cb + cs >= 1.0 - EDGE
             };
             if on {
                 1.0
@@ -159,9 +166,9 @@ pub(crate) fn extra_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
 
 #[inline]
 fn color_burn(cb: f32, cs: f32) -> f32 {
-    if cb >= 1.0 {
+    if cb >= 1.0 - EDGE {
         1.0
-    } else if cs <= 0.0 {
+    } else if cs <= EDGE {
         0.0
     } else {
         1.0 - ((1.0 - cb) / cs).min(1.0)
@@ -170,9 +177,9 @@ fn color_burn(cb: f32, cs: f32) -> f32 {
 
 #[inline]
 fn color_dodge(cb: f32, cs: f32) -> f32 {
-    if cb <= 0.0 {
+    if cb <= EDGE {
         0.0
-    } else if cs >= 1.0 {
+    } else if cs >= 1.0 - EDGE {
         1.0
     } else {
         (cb / (1.0 - cs)).min(1.0)
@@ -385,6 +392,27 @@ mod tests {
                 (0.0, 1.0, 0.0), // black backdrop stays black under white
                 (0.6, 0.0, 0.0),
                 (0.1, 1.0, 1.0),
+            ],
+        );
+    }
+
+    /// Values a hair off 0 or 1 (float noise from premultiplying or a
+    /// transfer curve: sRGB-encoding 1.0 gives 0.99999994) take the same
+    /// step as the exact ends, so whole channels don't flip.
+    #[test]
+    fn edge_cases_tolerate_float_noise() {
+        let one = 1.0f32 - 6e-8;
+        let zero = 6e-8f32;
+        check(BlendMode::ColorBurn, &[(one, 0.0, 1.0), (0.9, zero, 0.0)]);
+        check(BlendMode::ColorDodge, &[(zero, 0.5, 0.0), (0.1, one, 1.0)]);
+        check(BlendMode::VividLight, &[(1.0, zero, 0.0), (0.0, one, 1.0)]);
+        check(
+            BlendMode::HardMix,
+            &[
+                (one, 0.0, 1.0),
+                (zero, 1.0, 0.0),
+                (0.3, 0.7 - 6e-8, 1.0),
+                (0.3, 0.69, 0.0),
             ],
         );
     }

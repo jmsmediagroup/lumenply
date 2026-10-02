@@ -63,21 +63,24 @@ fn soft_light(cb: f32, cs: f32) -> f32 {
     return cb + (2.0 * cs - 1.0) * (d - cb);
 }
 
+// Mirrors blend::EDGE.
+const EDGE: f32 = 1e-6;
+
 fn color_burn(cb: f32, cs: f32) -> f32 {
-    if cb >= 1.0 {
+    if cb >= 1.0 - EDGE {
         return 1.0;
     }
-    if cs <= 0.0 {
+    if cs <= EDGE {
         return 0.0;
     }
     return 1.0 - min((1.0 - cb) / cs, 1.0);
 }
 
 fn color_dodge(cb: f32, cs: f32) -> f32 {
-    if cb <= 0.0 {
+    if cb <= EDGE {
         return 0.0;
     }
-    if cs >= 1.0 {
+    if cs >= 1.0 - EDGE {
         return 1.0;
     }
     return min(cb / (1.0 - cs), 1.0);
@@ -101,10 +104,10 @@ fn blend_channel(mode: u32, cb: f32, cs: f32) -> f32 {
         case 12u: { return max(cb + cs - 1.0, 0.0); }   // LinearBurn
         case 14u: { return color_dodge(cb, cs); }       // ColorDodge
         case 16u: {                                     // VividLight
-            if cs <= 0.0 {
+            if cs <= EDGE {
                 return 0.0;
             }
-            if cs >= 1.0 {
+            if cs >= 1.0 - EDGE {
                 return 1.0;
             }
             if cs <= 0.5 {
@@ -120,13 +123,13 @@ fn blend_channel(mode: u32, cb: f32, cs: f32) -> f32 {
             return max(cb, 2.0 * cs - 1.0);
         }
         case 19u: {                                     // HardMix
-            if cs >= 1.0 {
-                return select(0.0, 1.0, cb > 0.0);
+            if cs >= 1.0 - EDGE {
+                return select(0.0, 1.0, cb > EDGE);
             }
-            if cs <= 0.0 {
-                return select(0.0, 1.0, cb >= 1.0);
+            if cs <= EDGE {
+                return select(0.0, 1.0, cb >= 1.0 - EDGE);
             }
-            return select(0.0, 1.0, cb + cs >= 1.0);
+            return select(0.0, 1.0, cb + cs >= 1.0 - EDGE);
         }
         case 20u: { return cb + cs - 2.0 * cb * cs; }   // Exclusion
         case 21u: { return max(cb - cs, 0.0); }         // Subtract
