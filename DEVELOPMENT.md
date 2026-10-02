@@ -16,6 +16,7 @@ cargo run --release -p lumenply-app -- --demo  # desktop app with the demo docum
 cargo run --release -p lumenply-app -- file.psd  # open .lumen / .psd / .ora / images
 cargo run --release -p lumenply -- --help      # headless CLI (render, info, export-psd, bench)
 cargo test --workspace                       # must stay green
+scripts/bundle-macos.sh [outdir]             # Lumenply.app (unsigned) with icon + file types
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all                              # rustfmt.toml: max_width 110
 ```

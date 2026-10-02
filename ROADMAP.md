@@ -382,7 +382,12 @@ None of these could be tested in the container.
 - [ ] Scripting: Python via PyO3 on the command API; macro recording from history
 - [ ] Sandboxed WASM plugins (wasmtime)
 - [ ] Browser build (WebAssembly + WebGPU) — engine crates are UI-free by design
-- [ ] Packaging: Windows installer, signed macOS app, Flatpak; nightly builds from CI
+- [~] Packaging: `scripts/bundle-macos.sh` builds Lumenply.app (release
+      binary, .icns rendered by the app's own `--write-icon` on Apple's icon
+      grid, Info.plist with file types: .lumen/.nge owner, PSD/PSB, ORA,
+      images, camera RAW). Still open: code signing + notarisation, opening
+      files from Finder into a running app (eframe 0.29 drops the Apple
+      Event), Windows installer, Flatpak, nightly CI builds
 - [x] Project name: **Lumenply** (brand assets in img/; crates, CLI, titles,
       `.lumen` extension and `~/.lumenply` all renamed; legacy `.nge` loads)
 - [~] Full GPLv3 text now in `LICENSE`. A preliminary web search (Oct 2025)
