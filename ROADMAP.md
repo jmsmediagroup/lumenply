@@ -14,7 +14,14 @@ Legend: `[x]` done and tested · `[~]` done but unverified or partial · `[ ]` n
 ### Engine
 - [x] Sparse copy-on-write 256×256 tile store; cheap document clones for undo snapshots
 - [x] Compact 16-bit tile storage at rest, f32 while editing (halves memory, ADR 0004)
-- [x] Premultiplied linear-light compositing, 10 blend modes (W3C formulas), opacity
+- [x] Premultiplied linear-light compositing, all 27 Photoshop blend modes
+      (W3C/Photoshop formulas incl. Hue/Saturation/Color/Luminosity,
+      Darker/Lighter Color, canvas-anchored Dissolve; ADR 0015), opacity
+- [ ] Decision for the owner: optional gamma blending (Photoshop's "Blend RGB
+      colors using gamma"). Measured: with layer compositing on gamma values
+      the 29 blend-mode corpus files go from 18.1 to 3.0 mean difference
+      (single-mode files within 0.25-0.52 levels) and the whole corpus from
+      15.4 to 13.3; linear light stays physically right for blur/resample
 - [x] Layer tree: pixel, group (isolated), adjustment, live filter, text layers
 - [x] Layer masks (sparse, enable/disable), selections (coverage masks)
 - [x] Parallel tiled compositor (rayon), partial recomposite of a rectangle
@@ -80,11 +87,14 @@ None of these could be tested in the container.
 - [~] Open real-world PSDs: a corpus of 482 real Photoshop files (the psd-tools
       and ag-psd test fixtures) renders through the CLI and is compared with
       the composite Photoshop saved in each file (scripted; mean/p99 diff).
-      Baseline 2026-10-03: 412 open, 186 match within 1/255; the failures
-      are non-RGB modes and 32-bit, the differences mostly unimported layer
-      effects, fill opacity, missing blend modes and linear-vs-gamma blending
-      (see section 4). Still open: Affinity/Photopea files, a checked-in
-      regression subset
+      Baseline 2026-10-03 00:30: 412 open, 186 match within 1/255. After
+      tonight's reader work: 482/482 open, 220 within 1/255 (masks, path
+      operations, pass-through groups, per-channel Curves, Colorize, Photo
+      Filter colour spaces, colour modes, blend modes). Biggest remaining
+      gaps: layer effects and fill opacity (in progress), knockout, noise
+      gradients, artboards, modern Brightness/Contrast, linear-vs-gamma
+      blending. `scripts/psd_corpus.py` runs it. Still open:
+      Affinity/Photopea files, a checked-in regression subset
 
 ## 2. Performance
 
@@ -171,6 +181,15 @@ None of these could be tested in the container.
       intersect-group 113.9 → 0, layer_mask_data 46.6 → 26.0). Still
       open: PSB export, text layers as editable PSD text, live filters as
       smart filters
+- [x] PSD import of every colour mode and depth: Grayscale (embedded gray
+      profile via qcms), Duotone (as gray), 32-bit RGB/Gray (linear float,
+      opens in float mode), CMYK 8/16 (embedded profile via qcms, else a
+      fitted U.S. Web Coated SWOP model, 4.6/255 from the real profile),
+      Lab (D50 → sRGB, Bradford), Indexed, Bitmap, Multichannel; one warning
+      per conversion; layers of 16/32-bit Photoshop files read from
+      Lr16/Lr32 (they used to open flattened) (ADR 0014). Still open:
+      CMYK/Gray blending and per-channel adjustments in the source space,
+      16-bit CMYK at full precision, Duotone inks
 - [x] OpenRaster (.ora) import/export for GIMP/Krita interchange (layers, groups,
       opacity, visibility, the ten blend modes; masks baked in, adjustments and
       live filters skipped with warnings)
@@ -289,6 +308,10 @@ None of these could be tested in the container.
 - [x] Align (6 edges, to each other or to the selection or canvas) and
       distribute (3+ layers) as one undo step; Move tool bar and Layer ▸
       Align / Distribute
+- [x] Curves per channel (Master/Red/Green/Blue in the editor; PSD both
+      ways incl. channel-only curves and the 'Crv ' section) and
+      Hue/Saturation Colorize (PSD both ways); Photo Filter colours in
+      Lab/HSB/CMYK/Gray from PSD
 - [x] Adjustments: Gradient Map, Channel Mixer, Photo Filter, Selective Color
       (gamma-domain; GPU falls back to CPU for them); PSD grdm/mixr/phfl/selc
       round-trip, psd-tools-verified

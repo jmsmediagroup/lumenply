@@ -1362,7 +1362,7 @@ mod tests {
         for v in [0u16, 64, 255, 255] {
             u16s(&mut curv, v); // (out, in) pairs
         }
-        let Some(Adjustment::Curves { points }) = cm.adjustment(b"curv", &curv).unwrap() else {
+        let Some(Adjustment::Curves { points, .. }) = cm.adjustment(b"curv", &curv).unwrap() else {
             panic!("curves")
         };
         assert_eq!(points, vec![[64.0 / 255.0, 0.0], [1.0, 1.0]]);
