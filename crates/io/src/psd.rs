@@ -226,7 +226,10 @@ fn decode_channel(rd: &mut Rd, w: usize, h: usize, depth_bytes: usize) -> Result
             for _ in 0..h {
                 counts.push(rd.u16()? as usize);
             }
-            let mut out = Vec::with_capacity(plane_len);
+            // Don't let a lying header size the allocation: RLE cannot
+            // expand the remaining input by more than 128×.
+            let remaining = rd.buf.len().saturating_sub(rd.pos);
+            let mut out = Vec::with_capacity(plane_len.min(remaining.saturating_mul(128)));
             for c in counts {
                 let row = rd.bytes(c)?;
                 out.extend(unpackbits(row, w * depth_bytes)?);
@@ -906,6 +909,23 @@ struct RawLayer {
     adjustment: Option<Adjustment>,
 }
 
+/// Largest dimension the PSD v1 format allows for the canvas, a layer or a
+/// mask. Anything bigger is corrupt.
+const MAX_DIM: u32 = 30_000;
+
+/// Validate a bounds rectangle read from the file.
+fn checked_rect(left: i32, top: i32, right: i32, bottom: i32, what: &str) -> Result<Rect, PsdError> {
+    let w = right.saturating_sub(left).max(0) as u32;
+    let h = bottom.saturating_sub(top).max(0) as u32;
+    let m = MAX_DIM as i32;
+    if w > MAX_DIM || h > MAX_DIM || !(-m..=m).contains(&left) || !(-m..=m).contains(&top) {
+        return Err(PsdError::Corrupt(format!(
+            "{what} bounds ({left}, {top})–({right}, {bottom}) are outside the PSD limits"
+        )));
+    }
+    Ok(Rect::new(left, top, w, h))
+}
+
 /// Read a PSD into a document.
 pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     let buf = std::fs::read(path)?;
@@ -920,11 +940,21 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
         )));
     }
     rd.skip(6)?;
-    let _channels = rd.u16()?;
+    let channels = rd.u16()?;
     let height = rd.u32()?;
     let width = rd.u32()?;
     let depth = rd.u16()?;
     let mode = rd.u16()?;
+    // The PSD v1 format caps dimensions at 30,000 and channels at 56; values
+    // beyond that are corrupt and would otherwise size huge allocations.
+    if width == 0 || height == 0 || width > MAX_DIM || height > MAX_DIM {
+        return Err(PsdError::Corrupt(format!(
+            "canvas {width}×{height} is outside the PSD limits"
+        )));
+    }
+    if !(3..=56).contains(&channels) {
+        return Err(PsdError::Corrupt(format!("{channels} channels in an RGB file")));
+    }
     if depth != 8 {
         return Err(PsdError::Unsupported(format!(
             "{depth}-bit depth; only 8-bit is supported yet"
@@ -957,6 +987,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let bottom = rd.i32()?;
                 let right = rd.i32()?;
                 let nch = rd.u16()? as usize;
+                if nch > 56 {
+                    return Err(PsdError::Corrupt(format!("layer with {nch} channels")));
+                }
                 let mut chans = Vec::with_capacity(nch);
                 for _ in 0..nch {
                     let id = rd.i16()?;
@@ -984,7 +1017,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     let default = rd.u8()?;
                     let mflags = rd.u8()?;
                     rd.skip(mask_len - 18)?;
-                    let r = Rect::new(ml, mt, (mr - ml).max(0) as u32, (mb - mt).max(0) as u32);
+                    let r = checked_rect(ml, mt, mr, mb, "mask")?;
                     mask = Some((r, Vec::new(), default, mflags & 0x02 == 0));
                 } else {
                     rd.skip(mask_len)?;
@@ -1014,7 +1047,8 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     match &k[..] {
                         b"luni" => {
                             let mut d = Rd::new(data);
-                            let n = d.u32()? as usize;
+                            // The count cannot exceed what the block holds.
+                            let n = (d.u32()? as usize).min(data.len().saturating_sub(4) / 2);
                             let mut units = Vec::with_capacity(n);
                             for _ in 0..n {
                                 units.push(d.u16()?);
@@ -1041,12 +1075,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 heads.push((
                     RawLayer {
                         name,
-                        bounds: Rect::new(
-                            left,
-                            top,
-                            (right - left).max(0) as u32,
-                            (bottom - top).max(0) as u32,
-                        ),
+                        bounds: checked_rect(left, top, right, bottom, "layer")?,
                         channels: Vec::new(),
                         blend,
                         blend_known: known,
@@ -1063,7 +1092,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
             // Channel image data follows, in the same order.
             for (mut layer, chans) in heads {
                 for (id, len) in chans {
-                    let end = rd.pos + len;
+                    // Bounds-checked: a declared length past the end of the
+                    // file is an error, not a slice panic.
+                    let data = rd.bytes(len)?;
                     let (w, h) = if id == -2 {
                         layer
                             .mask
@@ -1073,7 +1104,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         (layer.bounds.w as usize, layer.bounds.h as usize)
                     };
                     if w > 0 && h > 0 && len >= 2 {
-                        let mut sub = Rd::new(&buf[rd.pos..end]);
+                        let mut sub = Rd::new(data);
                         match decode_channel(&mut sub, w, h, 1) {
                             Ok(plane) => {
                                 if id == -2 {
@@ -1087,7 +1118,6 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                             Err(e) => warnings.push(format!("layer '{}' channel {id}: {e}", layer.name)),
                         }
                     }
-                    rd.pos = end;
                 }
                 raw.push(layer);
             }
@@ -1100,7 +1130,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     let composite = if raw.is_empty() && rd.pos + 2 <= buf.len() {
         let (w, h) = (width as usize, height as usize);
         let compression = rd.u16()?;
-        let nch = _channels as usize;
+        let nch = channels as usize; // header-validated: 3..=56
         let planes: Vec<Vec<u8>> = match compression {
             0 => (0..nch)
                 .map(|_| rd.bytes(w * h).map(|b| b.to_vec()))
@@ -1112,7 +1142,8 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 }
                 let mut planes = Vec::new();
                 for c in 0..nch {
-                    let mut plane = Vec::with_capacity(w * h);
+                    let remaining = buf.len().saturating_sub(rd.pos);
+                    let mut plane = Vec::with_capacity((w * h).min(remaining.saturating_mul(128)));
                     for y in 0..h {
                         let row = rd.bytes(counts[c * h + y])?;
                         plane.extend(unpackbits(row, w)?);
@@ -1159,7 +1190,14 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
         match rl.section {
             3 => stack.push(Vec::new()),
             1 | 2 => {
-                let children = stack.pop().unwrap_or_default();
+                // Pop only a frame a close divider opened — a stray open
+                // divider must not consume the root of the tree.
+                let children = if stack.len() > 1 {
+                    stack.pop().unwrap_or_default()
+                } else {
+                    warnings.push(format!("group '{}' had no matching start marker", rl.name));
+                    Vec::new()
+                };
                 let id = doc.alloc_id();
                 let mut g = Layer::group(id, rl.name.clone());
                 *g.children_mut().expect("group") = children;
@@ -1282,6 +1320,102 @@ mod tests {
         let dir = std::env::temp_dir().join("nge-psd-test");
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(name)
+    }
+
+    /// Minimal PSD bytes: a header plus a layer-info section holding
+    /// `records` (already encoded) followed by `channel_data`.
+    fn craft_psd(channels: u16, w: u32, h: u32, records: &[u8], channel_data: &[u8]) -> Vec<u8> {
+        let mut f = Vec::new();
+        f.extend_from_slice(b"8BPS");
+        put_u16(&mut f, 1); // version
+        f.extend_from_slice(&[0; 6]);
+        put_u16(&mut f, channels);
+        put_u32(&mut f, h);
+        put_u32(&mut f, w);
+        put_u16(&mut f, 8); // depth
+        put_u16(&mut f, 3); // RGB
+        put_u32(&mut f, 0); // colour mode data
+        put_u32(&mut f, 0); // resources
+        if records.is_empty() {
+            put_u32(&mut f, 0); // no layer+mask section
+        } else {
+            let li_len = 2 + records.len() + channel_data.len();
+            put_u32(&mut f, 4 + pad_even(li_len) as u32); // layer+mask section
+            put_u32(&mut f, li_len as u32); // layer info
+            put_u16(&mut f, 1); // one layer record
+            f.extend_from_slice(records);
+            f.extend_from_slice(channel_data);
+            if li_len % 2 == 1 {
+                f.push(0);
+            }
+        }
+        f
+    }
+
+    /// One layer record with the given channel list and an optional
+    /// `lsct` section divider.
+    fn craft_record(chans: &[(i16, u32)], section: Option<u32>, bounds: (i32, i32, i32, i32)) -> Vec<u8> {
+        let (top, left, bottom, right) = bounds;
+        let mut r = Vec::new();
+        put_i32(&mut r, top);
+        put_i32(&mut r, left);
+        put_i32(&mut r, bottom);
+        put_i32(&mut r, right);
+        put_u16(&mut r, chans.len() as u16);
+        for (id, len) in chans {
+            put_u16(&mut r, *id as u16);
+            put_u32(&mut r, *len);
+        }
+        r.extend_from_slice(b"8BIM");
+        r.extend_from_slice(b"norm");
+        r.extend_from_slice(&[255, 0, 0, 0]); // opacity, clipping, flags, filler
+        let mut extra = Vec::new();
+        put_u32(&mut extra, 0); // no mask
+        put_u32(&mut extra, 0); // no blending ranges
+        extra.extend_from_slice(&[0, 0, 0, 0]); // empty pascal name + pad
+        if let Some(s) = section {
+            extra.extend_from_slice(b"8BIM");
+            extra.extend_from_slice(b"lsct");
+            put_u32(&mut extra, 4);
+            put_u32(&mut extra, s);
+        }
+        put_u32(&mut r, extra.len() as u32);
+        r.extend_from_slice(&extra);
+        r
+    }
+
+    fn load_bytes(name: &str, bytes: &[u8]) -> Result<Report<Document>, PsdError> {
+        let path = temp(name);
+        std::fs::write(&path, bytes).unwrap();
+        load(&path)
+    }
+
+    #[test]
+    fn malformed_psds_error_instead_of_panicking() {
+        // A layer channel whose declared length runs past the end of the file.
+        let rec = craft_record(&[(0, 50_000)], None, (0, 0, 10, 10));
+        let psd = craft_psd(3, 10, 10, &rec, &[0u8; 8]);
+        assert!(load_bytes("truncated-channel.psd", &psd).is_err());
+
+        // A lone "group open" divider with no earlier close: must not pop the
+        // root of the tree stack.
+        let rec = craft_record(&[], Some(1), (0, 0, 0, 0));
+        let psd = craft_psd(3, 10, 10, &rec, &[]);
+        let report = load_bytes("lone-divider.psd", &psd).unwrap();
+        assert_eq!(report.value.layer_count(), 1, "one empty group");
+
+        // A composite that claims only 2 channels cannot be RGB.
+        let mut psd = craft_psd(2, 4, 4, &[], &[]);
+        put_u16(&mut psd, 0); // raw compression
+        psd.extend_from_slice(&[128u8; 32]); // 2 planes of 16 bytes
+        assert!(load_bytes("two-channel.psd", &psd).is_err());
+
+        // Absurd canvas and layer dimensions are rejected, not allocated.
+        let psd = craft_psd(3, 0xFFFF_FFFF, 10, &[], &[]);
+        assert!(load_bytes("huge-canvas.psd", &psd).is_err());
+        let rec = craft_record(&[(0, 4)], None, (0, 0, 0x7FFF_FFFF, 0x7FFF_FFFF));
+        let psd = craft_psd(3, 10, 10, &rec, &[0u8; 4]);
+        assert!(load_bytes("huge-layer.psd", &psd).is_err());
     }
 
     #[test]
