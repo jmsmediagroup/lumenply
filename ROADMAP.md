@@ -102,8 +102,9 @@ None of these could be tested in the container.
 ## 4. Colour and formats
 
 - [ ] ICC colour management (lcms2): embedded profiles on import/export, display profile
-- [ ] 16-bit PNG/TIFF import/export; float/HDR document mode (skip compaction; ADR 0004)
-- [ ] TIFF, WebP, AVIF/HEIF, OpenEXR; camera RAW via rawler or LibRaw
+- [x] 16-bit PNG/TIFF import/export (full precision in, 16-bit sRGB out)
+- [ ] Float/HDR document mode (skip compaction; ADR 0004)
+- [ ] WebP, AVIF/HEIF, OpenEXR; camera RAW via rawler or LibRaw
 - [ ] PSD: 16-bit, PSB (large documents), Black & White/Exposure/Vibrance descriptors,
       text layers as editable PSD text, live filters as smart filters (or rasterised with a note)
 - [x] OpenRaster (.ora) import/export for GIMP/Krita interchange (layers, groups,

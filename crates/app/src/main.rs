@@ -59,7 +59,9 @@ fn main() -> Result<(), eframe::Error> {
 
 fn is_image_path(p: &str) -> bool {
     let lower = p.to_ascii_lowercase();
-    [".png", ".jpg", ".jpeg"].iter().any(|e| lower.ends_with(e))
+    [".png", ".jpg", ".jpeg", ".tif", ".tiff"]
+        .iter()
+        .any(|e| lower.ends_with(e))
 }
 
 fn is_ora_path(p: &str) -> bool {

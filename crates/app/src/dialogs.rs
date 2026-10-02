@@ -24,7 +24,10 @@ impl App {
     pub(crate) fn pick_open(&mut self) {
         if let Some(p) = self
             .file_dialog()
-            .add_filter("Projects & images", &["nge", "psd", "ora", "png", "jpg", "jpeg"])
+            .add_filter(
+                "Projects & images",
+                &["nge", "psd", "ora", "png", "jpg", "jpeg", "tif", "tiff"],
+            )
             .pick_file()
         {
             self.open_path(&p.to_string_lossy());
@@ -34,7 +37,7 @@ impl App {
     pub(crate) fn pick_open_image(&mut self) {
         if let Some(p) = self
             .file_dialog()
-            .add_filter("Images", &["png", "jpg", "jpeg"])
+            .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff"])
             .pick_file()
         {
             self.open_image(&p.to_string_lossy());
@@ -87,6 +90,34 @@ impl App {
     pub(crate) fn pick_export_psd(&mut self) {
         if let Some(p) = self.pick_save_path("Photoshop PSD", "psd") {
             self.export_psd(&p);
+        }
+    }
+
+    pub(crate) fn pick_export_16bit(&mut self) {
+        let picked = self
+            .file_dialog()
+            .add_filter("16-bit PNG", &["png"])
+            .add_filter("16-bit TIFF", &["tif", "tiff"])
+            .set_file_name(format!(
+                "{}.png",
+                self.path
+                    .as_ref()
+                    .and_then(|p| p.file_stem())
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "untitled".into())
+            ))
+            .save_file();
+        if let Some(p) = picked {
+            let p = if p.extension().is_some() {
+                p
+            } else {
+                p.with_extension("png")
+            };
+            let flat = nge_render::composite_raster(self.editor.doc());
+            match nge_io::save_16bit(&p, &flat) {
+                Ok(()) => self.status = format!("Exported {}", p.display()),
+                Err(e) => self.status = format!("Could not export: {e}"),
+            }
         }
     }
 

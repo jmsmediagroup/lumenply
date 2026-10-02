@@ -47,7 +47,20 @@ pub fn linear_to_srgb(v: f32) -> u8 {
 
 /// Load a PNG or JPEG as a linear, premultiplied raster.
 pub fn load(path: impl AsRef<Path>) -> Result<Raster, IoError> {
-    let img = image::open(path)?.to_rgba8();
+    let img = image::open(path)?;
+    // Keep the full precision of 16-bit sources (PNG, TIFF) instead of
+    // truncating them to 8 bits on the way in.
+    if img.color().bits_per_pixel() > 32 {
+        let img = img.to_rgba16();
+        let (w, h) = img.dimensions();
+        let mut out = Raster::new(w, h);
+        for (i, px) in img.pixels().enumerate() {
+            let c = |v: u16| srgb_to_linear_f(v as f32 / 65535.0);
+            out.pixels[i] = Rgba::from_straight(c(px[0]), c(px[1]), c(px[2]), px[3] as f32 / 65535.0);
+        }
+        return Ok(out);
+    }
+    let img = img.to_rgba8();
     let (w, h) = img.dimensions();
     let mut lut = [0f32; 256];
     for (i, v) in lut.iter_mut().enumerate() {
@@ -59,6 +72,47 @@ pub fn load(path: impl AsRef<Path>) -> Result<Raster, IoError> {
         out.pixels[i] = Rgba::from_straight(lut[px[0] as usize], lut[px[1] as usize], lut[px[2] as usize], a);
     }
     Ok(out)
+}
+
+/// The sRGB transfer function on a normalised value (no 8-bit rounding).
+pub fn srgb_to_linear_f(v: f32) -> f32 {
+    if v <= 0.04045 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Inverse of [`srgb_to_linear_f`].
+pub fn linear_to_srgb_f(v: f32) -> f32 {
+    let v = v.clamp(0.0, 1.0);
+    if v <= 0.003_130_8 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// Save a raster as a 16-bit sRGB PNG or TIFF (by extension) with straight
+/// alpha, keeping precision an 8-bit export would round away.
+pub fn save_16bit(path: impl AsRef<Path>, raster: &Raster) -> Result<(), IoError> {
+    let path = path.as_ref();
+    let mut buf: Vec<u16> = Vec::with_capacity(raster.pixels.len() * 4);
+    for p in &raster.pixels {
+        let [r, g, b, a] = p.to_straight();
+        let q = |v: f32| (linear_to_srgb_f(v) * 65535.0 + 0.5) as u16;
+        buf.extend_from_slice(&[q(r), q(g), q(b), (a.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16]);
+    }
+    let img = image::ImageBuffer::<image::Rgba<u16>, _>::from_raw(raster.width, raster.height, buf)
+        .expect("buffer size matches dimensions");
+    let format = match path.extension().and_then(|e| e.to_str()) {
+        Some(e) if e.eq_ignore_ascii_case("tif") || e.eq_ignore_ascii_case("tiff") => {
+            image::ImageFormat::Tiff
+        }
+        _ => image::ImageFormat::Png,
+    };
+    image::DynamicImage::ImageRgba16(img).save_with_format(path, format)?;
+    Ok(())
 }
 
 /// Save a raster as an 8-bit sRGB PNG with straight alpha.
@@ -124,6 +178,33 @@ mod tests {
             transparent_side[0] > 0.9,
             "transparent pixels land on white: {transparent_side:?}"
         );
+    }
+
+    #[test]
+    fn sixteen_bit_round_trip_keeps_sub_8bit_precision() {
+        let dir = std::env::temp_dir().join("nge-io16-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Two values that quantise to the same 8-bit byte but different
+        // 16-bit values.
+        let a = 0.5000f32;
+        let b = 0.5020f32;
+        let mut r = Raster::new(2, 1);
+        r.set(0, 0, Rgba::from_straight(a, a, a, 1.0));
+        r.set(1, 0, Rgba::from_straight(b, b, b, 0.7));
+        for name in ["deep.png", "deep.tif"] {
+            let path = dir.join(name);
+            save_16bit(&path, &r).unwrap();
+            let back = load(&path).unwrap();
+            let pa = back.get(0, 0).to_straight();
+            let pb = back.get(1, 0).to_straight();
+            assert!((pa[0] - a).abs() < 1e-4, "{name}: {} vs {a}", pa[0]);
+            assert!((pb[0] - b).abs() < 1e-4, "{name}: {} vs {b}", pb[0]);
+            assert!(
+                (pb[0] - pa[0]).abs() > 1e-4,
+                "{name}: 16-bit values stayed distinct"
+            );
+            assert!((pb[3] - 0.7).abs() < 1e-4, "{name}: alpha precision");
+        }
     }
 
     #[test]

@@ -28,7 +28,7 @@ nge-core = { path = "crates/core" }
 rayon = "1.10"
 thiserror = "1.0"
 anyhow = "1.0"
-image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.24", default-features = false, features = ["png", "jpeg", "tiff"] }
 clap = { version = "4.4", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
