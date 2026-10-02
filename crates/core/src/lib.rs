@@ -45,6 +45,39 @@ struct Snapshot {
     /// Canvas area the step changed (see [`Command::affected`]); undoing or
     /// redoing the step dirties exactly this area. `None` means "anything".
     affected: Option<nge_tiles::Rect>,
+    /// Estimated bytes this snapshot keeps alive: its tiles that the state
+    /// replacing it no longer shares.
+    bytes: usize,
+}
+
+/// Estimated bytes of tile data in `old` that `new` does not share (compared
+/// per layer id and tile coordinate by allocation identity). This is what
+/// dropping `old` from the history would free, modulo sharing with even
+/// older snapshots.
+fn delta_bytes(old: &Document, new: &Document) -> usize {
+    fn store_delta(old: &nge_tiles::TileStore, new: Option<&nge_tiles::TileStore>) -> usize {
+        old.coords()
+            .filter_map(|c| {
+                let ot = old.tile(c)?;
+                let shared = new.and_then(|n| n.tile(c)).is_some_and(|nt| std::ptr::eq(ot, nt));
+                (!shared).then(|| ot.byte_size())
+            })
+            .sum()
+    }
+    let mut total = 0;
+    old.for_each_layer(|l| {
+        let counterpart = new.layer(l.id);
+        if let Some(s) = l.raster_store() {
+            total += store_delta(s, counterpart.and_then(|n| n.raster_store()));
+        }
+        if let Some(m) = &l.mask {
+            total += store_delta(
+                &m.tiles,
+                counterpart.and_then(|n| n.mask.as_ref()).map(|nm| &nm.tiles),
+            );
+        }
+    });
+    total
 }
 
 fn union_opt(a: Option<nge_tiles::Rect>, b: Option<nge_tiles::Rect>) -> Option<nge_tiles::Rect> {
@@ -94,6 +127,9 @@ pub struct Editor {
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     pub history_limit: usize,
+    /// Rough cap on the bytes the undo stack may keep alive; the oldest
+    /// steps are dropped first. At least one step is always kept.
+    pub history_memory_limit: usize,
     /// Key of the open coalescing run, if any (see [`Editor::execute_coalescing`]).
     coalesce_key: Option<String>,
     /// Area changed by the last successful edit/undo/redo; `None` = whole canvas.
@@ -107,6 +143,7 @@ impl Editor {
             undo: Vec::new(),
             redo: Vec::new(),
             history_limit: 100,
+            history_memory_limit: 1 << 30, // 1 GiB
             coalesce_key: None,
             last_affected: None,
         }
@@ -115,6 +152,11 @@ impl Editor {
     /// Canvas area touched by the most recent change (see [`Command::affected`]).
     pub fn last_affected(&self) -> Option<nge_tiles::Rect> {
         self.last_affected
+    }
+
+    /// Estimated bytes the undo stack keeps alive beyond the live document.
+    pub fn history_bytes(&self) -> usize {
+        self.undo.iter().map(|s| s.bytes).sum()
     }
 
     pub fn doc(&self) -> &Document {
@@ -139,9 +181,12 @@ impl Editor {
             compact_storage(&mut next);
             self.last_affected = cmd.affected(&self.doc);
             // The whole drag undoes in one go, so its undo step covers
-            // every tick so far.
-            if let Some(s) = self.undo.last_mut() {
+            // every tick so far, and its memory estimate follows the
+            // moving document.
+            let bytes = self.undo.last().map(|s| delta_bytes(&s.doc, &next));
+            if let (Some(s), Some(b)) = (self.undo.last_mut(), bytes) {
                 s.affected = union_opt(s.affected, self.last_affected);
+                s.bytes = b;
             }
             self.doc = next;
             Ok(())
@@ -163,12 +208,17 @@ impl Editor {
         compact_storage(&mut next);
         self.last_affected = cmd.affected(&self.doc);
         let prev = std::mem::replace(&mut self.doc, next);
+        let bytes = delta_bytes(&prev, &self.doc);
         self.undo.push(Snapshot {
             label: cmd.label(),
             doc: prev,
             affected: self.last_affected,
+            bytes,
         });
-        if self.undo.len() > self.history_limit {
+        while self.undo.len() > self.history_limit {
+            self.undo.remove(0);
+        }
+        while self.undo.len() > 1 && self.history_bytes() > self.history_memory_limit {
             self.undo.remove(0);
         }
         self.redo.clear();
@@ -185,6 +235,7 @@ impl Editor {
             label: snap.label.clone(),
             doc: current,
             affected: snap.affected,
+            bytes: snap.bytes,
         });
         Some(snap.label)
     }
@@ -199,6 +250,7 @@ impl Editor {
             label: snap.label.clone(),
             doc: current,
             affected: snap.affected,
+            bytes: snap.bytes,
         });
         Some(snap.label)
     }
@@ -471,5 +523,62 @@ mod tests {
             ed.execute(&AddPixelLayer::new(format!("L{i}"))).unwrap();
         }
         assert_eq!(ed.history().len(), 3);
+
+        // Lowering the limit takes full effect on the next edit, not one
+        // entry at a time.
+        ed.history_limit = 10;
+        for i in 5..12 {
+            ed.execute(&AddPixelLayer::new(format!("L{i}"))).unwrap();
+        }
+        assert_eq!(ed.history().len(), 10);
+        ed.history_limit = 2;
+        ed.execute(&AddPixelLayer::new("last")).unwrap();
+        assert_eq!(ed.history().len(), 2);
+    }
+
+    #[test]
+    fn history_memory_limit_drops_oldest_steps() {
+        // Each fill rewrites the full 600×600 canvas: 9 compact tiles, about
+        // 4.5 MB per undo step.
+        let mut ed = Editor::new(Document::new(600, 600));
+        ed.execute(&AddPixelLayer::new("L")).unwrap();
+        let id = ed.doc().layers()[0].id;
+        let step = 9 * nge_tiles::TILE_PIXELS * 8;
+        ed.history_memory_limit = 3 * step + step / 2; // room for ~3 fills
+        for i in 0..6 {
+            ed.execute(&Fill {
+                layer: id,
+                color: [i as f32 / 10.0, 0.5, 0.5, 1.0],
+            })
+            .unwrap();
+        }
+        assert!(
+            ed.history_bytes() <= ed.history_memory_limit,
+            "{} > {}",
+            ed.history_bytes(),
+            ed.history_memory_limit
+        );
+        let len = ed.history().len();
+        assert!((2..=4).contains(&len), "kept {len} steps");
+        // The newest steps survive; undo still works.
+        assert_eq!(ed.undo().as_deref(), Some("Fill"));
+
+        // A tiny limit still keeps one undo step, even when it is heavy.
+        // (The first two steps cost nothing: their snapshots hold empty
+        // states. Only the second fill makes the first fill's tiles unique
+        // to a snapshot.)
+        let mut ed = Editor::new(Document::new(600, 600));
+        ed.history_memory_limit = 1;
+        ed.execute(&AddPixelLayer::new("L")).unwrap();
+        let id = ed.doc().layers()[0].id;
+        for c in [0.3, 0.7] {
+            ed.execute(&Fill {
+                layer: id,
+                color: [c, 0.2, 0.3, 1.0],
+            })
+            .unwrap();
+        }
+        assert_eq!(ed.history().len(), 1);
+        assert!(ed.can_undo());
     }
 }
