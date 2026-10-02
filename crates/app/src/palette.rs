@@ -116,6 +116,27 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Show or hide the history strip", "toggle-history"),
     ("About Lumenply", "about"),
     ("Liquify...", "liquify"),
+    ("Duplicate layer", "duplicate-layer"),
+    ("Merge down (group, clipping mask)", "merge-down"),
+    ("Merge visible", "merge-visible"),
+    ("Flatten image", "flatten"),
+    ("Stamp visible to a new layer", "stamp-visible"),
+    ("Lock transparent pixels (toggle)", "lock-transparency"),
+    ("Lock image pixels (toggle)", "lock-pixels"),
+    ("Lock position (toggle)", "lock-position"),
+    ("Lock all (toggle)", "lock-all"),
+    ("Align left edges", "align-left"),
+    ("Align horizontal centres", "align-hcenter"),
+    ("Align right edges", "align-right"),
+    ("Align top edges", "align-top"),
+    ("Align vertical centres", "align-vcenter"),
+    ("Align bottom edges", "align-bottom"),
+    ("Distribute left edges", "distribute-left"),
+    ("Distribute horizontal centres", "distribute-hcenter"),
+    ("Distribute right edges", "distribute-right"),
+    ("Distribute top edges", "distribute-top"),
+    ("Distribute vertical centres", "distribute-vcenter"),
+    ("Distribute bottom edges", "distribute-bottom"),
 ];
 
 /// The id of the destructive filter dialog for a filter kind.
@@ -387,6 +408,9 @@ impl App {
         {
             return Some("Open or create a document first");
         }
+        if let Some(block) = self.layer_action_block(id) {
+            return block;
+        }
         match id {
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
             "redo" if !self.editor.can_redo() => Some("Nothing to redo"),
@@ -444,6 +468,9 @@ impl App {
         if let Some((m, k)) = session::resolve_chord(&self.prefs, id) {
             return shortcut_text(ctx, m, k);
         }
+        if let Some(keys) = self.layer_action_keys(ctx, id) {
+            return keys;
+        }
         let (m, k) = match id {
             "fill" => (M::SHIFT, Key::F5),
             "clear" => return "Delete".into(),
@@ -477,6 +504,9 @@ impl App {
     pub(crate) fn run_menu_action(&mut self, id: &str) {
         if let Some(why) = self.action_block(id) {
             self.status = why.into();
+            return;
+        }
+        if self.run_layer_action(id) {
             return;
         }
         match id {
@@ -647,7 +677,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 65); // + zoom in, zoom out, history strip, liquify
+        assert_eq!(n, 86); // + liquify, layer ops, locks, six aligns, six distributes
     }
 
     #[test]

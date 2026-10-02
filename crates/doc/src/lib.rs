@@ -77,9 +77,11 @@ impl FromStr for BlendMode {
 }
 
 pub mod adjust;
+pub mod locks;
 pub mod selection;
 
 pub use adjust::{Adjustment, CompiledAdjustment, LevelsChannel};
+pub use locks::LayerLocks;
 pub use selection::{CombineOp, Selection};
 
 /// A pixel filter: destructive when applied to a layer, live when it is a
@@ -519,6 +521,9 @@ pub struct Layer {
     pub content: LayerContent,
     /// UI state for groups: children hidden in the layer list.
     pub collapsed: bool,
+    /// Photoshop-style locks (transparency, pixels, position, all);
+    /// enforced by the editor, see [`locks`].
+    pub locks: LayerLocks,
 }
 
 impl Layer {
@@ -601,6 +606,7 @@ impl Layer {
             mask: None,
             content,
             collapsed: false,
+            locks: LayerLocks::NONE,
         }
     }
 

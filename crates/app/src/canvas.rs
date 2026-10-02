@@ -1143,7 +1143,9 @@ impl App {
                     ctx.set_cursor_icon(egui::CursorIcon::Move);
                 }
                 if resp.drag_started_by(primary) {
-                    if self.active_is_pixel() || self.active_is_text() {
+                    if let Some(why) = self.lock_block(layer_actions::LockNeed::Move) {
+                        self.status = why.into();
+                    } else if self.active_is_pixel() || self.active_is_text() {
                         self.drag = Some(DragKind::Move);
                         self.drag_start = ctx.input(|i| i.pointer.press_origin());
                         self.move_offset = (0, 0);
@@ -1225,13 +1227,20 @@ impl App {
                         return;
                     }
                 }
-                let paintable = if self.quick_mask {
-                    true
-                } else if self.editing_mask {
-                    self.active_has_mask()
+                // Quick mask paints the selection, which no layer lock covers.
+                let lock_why = if self.quick_mask {
+                    None
                 } else {
-                    self.active_is_pixel()
+                    self.paint_lock_block()
                 };
+                let paintable = lock_why.is_none()
+                    && if self.quick_mask {
+                        true
+                    } else if self.editing_mask {
+                        self.active_has_mask()
+                    } else {
+                        self.active_is_pixel()
+                    };
                 if resp.drag_started_by(primary) {
                     if paintable {
                         if needs_source {
@@ -1250,10 +1259,10 @@ impl App {
                             self.stroke.push(self.pen_point(ctx, x, y));
                         }
                     } else {
-                        self.status = if self.editing_mask {
-                            "The active layer has no mask to paint".into()
-                        } else {
-                            "Select a pixel layer to paint on".into()
+                        self.status = match lock_why {
+                            Some(why) => why.into(),
+                            None if self.editing_mask => "The active layer has no mask to paint".into(),
+                            None => "Select a pixel layer to paint on".into(),
                         };
                     }
                 }
@@ -1265,7 +1274,12 @@ impl App {
                     if let (Some(layer), false) = (self.active, self.stroke.is_empty()) {
                         let cmd = self.stroke_command(layer, self.stroke.clone());
                         let mut preview = self.editor.doc().clone();
-                        if cmd.apply(&mut preview).is_ok() {
+                        // The preview obeys layer locks as the commit will
+                        // (a transparency-locked layer keeps its alpha).
+                        let applied = cmd.apply(&mut preview).is_ok()
+                            && lumenply_core::locks::enforce(self.editor.doc(), &mut preview, cmd.as_ref())
+                                .is_ok();
+                        if applied {
                             if self.quick_mask {
                                 // The stroke edits the selection, not pixels:
                                 // refresh the red overlay from the preview.
@@ -1300,6 +1314,8 @@ impl App {
                             self.run(cmd.as_ref());
                         }
                     }
+                } else if resp.clicked_by(primary) && lock_why.is_some() {
+                    self.status = lock_why.unwrap_or_default().into();
                 } else if resp.clicked_by(primary) && paintable {
                     if let (Some(layer), Some(p)) = (self.active, resp.interact_pointer_pos()) {
                         let (x, y) = to_doc(p);

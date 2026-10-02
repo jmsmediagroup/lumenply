@@ -49,6 +49,8 @@ pub(crate) struct LayerRow {
     mask_enabled: bool,
     depth: usize,
     collapsed: bool,
+    /// The layer's own locks (a padlock at the row's right edge).
+    locks: lumenply_doc::LayerLocks,
 }
 
 impl LayerRow {
@@ -96,6 +98,7 @@ impl App {
                     mask_enabled: l.mask.as_ref().is_some_and(|m| m.enabled),
                     depth,
                     collapsed: l.collapsed,
+                    locks: l.locks,
                 });
                 if let (Some(children), false) = (l.children(), l.collapsed) {
                     walk(children, Some(l.id), depth + 1, out);
@@ -108,7 +111,7 @@ impl App {
     }
 
     pub(crate) fn layers_ui(&mut self, ui: &mut egui::Ui) {
-        section_title(ui, "LAYERS");
+        self.layers_header(ui);
         let rows = self.layer_rows();
         let ctrl = ui.input(|i| i.modifiers.command);
 
@@ -367,6 +370,16 @@ impl App {
                             .size()
                             .x
                     });
+                    // Locked layers carry a padlock at the far right: solid
+                    // for "lock all", outlined for partial locks.
+                    if !row.locks.is_empty() {
+                        let r = egui::Rect::from_center_size(egui::pos2(right - 5.0, cy), Vec2::splat(11.0));
+                        layer_actions::paint_padlock(p, r, MUTED, row.locks.all);
+                        if tip.is_none() && hover.is_some_and(|q| r.expand(4.0).contains(q)) {
+                            tip = Some(format!("Locked: {}", row.locks.describe()));
+                        }
+                        right -= 18.0;
+                    }
                     if row.opacity < 0.999 {
                         right -= p
                             .text(
@@ -429,6 +442,7 @@ impl App {
                             .unwrap_or((0, 1));
                         let pixel = row.kind == Kind::Pixel && row.chip.is_none();
                         let smart = row.chip == Some("Smart");
+                        let merge = lumenply_core::layer_ops::merge_down_kind(doc, row.id);
                         if menu_item(ui, "Rename", "") {
                             rename_start = Some((row.id, row.name.clone()));
                         }
@@ -439,6 +453,15 @@ impl App {
                             }
                             r
                         };
+                        act(ui, true, "Duplicate layer", "dup");
+                        match merge {
+                            Ok(kind) => {
+                                act(ui, true, kind.label(), "merge");
+                            }
+                            Err(why) => {
+                                act(ui, false, "Merge down", "merge").on_disabled_hover_text(why);
+                            }
+                        }
                         menu_separator(ui);
                         act(ui, pos + 1 < count, "Move up", "up")
                             .on_disabled_hover_text("Already at the top");
@@ -593,6 +616,8 @@ impl App {
                 "fliph" => self.flip_active(true),
                 "flipv" => self.flip_active(false),
                 "delete" => self.delete_active(),
+                "dup" => self.duplicate_active(),
+                "merge" => self.merge_down_active(),
                 "ungroup" => self.ungroup_active(),
                 "smart" => self.run(&ConvertToSmartObject { layer: id }),
                 "rasterize" => self.run(&RasterizeLayer { layer: id }),

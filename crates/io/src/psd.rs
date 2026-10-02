@@ -13,7 +13,7 @@
 
 use std::path::Path;
 
-use lumenply_doc::{Adjustment, BlendMode, Document, Layer, LayerContent, Mask};
+use lumenply_doc::{Adjustment, BlendMode, Document, Layer, LayerContent, LayerLocks, Mask};
 use lumenply_tiles::{Raster, Rect, Rgba, TileStore};
 
 use crate::{linear_to_srgb, IoError};
@@ -407,6 +407,46 @@ fn unicode_name_block(name: &str) -> Vec<u8> {
         put_u16(&mut data, u);
     }
     additional_block(b"luni", &data)
+}
+
+/// Photoshop's layer protection flags (the `lspf` block): bit 0 locks
+/// transparent pixels, bit 1 image pixels, bit 2 position; bit 31 is
+/// "lock all".
+const LSPF_TRANSPARENCY: u32 = 1;
+const LSPF_PIXELS: u32 = 2;
+const LSPF_POSITION: u32 = 4;
+const LSPF_ALL: u32 = 0x8000_0000;
+
+fn lock_flags(l: &LayerLocks) -> u32 {
+    let mut f = 0;
+    for (on, bit) in [
+        (l.transparency, LSPF_TRANSPARENCY),
+        (l.pixels, LSPF_PIXELS),
+        (l.position, LSPF_POSITION),
+        (l.all, LSPF_ALL),
+    ] {
+        if on {
+            f |= bit;
+        }
+    }
+    f
+}
+
+fn locks_from_flags(f: u32) -> LayerLocks {
+    LayerLocks {
+        transparency: f & LSPF_TRANSPARENCY != 0,
+        pixels: f & LSPF_PIXELS != 0,
+        position: f & LSPF_POSITION != 0,
+        all: f & LSPF_ALL != 0,
+    }
+}
+
+/// The `lspf` block for a locked layer (none for an unlocked one).
+fn lock_blocks(l: &Layer) -> Vec<Vec<u8>> {
+    if l.locks.is_empty() {
+        return Vec::new();
+    }
+    vec![additional_block(b"lspf", &lock_flags(&l.locks).to_be_bytes())]
 }
 
 fn additional_block(key: &[u8; 4], data: &[u8]) -> Vec<u8> {
@@ -1043,7 +1083,7 @@ fn collect_records(
                     l.visible,
                     mask,
                     mask_enabled,
-                    vec![],
+                    lock_blocks(l),
                 ));
             }
             LayerContent::Group(children) => {
@@ -1073,14 +1113,18 @@ fn collect_records(
                     l.visible,
                     mask,
                     mask_enabled,
-                    vec![section_divider_block(
-                        if l.collapsed { 2 } else { 1 },
-                        if l.pass_through {
-                            b"pass"
-                        } else {
-                            blend_key(l.blend)
-                        },
-                    )],
+                    [
+                        vec![section_divider_block(
+                            if l.collapsed { 2 } else { 1 },
+                            if l.pass_through {
+                                b"pass"
+                            } else {
+                                blend_key(l.blend)
+                            },
+                        )],
+                        lock_blocks(l),
+                    ]
+                    .concat(),
                 ));
             }
             LayerContent::Filter(f) => warnings.push(format!(
@@ -1091,6 +1135,7 @@ fn collect_records(
             LayerContent::Adjustment(a) => match adjustment_block(a) {
                 Some(block) => {
                     let mut blocks = vec![block];
+                    blocks.extend(lock_blocks(l));
                     if let Adjustment::BrightnessContrast { brightness, contrast } = a {
                         blocks.push(cged_block(
                             i16_of(*brightness, 100.0, -100, 100) as i32,
@@ -1245,6 +1290,8 @@ struct RawLayer {
     section: u32, // 0 none, 1/2 group open, 3 close
     is_adjustment: bool,
     adjustment: Option<Adjustment>,
+    /// From the `lspf` block; unlocked when absent.
+    locks: LayerLocks,
 }
 
 /// Largest dimension the PSD v1 format allows for the canvas, a layer or a
@@ -1383,6 +1430,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let mut section = 0u32;
                 let mut is_adjustment = false;
                 let mut adjustment = None;
+                let mut locks = LayerLocks::NONE;
                 while rd.pos + 12 <= extra_end {
                     let sig = rd.bytes(4)?;
                     if sig != b"8BIM" && sig != b"8B64" {
@@ -1427,6 +1475,10 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                             let mut d = Rd::new(data);
                             section = d.u32()?;
                         }
+                        b"lspf" => {
+                            let mut d = Rd::new(data);
+                            locks = locks_from_flags(d.u32()?);
+                        }
                         b"levl" | b"curv" | b"brit" | b"CgEd" | b"hue2" | b"hue " | b"blnc" | b"blwh"
                         | b"expA" | b"vibA" | b"thrs" | b"post" | b"nvrt" | b"phfl" | b"mixr" | b"clrL"
                         | b"grdm" | b"selc" | b"SoCo" | b"GdFl" | b"PtFl" => {
@@ -1455,6 +1507,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         section,
                         is_adjustment,
                         adjustment,
+                        locks,
                     },
                     chans,
                 ));
@@ -1586,6 +1639,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 g.visible = rl.visible;
                 g.collapsed = rl.section == 2;
                 g.mask = build_mask(&rl);
+                g.locks = rl.locks;
                 if !rl.blend_known {
                     warnings.push(format!(
                         "group '{}': unsupported blend mode, using normal",
@@ -1606,6 +1660,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                             l.opacity = rl.opacity;
                             l.visible = rl.visible;
                             l.mask = build_mask(&rl);
+                            l.locks = rl.locks;
                             stack.last_mut().expect("root").push(l);
                         }
                         None => warnings.push(format!(
@@ -1617,6 +1672,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 }
                 let id = doc.alloc_id();
                 let mut l = Layer::pixel(id, rl.name.clone());
+                l.locks = rl.locks;
                 l.blend = rl.blend;
                 l.clip = rl.clip;
                 l.opacity = rl.opacity;
@@ -2286,5 +2342,60 @@ mod tests {
         let path = temp("nope.psd");
         std::fs::write(&path, b"hello").unwrap();
         assert!(matches!(load(&path), Err(PsdError::NotPsd(_))));
+    }
+
+    #[test]
+    fn layer_locks_round_trip_through_lspf() {
+        let mut doc = Document::new(64, 64);
+        let a = doc.add_pixel_layer("Locked pixels");
+        doc.layer_mut(a)
+            .unwrap()
+            .pixels_mut()
+            .unwrap()
+            .set_pixel(3, 3, Rgba::WHITE);
+        let b = doc.add_pixel_layer("Free");
+        doc.layer_mut(b)
+            .unwrap()
+            .pixels_mut()
+            .unwrap()
+            .set_pixel(4, 4, Rgba::WHITE);
+        let g = doc.add_group("Locked group");
+        let tp = LayerLocks {
+            transparency: true,
+            position: true,
+            ..LayerLocks::NONE
+        };
+        let all = LayerLocks {
+            all: true,
+            ..LayerLocks::NONE
+        };
+        let px = LayerLocks {
+            pixels: true,
+            ..LayerLocks::NONE
+        };
+        doc.layer_mut(a).unwrap().locks = tp;
+        doc.layer_mut(g).unwrap().locks = all;
+        let adj = doc.add_adjustment(Adjustment::Invert);
+        doc.layer_mut(adj).unwrap().locks = px;
+        assert_eq!(lock_flags(&tp), 5);
+        assert_eq!(lock_flags(&all), 0x8000_0000);
+        assert_eq!(locks_from_flags(2), px);
+        // Kept for an independent reader (psd-tools, see ADR 0003).
+        let path = temp("locks.psd");
+        save(&path, &doc).unwrap();
+        let back = load(&path).unwrap().value;
+        let by_name = |n: &str| {
+            let mut found = None;
+            back.for_each_layer(|l| {
+                if l.name == n {
+                    found = Some(l.locks);
+                }
+            });
+            found.unwrap()
+        };
+        assert_eq!(by_name("Locked pixels"), tp);
+        assert_eq!(by_name("Free"), LayerLocks::NONE);
+        assert_eq!(by_name("Locked group"), all);
+        assert_eq!(by_name("Invert"), px);
     }
 }
