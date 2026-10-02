@@ -9,12 +9,15 @@
 pub mod align;
 pub mod commands;
 mod content_aware;
+pub mod crop;
 pub mod demo;
+pub mod guides;
 pub mod layer_ops;
 pub mod liquify;
 pub mod locks;
 pub mod quick_select;
 mod select_ops;
+pub mod snap;
 
 use lumenply_doc::{Document, LayerId};
 

@@ -63,6 +63,8 @@ struct Manifest {
     saved_paths: Vec<lumenply_doc::NamedPath>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     float_mode: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    guides: Vec<lumenply_doc::Guide>,
     layers: Vec<LayerRecord>,
 }
 
@@ -159,6 +161,7 @@ fn write_archive(path: &Path, doc: &Document) -> Result<(), ProjectError> {
         work_path: doc.work_path.clone(),
         saved_paths: doc.saved_paths.clone(),
         float_mode: doc.float_mode,
+        guides: doc.guides.clone(),
         layers,
     };
     zip.start_file("manifest.json", stored)?;
@@ -305,6 +308,12 @@ pub fn load(path: impl AsRef<Path>) -> Result<Document, ProjectError> {
         .cloned()
         .collect();
     doc.float_mode = manifest.float_mode;
+    doc.guides = manifest
+        .guides
+        .iter()
+        .filter(|g| g.pos.is_finite())
+        .copied()
+        .collect();
     doc.for_each_layer(|l| {
         max_id = max_id.max(l.id);
         if !seen.insert(l.id) {
@@ -741,5 +750,30 @@ mod tests {
         // a file from before locks looks like.
         assert_eq!(back.layer(b).unwrap().locks, lumenply_doc::LayerLocks::NONE);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn guides_survive_the_file_and_old_files_load_without_them() {
+        let mut doc = Document::new(40, 30);
+        doc.add_pixel_layer("p");
+        doc.guides = vec![
+            lumenply_doc::Guide::vertical(12.5),
+            lumenply_doc::Guide::horizontal(20.0),
+        ];
+        let path = temp("guides.lumen");
+        save(&path, &doc).unwrap();
+        let back = load(&path).unwrap();
+        assert_eq!(back.guides, doc.guides);
+
+        // A manifest written before guides existed has no "guides" key.
+        let old = r#"{"format":"nge","version":1,"width":4,"height":4,"next_id":1,"layers":[]}"#;
+        assert!(load(craft_project("no-guides.nge", old, &[]))
+            .unwrap()
+            .guides
+            .is_empty());
+        let one = r#"{"format":"nge","version":1,"width":4,"height":4,"next_id":1,"layers":[],
+            "guides":[{"orientation":"horizontal","pos":3.0}]}"#;
+        let g = load(craft_project("one-guide.nge", one, &[])).unwrap().guides;
+        assert_eq!(g, vec![lumenply_doc::Guide::horizontal(3.0)]);
     }
 }

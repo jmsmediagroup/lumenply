@@ -13,6 +13,11 @@ pub use crate::content_aware::ContentAwareFill;
 pub use crate::select_ops::{GrowSelection, ModifySelectionEdge};
 pub use lumenply_doc::selection_ops::EdgeOp;
 
+// Commands that live in their own modules, re-exported so
+// `commands::*` stays the one import for every edit.
+pub use crate::crop::CropCanvas;
+pub use crate::guides::{AddGuide, ClearGuides, MoveGuide, RemoveGuide};
+
 /// Add an empty pixel layer (or one filled from a raster) on top of the stack.
 pub struct AddPixelLayer {
     pub name: String,

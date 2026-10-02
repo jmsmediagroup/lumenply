@@ -387,6 +387,7 @@ impl App {
                 let rect = resp.rect;
                 let painter = painter.with_clip_rect(rect);
                 self.apply_view_cmd(rect);
+                self.crop_sync();
 
                 // Scroll pans; Alt+scroll (or a pinch) zooms at the cursor.
                 let space = !ctx.wants_keyboard_input() && ctx.input(|i| i.key_down(Key::Space));
@@ -439,7 +440,7 @@ impl App {
                     // Handled by the colour picker above.
                 } else if self.xform.is_some() {
                     self.handle_xform(ctx, &resp, to_doc, to_screen);
-                } else if !space {
+                } else if !space && !self.guides_canvas_input(ctx, &resp) {
                     self.handle_tool(ctx, &resp, to_doc);
                 }
 
@@ -473,12 +474,15 @@ impl App {
                         .request_repaint_after(std::time::Duration::from_millis(90));
                 }
                 painter.rect_stroke(doc_rect, 0.0, Stroke::new(1.0, LINE));
+                self.paint_view_aids(&painter, rect, doc_rect);
 
                 if let Some(x) = &self.xform {
                     paint_xform_box(&painter, x, to_screen);
                 } else if !picker_owns {
                     self.paint_tool_overlay(ctx, &painter, &resp);
                 }
+                self.paint_snap_hint(&painter, rect, doc_rect);
+                self.rulers_ui(ui, rect);
                 self.selection_action_bar(ctx, rect, origin, zoom);
                 self.zoom_pill(ctx, rect);
             });
@@ -665,6 +669,7 @@ impl App {
             if let Some(q) = ctx.input(|i| i.pointer.press_origin()) {
                 self.drag = Some(DragKind::Xform(hit(q)));
                 self.drag_start = Some(q);
+                self.begin_snap(&[x.layer]);
                 x.base = (x.sx, x.sy, x.angle, x.dx, x.dy);
                 if let Some(quad) = x.quad {
                     x.qbase = quad;
@@ -747,6 +752,21 @@ impl App {
                         let (bx, by) = to_doc(b);
                         x.dx = x.base.3 + (bx - ax);
                         x.dy = x.base.4 + (by - ay);
+                        // Snap the moved box by its edges or centre.
+                        let cs = x.corners();
+                        let xs = cs.iter().map(|c| c.0);
+                        let ys = cs.iter().map(|c| c.1);
+                        let (x0, x1) = (
+                            xs.clone().fold(f32::INFINITY, f32::min),
+                            xs.fold(f32::NEG_INFINITY, f32::max),
+                        );
+                        let (y0, y1) = (
+                            ys.clone().fold(f32::INFINITY, f32::min),
+                            ys.fold(f32::NEG_INFINITY, f32::max),
+                        );
+                        let (sx, sy) = self.snap_rect_delta(x0, y0, x1, y1);
+                        x.dx += sx;
+                        x.dy += sy;
                     }
                     Handle::Rotate => {
                         let a0 = (a.y - centre_s.y).atan2(a.x - centre_s.x);
@@ -762,6 +782,7 @@ impl App {
             if let Some(DragKind::Xform(_)) = self.drag {
                 self.drag = None;
                 self.drag_start = None;
+                self.end_snap();
             }
         }
         if changed {
@@ -1012,6 +1033,7 @@ impl App {
                     self.run_coalescing(&SetWorkPath { path }, "pen");
                 }
             }
+            Tool::Crop => self.crop_input(ctx, resp, to_doc),
             Tool::Hand => {
                 if resp.hovered() {
                     ctx.set_cursor_icon(if resp.dragged() {
@@ -1158,6 +1180,7 @@ impl App {
                         self.drag = Some(DragKind::Move);
                         self.drag_start = ctx.input(|i| i.pointer.press_origin());
                         self.move_offset = (0, 0);
+                        self.begin_move_snap();
                     } else {
                         self.status = "Select a pixel layer to move".into();
                     }
@@ -1165,7 +1188,7 @@ impl App {
                 if self.drag == Some(DragKind::Move) && resp.dragged_by(primary) {
                     if let (Some(a), Some(b)) = (self.drag_start, resp.interact_pointer_pos()) {
                         let d = (b - a) / self.zoom;
-                        let off = (d.x.round() as i32, d.y.round() as i32);
+                        let off = self.snap_move_offset((d.x.round() as i32, d.y.round() as i32));
                         if off != self.move_offset {
                             let prev = self.move_offset;
                             self.move_offset = off;
@@ -1205,6 +1228,7 @@ impl App {
                 if resp.drag_stopped() && self.drag == Some(DragKind::Move) {
                     self.drag = None;
                     self.drag_start = None;
+                    self.end_snap();
                     let (dx, dy) = self.move_offset;
                     if let (Some(layer), true) = (self.active, dx != 0 || dy != 0) {
                         self.run(&MoveLayer { layer, dx, dy });
@@ -1405,16 +1429,25 @@ impl App {
                 if resp.drag_started_by(primary) {
                     self.drag = Some(DragKind::Select);
                     self.drag_start = ctx.input(|i| i.pointer.press_origin());
+                    self.begin_snap(&[]);
+                }
+                if self.drag == Some(DragKind::Select) && resp.dragged_by(primary) {
+                    if let (Some(a), Some(b)) = (self.drag_start, resp.interact_pointer_pos()) {
+                        self.track_marquee(to_doc(a), to_doc(b));
+                    }
                 }
                 if resp.drag_stopped() && self.drag == Some(DragKind::Select) {
                     self.drag = None;
+                    let tracked = self.marquee_doc();
+                    self.end_snap();
                     let press = self.drag_start.take();
                     let release = resp
                         .interact_pointer_pos()
                         .or_else(|| ctx.input(|i| i.pointer.latest_pos()));
                     if let (Some(a), Some(b)) = (press, release) {
                         let canvas = self.editor.doc().canvas();
-                        let r = drag_rect(to_doc(a), to_doc(b), canvas);
+                        let (da, db) = tracked.unwrap_or((to_doc(a), to_doc(b)));
+                        let r = drag_rect(da, db, canvas);
                         let mods = ctx.input(|i| i.modifiers);
                         let op = if mods.shift && mods.alt {
                             CombineOp::Intersect
@@ -1486,6 +1519,14 @@ impl App {
                     let press = self.drag_start;
                     let cur = ctx.input(|i| i.pointer.latest_pos());
                     if let (Some(a), Some(b)) = (press, cur) {
+                        // Draw the snapped corners when the drag tracked them.
+                        let o = resp.rect.min + self.pan;
+                        let (a, b) = self.marquee_doc().map_or((a, b), |(p, q)| {
+                            (
+                                o + egui::vec2(p.0, p.1) * self.zoom,
+                                o + egui::vec2(q.0, q.1) * self.zoom,
+                            )
+                        });
                         let r = egui::Rect::from_two_pos(a, b);
                         let pts: Vec<Pos2> = if self.tool == Tool::RectSelect {
                             vec![
@@ -1592,6 +1633,7 @@ impl App {
                 }
             }
             Tool::Text => self.paint_text_overlay(painter, resp),
+            Tool::Crop => self.paint_crop(ctx, painter, resp),
             Tool::Hand | Tool::Move | Tool::Eyedropper | Tool::Bucket | Tool::Wand => {}
         }
     }

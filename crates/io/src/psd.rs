@@ -8,8 +8,9 @@
 //! with a warning returned to the caller); on import Photoshop's own
 //! adjustment layers are skipped the same way.
 //!
-//! Layout written: header → empty colour-mode data → empty image resources
-//! → layer-and-mask section (RLE channels) → RLE composite.
+//! Layout written: header → empty colour-mode data → image resources (just
+//! the guides, resource 1032, when there are any; see `psd_guides`) →
+//! layer-and-mask section (RLE channels) → RLE composite.
 
 use std::path::Path;
 
@@ -1199,7 +1200,7 @@ fn save_depth(path: impl AsRef<Path>, doc: &Document, deep: bool) -> Result<Repo
     put_u16(&mut file, if deep { 16 } else { 8 }); // depth
     put_u16(&mut file, 3); // RGB
     put_u32(&mut file, 0); // colour mode data
-    put_u32(&mut file, 0); // image resources
+    file.extend_from_slice(&crate::psd_guides::image_resources(doc)); // guides (1032)
 
     // Layer and mask information.
     let mut records = Vec::new();
@@ -1365,7 +1366,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     let cmd_len = rd.u32()? as usize;
     rd.skip(cmd_len)?;
     let res_len = rd.u32()? as usize;
-    rd.skip(res_len)?;
+    let guides = crate::psd_guides::read_guides(rd.bytes(res_len)?);
 
     let mut warnings = Vec::new();
     let lm_len = rd.len_of(psb)?;
@@ -1591,6 +1592,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     };
 
     let mut doc = Document::new(width, height);
+    doc.guides = guides;
     if let Some(planes) = composite {
         let mut r = Raster::new(width, height);
         let n = (width * height) as usize;

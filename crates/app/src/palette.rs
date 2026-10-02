@@ -30,13 +30,14 @@ pub(crate) enum PaletteAct {
 }
 
 /// Every tool, so "Search tools..." finds them, in rail order.
-const TOOLS: [Tool; 16] = [
+const TOOLS: [Tool; 17] = [
     Tool::Move,
     Tool::RectSelect,
     Tool::EllipseSelect,
     Tool::Lasso,
     Tool::PolyLasso,
     Tool::Wand,
+    Tool::Crop,
     Tool::Brush,
     Tool::Eraser,
     Tool::Clone,
@@ -145,6 +146,13 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Select similar", "sel-similar"),
     ("Fill...", "fill-dialog"),
     ("Content-Aware Fill...", "content-aware"),
+    ("Show or hide rulers", "rulers"),
+    ("Show or hide guides", "guides"),
+    ("Lock or unlock guides", "lock-guides"),
+    ("Clear guides", "clear-guides"),
+    ("New guide...", "new-guide"),
+    ("Show or hide the grid", "grid"),
+    ("Snap on or off", "snap"),
 ];
 
 /// The id of the destructive filter dialog for a filter kind.
@@ -467,6 +475,7 @@ impl App {
                 _ => None,
             },
             "unclip" if !layer.is_some_and(|l| l.clip) => Some("This layer is not clipped"),
+            "clear-guides" if doc.guides.is_empty() => Some("There are no guides"),
             "rasterize" if !layer.is_some_and(|l| l.smart_layer().is_some() || l.text_layer().is_some()) => {
                 Some("Select a smart object or text layer first")
             }
@@ -695,6 +704,7 @@ impl App {
                 let margin = self.content_aware_margin();
                 self.dialog = Some(Dialog::Fill(aware, margin, 0));
             }
+            aid if guides::VIEW_ACTIONS.contains(&aid) => self.run_view_aid(aid),
             filter if filter.starts_with("filter-") => {
                 match filter_presets().into_iter().find(|(_, f)| filter_id(f) == filter) {
                     Some((_, f)) => self.dialog = Some(Dialog::Filter(f)),
@@ -721,7 +731,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 94); // + liquify, layer ops, locks, aligns, distributes, select modify, fill
+        assert_eq!(n, 101); // + liquify, layer ops, locks, align, select modify, fill, view aids
     }
 
     #[test]
@@ -739,6 +749,6 @@ mod tests {
         let mut names: Vec<&str> = TOOLS.iter().map(|t| t.name()).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 16);
+        assert_eq!(names.len(), 17);
     }
 }
