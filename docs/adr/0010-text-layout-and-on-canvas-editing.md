@@ -18,9 +18,11 @@ places every character: explicit newlines, word wrap in a box, alignment
 caps and per-character faces. The rasteriser draws from it, and the same
 result answers caret position, hit testing (click → character), line
 bounds and selection rectangles. Positions are byte offsets into the
-layer's text at character boundaries. Advances stay whole pixels
-(`ceil`, as fontdue's own layout did), so earlier documents render as
-before to within a pixel of glyph placement.
+layer's text at character boundaries. Without `kerning` advances stay
+whole pixels (`ceil`, as fontdue's own layout did), so earlier documents
+render as before to within a pixel of glyph placement; with it (new text
+from the Text tool, Photoshop's "Metrics") the font's kerning pairs apply
+within a face and advances keep their fractions.
 
 **Paragraph text** is `TextLayer::box_size: Option<[w, h]>`. With a box,
 `(x, y)` is the box's top-left corner and the first baseline sits one
