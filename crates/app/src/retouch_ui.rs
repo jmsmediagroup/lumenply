@@ -366,11 +366,22 @@ impl App {
                         true
                     }
                     HealMode::Spot => {
-                        sample_menu(ui, &mut self.retouch.sample);
-                        check(ui, &mut self.retouch.spot_aware, "Content-Aware").on_hover_text(
-                            "On release, rebuild the stroked area from its surroundings (PatchMatch); \
-                             off: blend the surrounding colour in",
-                        );
+                        let (sample, aware) = (&mut self.retouch.sample, &mut self.retouch.spot_aware);
+                        let mut options = |ui: &mut egui::Ui| {
+                            sample_menu(ui, sample);
+                            check(ui, aware, "Content-Aware").on_hover_text(
+                                "On release, rebuild the stroked area from its surroundings (PatchMatch); \
+                                 off: blend the surrounding colour in",
+                            );
+                        };
+                        if tight {
+                            // A tight bar folds them into a menu so the
+                            // brush settings still fit.
+                            let r = ui.button("Options").on_hover_text("Sample and Content-Aware");
+                            button_menu(&r, options);
+                        } else {
+                            options(ui);
+                        }
                         ui.separator();
                         false
                     }
