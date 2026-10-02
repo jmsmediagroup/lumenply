@@ -775,9 +775,24 @@ impl App {
                 hue,
                 saturation,
                 lightness,
+                colorize,
             } => {
-                finished |= slider_row(ui, "Hue", hue, -180.0..=180.0, "°");
-                finished |= slider_row_scaled(ui, "Saturation", saturation, -1.0..=1.0, 100.0, "");
+                if ui
+                    .checkbox(colorize, "Colorize")
+                    .on_hover_text("One hue and saturation for the whole image, keeping its lightness")
+                    .changed()
+                {
+                    // Photoshop's starting point for each mode.
+                    (*hue, *saturation) = if *colorize { (0.0, 0.25) } else { (0.0, 0.0) };
+                    finished = true;
+                }
+                if *colorize {
+                    finished |= slider_row(ui, "Hue", hue, 0.0..=360.0, "°");
+                    finished |= slider_row_scaled(ui, "Saturation", saturation, 0.0..=1.0, 100.0, "");
+                } else {
+                    finished |= slider_row(ui, "Hue", hue, -180.0..=180.0, "°");
+                    finished |= slider_row_scaled(ui, "Saturation", saturation, -1.0..=1.0, 100.0, "");
+                }
                 finished |= slider_row_scaled(ui, "Lightness", lightness, -1.0..=1.0, 100.0, "");
             }
             Adjustment::Levels {
@@ -812,8 +827,28 @@ impl App {
                 finished |= slider_row_scaled(ui, "Output black", ob, 0.0..=1.0, 255.0, "");
                 finished |= slider_row_scaled(ui, "Output white", ow, 0.0..=1.0, 255.0, "");
             }
-            Adjustment::Curves { points } => {
-                finished |= curve_editor(ui, points, &mut self.curve_drag);
+            Adjustment::Curves { points, channels } => {
+                segmented(
+                    ui,
+                    &mut self.levels_ch,
+                    &[(0, "Master"), (1, "Red"), (2, "Green"), (3, "Blue")],
+                );
+                let pts = match self.levels_ch {
+                    0 => points,
+                    n => &mut channels[n - 1],
+                };
+                // A straight channel is stored empty; edit it as the
+                // diagonal without turning a mere look into an edit.
+                let mut edit = if pts.len() < 2 {
+                    vec![[0.0, 0.0], [1.0, 1.0]]
+                } else {
+                    pts.clone()
+                };
+                let shown = edit.clone();
+                finished |= curve_editor(ui, &mut edit, &mut self.curve_drag);
+                if edit != shown {
+                    *pts = edit;
+                }
             }
             Adjustment::BlackWhite { red, green, blue } => {
                 finished |= slider_row_scaled(ui, "Red", red, 0.0..=1.0, 100.0, "%");
@@ -991,6 +1026,7 @@ pub(crate) fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<[f32; 2]>, drag: 
     }
     let compiled = Adjustment::Curves {
         points: points.clone(),
+        channels: Default::default(),
     }
     .compile();
     let line: Vec<Pos2> = (0..=64)

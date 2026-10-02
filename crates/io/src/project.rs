@@ -670,6 +670,7 @@ mod tests {
                 hue: 30.0,
                 saturation: 0.2,
                 lightness: -0.1,
+                colorize: false,
             },
         );
         adj.opacity = 0.7;

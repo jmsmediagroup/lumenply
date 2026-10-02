@@ -19,12 +19,17 @@ pub enum Adjustment {
         contrast: f32,
     },
     HueSaturation {
-        /// Hue rotation in degrees.
+        /// Hue rotation in degrees; with `colorize`, the hue (0-360).
         hue: f32,
-        /// -1.0 (grey) to 1.0 (double saturation).
+        /// -1.0 (grey) to 1.0 (double saturation); with `colorize`, the
+        /// saturation (0-1).
         saturation: f32,
         /// -1.0 (black) to 1.0 (white).
         lightness: f32,
+        /// Photoshop's Colorize: one hue and saturation for every pixel,
+        /// keeping its lightness.
+        #[serde(default)]
+        colorize: bool,
     },
     /// Remap input range `[in_black, in_white]` through `gamma` onto
     /// `[out_black, out_white]`, then each channel through its own remap.
@@ -40,9 +45,12 @@ pub enum Adjustment {
         channels: [LevelsChannel; 3],
     },
     /// A master curve through control points `[x, y]` in `[0, 1]`, sorted by
-    /// `x`, interpolated with a monotone cubic so it never overshoots.
+    /// `x`, interpolated with a monotone cubic so it never overshoots; then
+    /// a curve per channel (R, G, B; empty = straight).
     Curves {
         points: Vec<[f32; 2]>,
+        #[serde(default, skip_serializing_if = "curves_identity")]
+        channels: [Vec<[f32; 2]>; 3],
     },
     /// Weighted desaturation; weights are normalised, so any positive values
     /// work. `(0.2126, 0.7152, 0.0722)` is linear luminance.
@@ -153,6 +161,15 @@ impl LevelsChannel {
         let t = ((x - self.in_black) / span).clamp(0.0, 1.0).powf(g);
         self.out_black + (self.out_white - self.out_black) * t
     }
+}
+
+/// A curve that leaves every value as it is: no points, or the diagonal.
+pub fn curve_is_identity(points: &[[f32; 2]]) -> bool {
+    points.len() < 2 || points == [[0.0, 0.0], [1.0, 1.0]]
+}
+
+fn curves_identity(c: &[Vec<[f32; 2]>; 3]) -> bool {
+    c.iter().all(|p| curve_is_identity(p))
 }
 
 fn channels_identity(c: &[LevelsChannel; 3]) -> bool {
@@ -308,9 +325,30 @@ impl Adjustment {
                     ]))
                 }
             }
-            Adjustment::Curves { points } => {
-                let spline = MonotoneCubic::new(points);
-                wrap(&|x| spline.eval(x), self.gamma_space())
+            Adjustment::Curves { points, channels } => {
+                let master = MonotoneCubic::new(points);
+                if curves_identity(channels) {
+                    wrap(&|x| master.eval(x), self.gamma_space())
+                } else {
+                    // One table per channel: the master curve, then the
+                    // channel's own, both on gamma values.
+                    let g = self.gamma_space();
+                    let per = |pts: &Vec<[f32; 2]>| {
+                        let ch = MonotoneCubic::new(pts);
+                        build_lut(|x| {
+                            if g {
+                                srgb_decode(ch.eval(master.eval(srgb_encode(x))))
+                            } else {
+                                ch.eval(master.eval(x))
+                            }
+                        })
+                    };
+                    CompiledAdjustment::LutRgb(Box::new([
+                        *per(&channels[0]),
+                        *per(&channels[1]),
+                        *per(&channels[2]),
+                    ]))
+                }
             }
             Adjustment::Invert => wrap(&|x| 1.0 - x, self.gamma_space()),
             Adjustment::BrightnessContrast { brightness, contrast } => {
@@ -474,10 +512,17 @@ impl CompiledAdjustment {
                     hue,
                     saturation,
                     lightness,
+                    colorize,
                 } => {
                     let (h, s, l) = rgb_to_hsl(r, g, b);
-                    let h = (h + hue / 360.0).rem_euclid(1.0);
-                    let s = (s * (1.0 + saturation)).clamp(0.0, 1.0);
+                    let (h, s) = if colorize {
+                        ((hue / 360.0).rem_euclid(1.0), saturation.clamp(0.0, 1.0))
+                    } else {
+                        (
+                            (h + hue / 360.0).rem_euclid(1.0),
+                            (s * (1.0 + saturation)).clamp(0.0, 1.0),
+                        )
+                    };
                     let l = if lightness >= 0.0 {
                         l + (1.0 - l) * lightness
                     } else {
@@ -828,6 +873,71 @@ mod tests {
     }
 
     #[test]
+    fn colorize_gives_every_pixel_one_hue_and_keeps_its_lightness() {
+        let red = Adjustment::HueSaturation {
+            hue: 0.0,
+            saturation: 0.5,
+            lightness: 0.0,
+            colorize: true,
+        };
+        // Mid grey: HSL(0°, 50%, 50%) = (0.75, 0.25, 0.25) in gamma values.
+        let out = in_gamma(&red, [0.5; 3]);
+        assert!(
+            close(out[0], 0.75) && close(out[1], 0.25) && close(out[2], 0.25),
+            "{out:?}"
+        );
+        // A blue pixel of the same lightness turns the same red.
+        let out = in_gamma(&red, [0.25, 0.25, 0.75]);
+        assert!(close(out[0], 0.75) && close(out[1], 0.25), "{out:?}");
+        // White and black keep their lightness.
+        assert!(close(in_gamma(&red, [1.0; 3])[1], 1.0) && close(in_gamma(&red, [0.0; 3])[0], 0.0));
+        // Hue 120° is green; lightness still applies on top.
+        let green = Adjustment::HueSaturation {
+            hue: 120.0,
+            saturation: 1.0,
+            lightness: -0.5,
+            colorize: true,
+        };
+        let out = in_gamma(&green, [0.5; 3]);
+        assert!(
+            close(out[0], 0.0) && close(out[1], 0.5) && close(out[2], 0.0),
+            "{out:?}"
+        );
+    }
+
+    #[test]
+    fn curves_have_a_curve_per_channel_after_the_master() {
+        // Red pulled down at the midpoint; green and blue straight.
+        let c = Adjustment::Curves {
+            points: vec![[0.0, 0.0], [1.0, 1.0]],
+            channels: [
+                vec![[0.0, 0.0], [0.5, 0.25], [1.0, 1.0]],
+                vec![],
+                vec![[0.0, 0.0], [1.0, 1.0]],
+            ],
+        };
+        let out = in_gamma(&c, [0.5; 3]);
+        assert!(
+            close(out[0], 0.25) && close(out[1], 0.5) && close(out[2], 0.5),
+            "{out:?}"
+        );
+        // The master runs first: lifting 0.25 to 0.5, then red's curve.
+        let c = Adjustment::Curves {
+            points: vec![[0.0, 0.0], [0.25, 0.5], [1.0, 1.0]],
+            channels: [vec![[0.0, 0.0], [0.5, 0.25], [1.0, 1.0]], vec![], vec![]],
+        };
+        let out = in_gamma(&c, [0.25; 3]);
+        assert!(close(out[0], 0.25) && close(out[1], 0.5), "{out:?}");
+        // Straight channels compile to the single master table.
+        assert!(curve_is_identity(&[]) && curve_is_identity(&[[0.0, 0.0], [1.0, 1.0]]));
+        let plain = Adjustment::Curves {
+            points: vec![[0.0, 0.1], [1.0, 1.0]],
+            channels: [vec![], vec![[0.0, 0.0], [1.0, 1.0]], vec![]],
+        };
+        assert!(matches!(plain.compile(), CompiledAdjustment::Lut(_)));
+    }
+
+    #[test]
     fn transfer_round_trips_and_has_the_srgb_anchor_points() {
         for i in 0..=100 {
             let v = i as f32 / 100.0;
@@ -865,6 +975,7 @@ mod tests {
             hue: 120.0,
             saturation: 0.0,
             lightness: 0.0,
+            colorize: false,
         };
         let g = hs.apply([1.0, 0.0, 0.0]);
         assert!(close(g[0], 0.0) && close(g[1], 1.0) && close(g[2], 0.0), "{g:?}");
@@ -956,6 +1067,7 @@ mod tests {
         // Curve points live in the gamma domain, like the curves dialog.
         let c = Adjustment::Curves {
             points: vec![[0.0, 0.0], [0.25, 0.1], [0.75, 0.9], [1.0, 1.0]],
+            channels: Default::default(),
         };
         assert!(close(in_gamma(&c, [0.25; 3])[0], 0.1));
         assert!(close(in_gamma(&c, [0.75; 3])[0], 0.9));
@@ -967,7 +1079,10 @@ mod tests {
             prev = y;
         }
         // An empty point list is the identity.
-        let e = Adjustment::Curves { points: vec![] };
+        let e = Adjustment::Curves {
+            points: vec![],
+            channels: Default::default(),
+        };
         assert!(close(e.apply([0.4; 3])[0], 0.4));
     }
 

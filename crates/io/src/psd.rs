@@ -500,16 +500,35 @@ fn adjustment_block(adj: &Adjustment) -> Option<Vec<u8>> {
             hue,
             saturation,
             lightness,
+            colorize,
         } => {
             put_u16(&mut d, 2); // version
-            d.push(0); // colorize
+            d.push(*colorize as u8);
             d.push(0);
-            for _ in 0..3 {
-                d.extend_from_slice(&0i16.to_be_bytes()); // colorization hue/sat/light
+            // Colorization hue/sat/light, then the master hue/sat/light.
+            let light = i16_of(*lightness, 100.0, -100, 100);
+            let (colorization, master) = if *colorize {
+                (
+                    [
+                        i16_of(hue.rem_euclid(360.0), 1.0, 0, 360),
+                        i16_of(*saturation, 100.0, 0, 100),
+                        light,
+                    ],
+                    [0, 0, 0],
+                )
+            } else {
+                (
+                    [0, 25, 0],
+                    [
+                        i16_of(*hue, 1.0, -180, 180),
+                        i16_of(*saturation, 100.0, -100, 100),
+                        light,
+                    ],
+                )
+            };
+            for v in colorization.into_iter().chain(master) {
+                d.extend_from_slice(&v.to_be_bytes());
             }
-            d.extend_from_slice(&i16_of(*hue, 1.0, -180, 180).to_be_bytes());
-            d.extend_from_slice(&i16_of(*saturation, 100.0, -100, 100).to_be_bytes());
-            d.extend_from_slice(&i16_of(*lightness, 100.0, -100, 100).to_be_bytes());
             // Six hextant records: ranges then settings (all neutral).
             let ranges: [[i16; 4]; 6] = [
                 [315, 345, 15, 45],
@@ -567,28 +586,41 @@ fn adjustment_block(adj: &Adjustment) -> Option<Vec<u8>> {
             }
             b"levl"
         }
-        Adjustment::Curves { points } => {
-            d.push(0); // padding
-            put_u16(&mut d, 1); // version
-            put_u32(&mut d, 1); // channel bitmask: composite only
-            let mut pts: Vec<[f32; 2]> = points.clone();
-            if pts.is_empty() {
-                pts = vec![[0.0, 0.0], [1.0, 1.0]];
+        Adjustment::Curves { points, channels } => {
+            // Channel 0 is the composite, 1-3 are R, G and B; straight
+            // channel curves are left out.
+            let mut curves: Vec<(u16, Vec<[f32; 2]>)> = vec![(0, points.clone())];
+            for (i, c) in channels.iter().enumerate() {
+                if !lumenply_doc::adjust::curve_is_identity(c) {
+                    curves.push((i as u16 + 1, c.clone()));
+                }
             }
-            let write_points = |d: &mut Vec<u8>| {
+            for (_, pts) in &mut curves {
+                if pts.is_empty() {
+                    *pts = vec![[0.0, 0.0], [1.0, 1.0]];
+                }
+            }
+            let write_points = |d: &mut Vec<u8>, pts: &[[f32; 2]]| {
                 put_u16(d, pts.len().min(19) as u16);
                 for p in pts.iter().take(19) {
                     put_u16(d, i16_of(p[1], 255.0, 0, 255) as u16); // output
                     put_u16(d, i16_of(p[0], 255.0, 0, 255) as u16); // input
                 }
             };
-            write_points(&mut d);
+            d.push(0); // not a lookup map
+            put_u16(&mut d, 1); // version
+            put_u32(&mut d, curves.iter().fold(0, |m, (id, _)| m | 1 << id));
+            for (_, pts) in &curves {
+                write_points(&mut d, pts);
+            }
             // Trailing "Crv " section that newer readers expect.
             d.extend_from_slice(b"Crv ");
             put_u16(&mut d, 4);
-            put_u32(&mut d, 1);
-            put_u16(&mut d, 0); // channel id: composite
-            write_points(&mut d);
+            put_u32(&mut d, curves.len() as u32);
+            for (id, pts) in &curves {
+                put_u16(&mut d, *id);
+                write_points(&mut d, pts);
+            }
             b"curv"
         }
         Adjustment::ColorBalance {
@@ -786,15 +818,24 @@ fn parse_adjustment(key: &[u8], data: &[u8]) -> Result<Option<Adjustment>, PsdEr
             if version != 2 {
                 return Ok(None);
             }
-            d.skip(2)?; // colorize + pad
-            d.skip(6)?; // colorization values
-            let h = d.i16()?;
-            let s = d.i16()?;
-            let l = d.i16()?;
-            Adjustment::HueSaturation {
-                hue: h as f32,
-                saturation: f(s, 100.0),
-                lightness: f(l, 100.0),
+            let colorize = d.u8()? != 0;
+            d.skip(1)?;
+            let (ch, cs, cl) = (d.i16()?, d.i16()?, d.i16()?);
+            let (h, s, l) = (d.i16()?, d.i16()?, d.i16()?);
+            if colorize {
+                Adjustment::HueSaturation {
+                    hue: ch as f32,
+                    saturation: f(cs, 100.0),
+                    lightness: f(cl, 100.0),
+                    colorize: true,
+                }
+            } else {
+                Adjustment::HueSaturation {
+                    hue: h as f32,
+                    saturation: f(s, 100.0),
+                    lightness: f(l, 100.0),
+                    colorize: false,
+                }
             }
         }
         b"levl" => {
@@ -839,23 +880,66 @@ fn parse_adjustment(key: &[u8], data: &[u8]) -> Result<Option<Adjustment>, PsdEr
             }
         }
         b"curv" => {
-            d.skip(1)?;
-            let version = d.u16()?;
-            if version != 1 {
+            // The undocumented lookup-table form is not supported.
+            if d.u8()? != 0 {
+                return Ok(None);
+            }
+            if d.u16()? != 1 {
                 return Ok(None);
             }
             let mask = d.u32()?;
-            if mask & 1 == 0 {
-                return Ok(None); // no composite curve
+            let read_points = |d: &mut Rd| -> Result<Vec<[f32; 2]>, PsdError> {
+                let n = (d.u16()? as usize).min(256);
+                let mut points = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let out = d.u16()? as f32 / 255.0;
+                    let input = d.u16()? as f32 / 255.0;
+                    points.push([input, out]);
+                }
+                Ok(points)
+            };
+            // Channel 0 is the composite, 1-3 are R, G and B.
+            let mut curves: [Vec<[f32; 2]>; 4] = Default::default();
+            for id in 0..32u32 {
+                if mask & (1 << id) != 0 {
+                    let pts = read_points(&mut d)?;
+                    if let Some(slot) = curves.get_mut(id as usize) {
+                        *slot = pts;
+                    }
+                }
             }
-            let n = d.u16()? as usize;
-            let mut points = Vec::with_capacity(n);
-            for _ in 0..n {
-                let out = d.u16()? as f32 / 255.0;
-                let input = d.u16()? as f32 / 255.0;
-                points.push([input, out]);
+            // The "Crv " section names each curve's channel explicitly.
+            if d.pos + 10 <= data.len() && d.bytes(4)? == b"Crv " {
+                let _version = d.u16()?;
+                let count = d.u32()?.min(64);
+                let mut extra: [Vec<[f32; 2]>; 4] = Default::default();
+                let mut ok = true;
+                for _ in 0..count {
+                    let Ok(id) = d.u16() else {
+                        ok = false;
+                        break;
+                    };
+                    let Ok(pts) = read_points(&mut d) else {
+                        ok = false;
+                        break;
+                    };
+                    if let Some(slot) = extra.get_mut(id as usize) {
+                        *slot = pts;
+                    }
+                }
+                if ok {
+                    curves = extra;
+                }
             }
-            Adjustment::Curves { points }
+            let [points, r, g, b] = curves;
+            Adjustment::Curves {
+                points: if points.is_empty() {
+                    vec![[0.0, 0.0], [1.0, 1.0]]
+                } else {
+                    points
+                },
+                channels: [r, g, b],
+            }
         }
         b"blnc" => {
             let mut tones = [[0f32; 3]; 3];
@@ -1492,7 +1576,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 if rd.bytes(4)? != b"8BIM" {
                     return Err(PsdError::Corrupt("layer record signature".into()));
                 }
-                let key = rd.bytes(4)?.to_vec();
+                let mut key = rd.bytes(4)?.to_vec();
                 let opacity = rd.u8()? as f32 / 255.0;
                 let clipping = rd.u8()?;
                 let flags = rd.u8()?;
@@ -1567,6 +1651,11 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         b"lsct" => {
                             let mut d = Rd::new(data);
                             section = d.u32()?;
+                            // A group's real blend mode (Pass Through
+                            // included) lives here; the record says "norm".
+                            if data.len() >= 12 && &data[4..8] == b"8BIM" {
+                                key = data[8..12].to_vec();
+                            }
                         }
                         b"lspf" => {
                             let mut d = Rd::new(data);
@@ -2359,6 +2448,20 @@ mod tests {
         ));
         let grp = &back.layers()[1];
         assert!(grp.pass_through, "the 'pass' blend key round-trips");
+        // Photoshop writes "norm" in a group's record and its real mode in
+        // the section divider block; the divider wins.
+        let mut bytes = std::fs::read(&path).unwrap();
+        let at = bytes
+            .windows(8)
+            .position(|w| w == b"8BIMpass")
+            .expect("record key");
+        bytes[at + 4..at + 8].copy_from_slice(b"norm");
+        assert!(
+            bytes.windows(8).any(|w| w == b"8BIMpass"),
+            "the divider still says pass"
+        );
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(load(&path).unwrap().value.layers()[1].pass_through);
         let kids: Vec<&str> = grp.children().unwrap().iter().map(|l| l.name.as_str()).collect();
         assert_eq!(kids, ["Red square", "Hidden"]);
         let red = &grp.children().unwrap()[0];
@@ -2403,6 +2506,89 @@ mod tests {
     }
 
     #[test]
+    fn colorize_survives_the_trip() {
+        let mut doc = Document::new(8, 8);
+        doc.add_pixel_layer("bg");
+        doc.add_adjustment(Adjustment::HueSaturation {
+            hue: 200.0,
+            saturation: 0.4,
+            lightness: -0.1,
+            colorize: true,
+        });
+        let path = temp("colorize.psd");
+        save(&path, &doc).unwrap();
+        let back = load(&path).unwrap().value;
+        let _ = std::fs::remove_file(&path);
+        let LayerContent::Adjustment(Adjustment::HueSaturation {
+            hue,
+            saturation,
+            lightness,
+            colorize,
+        }) = back.layers()[1].content
+        else {
+            panic!("hue/saturation lost");
+        };
+        assert!(colorize);
+        assert_eq!((hue, saturation, lightness), (200.0, 0.4, -0.1));
+    }
+
+    #[test]
+    fn curves_keep_their_channel_curves_both_ways() {
+        let mut doc = Document::new(8, 8);
+        doc.add_pixel_layer("bg");
+        let curves = Adjustment::Curves {
+            points: vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]],
+            channels: [
+                vec![[0.0, 0.0], [0.4, 0.2], [1.0, 1.0]],
+                vec![],
+                vec![[0.0, 0.1], [1.0, 0.9]],
+            ],
+        };
+        doc.add_adjustment(curves);
+        let path = temp("curves-rgb.psd");
+        save(&path, &doc).unwrap();
+        // For checking with an independent reader (psd-tools).
+        if let Ok(dir) = std::env::var("LUMENPLY_KEEP_PSD") {
+            let _ = std::fs::copy(&path, format!("{dir}/curves-rgb.psd"));
+        }
+        let back = load(&path).unwrap().value;
+        let _ = std::fs::remove_file(&path);
+        let LayerContent::Adjustment(Adjustment::Curves { points, channels }) = &back.layers()[1].content
+        else {
+            panic!("curves lost");
+        };
+        let q = |v: f32| (v * 255.0).round() / 255.0;
+        assert_eq!(points, &vec![[0.0, 0.0], [q(0.5), q(0.6)], [1.0, 1.0]]);
+        assert_eq!(channels[0], vec![[0.0, 0.0], [q(0.4), q(0.2)], [1.0, 1.0]]);
+        assert!(channels[1].is_empty(), "a straight green stays out");
+        assert_eq!(channels[2], vec![[0.0, q(0.1)], [1.0, q(0.9)]]);
+        // Photoshop's own layout for channel-only curves: no composite bit.
+        let mut d = vec![0u8];
+        d.extend_from_slice(&1u16.to_be_bytes());
+        d.extend_from_slice(&0b1110u32.to_be_bytes());
+        // R straight, G lifted to 51 at black, B down to 204 at white;
+        // each point is (output, input).
+        for curve in [
+            [(0u16, 0u16), (255, 255)],
+            [(51, 0), (255, 255)],
+            [(0, 0), (204, 255)],
+        ] {
+            d.extend_from_slice(&2u16.to_be_bytes());
+            for (out, inp) in curve {
+                d.extend_from_slice(&out.to_be_bytes());
+                d.extend_from_slice(&inp.to_be_bytes());
+            }
+        }
+        let Some(Adjustment::Curves { points, channels }) = parse_adjustment(b"curv", &d).unwrap() else {
+            panic!("channel-only curves are supported");
+        };
+        assert_eq!(points, vec![[0.0, 0.0], [1.0, 1.0]]);
+        assert_eq!(channels[0], vec![[0.0, 0.0], [1.0, 1.0]]);
+        assert_eq!(channels[1], vec![[0.0, 0.2], [1.0, 1.0]]);
+        assert_eq!(channels[2], vec![[0.0, 0.0], [1.0, 0.8]]);
+    }
+
+    #[test]
     fn adjustment_layers_survive_the_trip() {
         let mut doc = Document::new(8, 8);
         doc.add_pixel_layer("bg");
@@ -2415,6 +2601,7 @@ mod tests {
                 hue: 40.0,
                 saturation: 0.3,
                 lightness: -0.2,
+                colorize: false,
             },
             Adjustment::Levels {
                 in_black: 0.1,
@@ -2437,6 +2624,7 @@ mod tests {
             },
             Adjustment::Curves {
                 points: vec![[0.0, 0.0], [0.25, 0.15], [0.75, 0.85], [1.0, 1.0]],
+                channels: Default::default(),
             },
             Adjustment::ColorBalance {
                 shadows: [0.1, 0.0, -0.2],
@@ -2497,6 +2685,7 @@ mod tests {
                 hue,
                 saturation,
                 lightness,
+                colorize: false,
             } => {
                 assert!(close(*hue, 40.0) && close(*saturation, 0.3) && close(*lightness, -0.2))
             }
@@ -2521,7 +2710,7 @@ mod tests {
             _ => panic!("levels lost"),
         }
         match &got[3] {
-            Adjustment::Curves { points } => {
+            Adjustment::Curves { points, .. } => {
                 assert_eq!(points.len(), 4);
                 assert!(close(points[1][0], 0.25) && close(points[1][1], 0.15));
             }

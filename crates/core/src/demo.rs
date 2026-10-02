@@ -70,6 +70,7 @@ pub fn build(width: u32, height: u32) -> EditResult<Editor> {
         hue: 150.0,
         saturation: 0.3,
         lightness: 0.0,
+        colorize: false,
     }))?;
     let adj = ed.doc().layers()[3].id;
     let mut mask = Mask::hide_all();
@@ -82,6 +83,7 @@ pub fn build(width: u32, height: u32) -> EditResult<Editor> {
     // A gentle S-curve on top of everything, for contrast.
     ed.execute(&AddAdjustmentLayer::new(Adjustment::Curves {
         points: vec![[0.0, 0.0], [0.25, 0.2], [0.75, 0.8], [1.0, 1.0]],
+        channels: Default::default(),
     }))?;
     Ok(ed)
 }

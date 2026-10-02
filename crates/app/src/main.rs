@@ -1509,6 +1509,7 @@ fn adjustment_presets() -> Vec<(&'static str, Adjustment)> {
             "Curves",
             Adjustment::Curves {
                 points: vec![[0.0, 0.0], [1.0, 1.0]],
+                channels: Default::default(),
             },
         ),
         (
@@ -1532,6 +1533,7 @@ fn adjustment_presets() -> Vec<(&'static str, Adjustment)> {
                 hue: 0.0,
                 saturation: 0.0,
                 lightness: 0.0,
+                colorize: false,
             },
         ),
         ("Color Balance", Adjustment::color_balance_default()),
