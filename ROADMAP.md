@@ -197,7 +197,10 @@ None of these could be tested in the container.
 - [ ] Packaging: Windows installer, signed macOS app, Flatpak; nightly builds from CI
 - [x] Project name: **Lumenply** (brand assets in img/; crates, CLI, titles,
       `.lumen` extension and `~/.lumenply` all renamed; legacy `.nge` loads)
-- [ ] Trademark search; full GPLv3 text in `LICENSE`; CLA bot
+- [~] Full GPLv3 text now in `LICENSE`. A preliminary web search (Oct 2025)
+      found no "Lumenply" mark; the closest is "LUMENLY" (US filing, 2023,
+      lighting fixtures — a different class). A proper clearance search
+      before wide publication, and a CLA bot, remain open
 - [ ] User documentation and a website
 
 ---
