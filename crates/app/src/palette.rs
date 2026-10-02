@@ -224,8 +224,28 @@ impl App {
                     ("Quick mask", "Q"),
                     ("Pan", "Space + drag, scroll"),
                     ("Zoom at the pointer", "Alt + scroll, pinch"),
-                    ("Commit / cancel (crop, transform, text)", "Enter  /  Esc"),
+                    ("Commit / cancel (crop, transform)", "Enter  /  Esc"),
                     ("Add to / subtract from a selection", "Shift  /  Alt"),
+                ] {
+                    row(ui, what, keys);
+                }
+                section_title(ui, "TYPING ON THE CANVAS");
+                let mac = cfg!(target_os = "macos");
+                for (what, keys) in [
+                    ("Edit the active text", "Enter (Text tool)"),
+                    ("Commit the text", "Esc  /  Cmd+Enter"),
+                    ("New line", "Enter"),
+                    (
+                        "Word / line jumps",
+                        if mac {
+                            "Alt+Arrow  /  Cmd+Arrow"
+                        } else {
+                            "Ctrl+Arrow  /  Home End"
+                        },
+                    ),
+                    ("Select word / line / all", "2 / 3 / 4 clicks"),
+                    ("Size of the selection", "Cmd+Shift+>  /  <"),
+                    ("Move the text", "Cmd + drag"),
                 ] {
                     row(ui, what, keys);
                 }
