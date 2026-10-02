@@ -1815,6 +1815,54 @@ mod tests {
     }
 
     #[test]
+    fn real_pointer_events_click_point_text_and_drag_a_box() {
+        let (mut app, ctx, _) = app();
+        let rect = ctx.read_response(app.typer.canvas_id.unwrap()).unwrap().rect;
+        let (origin, zoom) = (rect.min + app.pan, app.zoom);
+        let screen = |x: f32, y: f32| egui::pos2(origin.x + x * zoom, origin.y + y * zoom);
+        let button = |p: Pos2, pressed: bool| egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let layers = app.editor.doc().layer_count();
+        let none = egui::Modifiers::NONE;
+        // A click on empty canvas starts point text at the click.
+        let p = screen(150.0, 130.0);
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(p)], none);
+        frame(&mut app, &ctx, vec![button(p, true)], none);
+        frame(&mut app, &ctx, vec![button(p, false)], none);
+        let s = app.typer.session.as_ref().expect("editing new text");
+        assert!(s.created && s.t.box_size.is_none());
+        assert!((s.t.x - 150.0).abs() < 0.5 && (s.t.y - 130.0).abs() < 0.5);
+        frame(&mut app, &ctx, vec![egui::Event::Text("Hi".into())], none);
+        assert_eq!(app.editor.doc().layer_count(), layers + 1);
+        // A click elsewhere only commits (Photoshop): it starts nothing.
+        let (a, b) = (screen(10.0, 10.0), screen(110.0, 60.0));
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(a)], none);
+        frame(&mut app, &ctx, vec![button(a, true)], none);
+        assert!(!app.text_editing(), "the press outside committed");
+        frame(&mut app, &ctx, vec![button(a, false)], none);
+        assert!(!app.text_editing(), "and its release starts no new text");
+        assert_eq!(app.editor.doc().layer_count(), layers + 1);
+        // The next drag draws a paragraph box.
+        frame(&mut app, &ctx, vec![button(a, true)], none);
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerMoved(screen(60.0, 35.0))],
+            none,
+        );
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(b)], none);
+        frame(&mut app, &ctx, vec![button(b, false)], none);
+        let s = app.typer.session.as_ref().expect("editing the new box");
+        let [w, h] = s.t.box_size.expect("paragraph text");
+        assert!((s.t.x - 10.0).abs() < 0.5 && (s.t.y - 10.0).abs() < 0.5);
+        assert!((w - 100.0).abs() < 0.5 && (h - 50.0).abs() < 0.5, "{w} × {h}");
+    }
+
+    #[test]
     fn box_handles_resize_the_paragraph_while_editing() {
         let (mut app, ctx, _) = app();
         app.begin_new_text(&ctx, 10.0, 10.0, Some([100.0, 60.0]));
