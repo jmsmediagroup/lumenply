@@ -7,7 +7,7 @@
 //! Colours travel as 16-bit sRGB (Photoshop's colour space 0, RGB);
 //! gradient locations are 0..4096, percentages are whole numbers.
 
-use lumenply_doc::{Adjustment, Gradient, GradientStop};
+use lumenply_doc::{Adjustment, Fill, Gradient, GradientStop, GradientStyle};
 
 use super::{put_u16, put_u32, Rd};
 use crate::{linear_to_srgb_f, srgb_to_linear_f};
@@ -283,6 +283,430 @@ pub(super) fn parse_adjustment(key: &[u8], data: &[u8]) -> Option<Adjustment> {
         }
         _ => return None,
     })
+}
+
+// ---- Action descriptors (fill layers) ----------------------------------------------
+//
+// Solid Color (`SoCo`) and Gradient (`GdFl`) fill layers store their
+// settings as version-16 action descriptors. This is a small, complete
+// codec for the value types those blocks use; unknown types end a read.
+
+/// One descriptor value.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Val {
+    Long(i32),
+    Doub(f64),
+    Bool(bool),
+    Text(String),
+    /// Enumerated: (type id, value id).
+    Enum(Vec<u8>, Vec<u8>),
+    /// Unit float: (unit, value), e.g. `#Ang`, `#Prc`.
+    Unit([u8; 4], f64),
+    Obj(Desc),
+    List(Vec<Val>),
+}
+
+/// A descriptor: class id and keyed items, in order.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Desc {
+    pub class: Vec<u8>,
+    pub items: Vec<(Vec<u8>, Val)>,
+}
+
+impl Desc {
+    fn new(class: &[u8]) -> Self {
+        Desc {
+            class: class.to_vec(),
+            items: Vec::new(),
+        }
+    }
+
+    fn with(mut self, key: &[u8], v: Val) -> Self {
+        self.items.push((key.to_vec(), v));
+        self
+    }
+
+    fn get(&self, key: &[u8]) -> Option<&Val> {
+        self.items.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    fn num(&self, key: &[u8]) -> Option<f64> {
+        match self.get(key)? {
+            Val::Long(v) => Some(*v as f64),
+            Val::Doub(v) | Val::Unit(_, v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    fn obj(&self, key: &[u8]) -> Option<&Desc> {
+        match self.get(key)? {
+            Val::Obj(d) => Some(d),
+            _ => None,
+        }
+    }
+}
+
+fn put_key(d: &mut Vec<u8>, key: &[u8]) {
+    // Four-character ids are written with a zero length.
+    put_u32(d, if key.len() == 4 { 0 } else { key.len() as u32 });
+    d.extend_from_slice(key);
+}
+
+fn put_unicode(d: &mut Vec<u8>, s: &str) {
+    let units: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+    put_u32(d, units.len() as u32);
+    for u in units {
+        put_u16(d, u);
+    }
+}
+
+fn put_desc(d: &mut Vec<u8>, desc: &Desc) {
+    put_unicode(d, "");
+    put_key(d, &desc.class);
+    put_u32(d, desc.items.len() as u32);
+    for (k, v) in &desc.items {
+        put_key(d, k);
+        put_val(d, v);
+    }
+}
+
+fn put_val(d: &mut Vec<u8>, v: &Val) {
+    match v {
+        Val::Long(x) => {
+            d.extend_from_slice(b"long");
+            d.extend_from_slice(&x.to_be_bytes());
+        }
+        Val::Doub(x) => {
+            d.extend_from_slice(b"doub");
+            d.extend_from_slice(&x.to_be_bytes());
+        }
+        Val::Bool(b) => {
+            d.extend_from_slice(b"bool");
+            d.push(u8::from(*b));
+        }
+        Val::Text(s) => {
+            d.extend_from_slice(b"TEXT");
+            put_unicode(d, s);
+        }
+        Val::Enum(t, e) => {
+            d.extend_from_slice(b"enum");
+            put_key(d, t);
+            put_key(d, e);
+        }
+        Val::Unit(u, x) => {
+            d.extend_from_slice(b"UntF");
+            d.extend_from_slice(u);
+            d.extend_from_slice(&x.to_be_bytes());
+        }
+        Val::Obj(o) => {
+            d.extend_from_slice(b"Objc");
+            put_desc(d, o);
+        }
+        Val::List(items) => {
+            d.extend_from_slice(b"VlLs");
+            put_u32(d, items.len() as u32);
+            for it in items {
+                put_val(d, it);
+            }
+        }
+    }
+}
+
+/// A version-16 descriptor block body.
+pub(super) fn descriptor_block(desc: &Desc) -> Vec<u8> {
+    let mut d = Vec::new();
+    put_u32(&mut d, 16);
+    put_desc(&mut d, desc);
+    d
+}
+
+fn read_key(d: &mut Rd) -> Option<Vec<u8>> {
+    let n = d.u32().ok()? as usize;
+    let n = if n == 0 { 4 } else { n.min(1024) };
+    Some(d.bytes(n).ok()?.to_vec())
+}
+
+fn read_unicode(d: &mut Rd) -> Option<String> {
+    let n = (d.u32().ok()? as usize).min(1 << 16);
+    let mut units = Vec::with_capacity(n);
+    for _ in 0..n {
+        units.push(d.u16().ok()?);
+    }
+    while units.last() == Some(&0) {
+        units.pop();
+    }
+    Some(String::from_utf16_lossy(&units))
+}
+
+fn read_desc(d: &mut Rd, depth: usize) -> Option<Desc> {
+    if depth > 16 {
+        return None;
+    }
+    read_unicode(d)?;
+    let class = read_key(d)?;
+    let count = d.u32().ok()? as usize;
+    let mut items = Vec::with_capacity(count.min(64));
+    for _ in 0..count.min(4096) {
+        let key = read_key(d)?;
+        let ty: [u8; 4] = d.bytes(4).ok()?.try_into().ok()?;
+        items.push((key, read_val(d, &ty, depth)?));
+    }
+    Some(Desc { class, items })
+}
+
+fn read_val(d: &mut Rd, ty: &[u8; 4], depth: usize) -> Option<Val> {
+    Some(match ty {
+        b"long" => Val::Long(d.i32().ok()?),
+        b"doub" => Val::Doub(f64::from_be_bytes(d.bytes(8).ok()?.try_into().ok()?)),
+        b"bool" => Val::Bool(d.u8().ok()? != 0),
+        b"TEXT" => Val::Text(read_unicode(d)?),
+        b"enum" => Val::Enum(read_key(d)?, read_key(d)?),
+        b"UntF" => {
+            let u: [u8; 4] = d.bytes(4).ok()?.try_into().ok()?;
+            Val::Unit(u, f64::from_be_bytes(d.bytes(8).ok()?.try_into().ok()?))
+        }
+        b"Objc" | b"GlbO" => Val::Obj(read_desc(d, depth + 1)?),
+        b"VlLs" => {
+            let n = d.u32().ok()? as usize;
+            let mut v = Vec::with_capacity(n.min(256));
+            for _ in 0..n.min(4096) {
+                let t: [u8; 4] = d.bytes(4).ok()?.try_into().ok()?;
+                v.push(read_val(d, &t, depth + 1)?);
+            }
+            Val::List(v)
+        }
+        // Raw data: skipped, kept as an empty text.
+        b"tdta" => {
+            let n = d.u32().ok()? as usize;
+            d.skip(n).ok()?;
+            Val::Text(String::new())
+        }
+        _ => return None,
+    })
+}
+
+/// Parse a version-16 descriptor block body.
+pub(super) fn parse_descriptor(data: &[u8]) -> Option<Desc> {
+    let mut d = Rd::new(data);
+    if d.u32().ok()? != 16 {
+        return None;
+    }
+    read_desc(&mut d, 0)
+}
+
+/// An `RGBC` colour object (0..255 doubles) from straight linear RGB.
+fn rgbc(c: [f32; 3]) -> Val {
+    let v = |x: f32| Val::Doub((linear_to_srgb_f(x.clamp(0.0, 1.0)) * 255.0) as f64);
+    Val::Obj(
+        Desc::new(b"RGBC")
+            .with(b"Rd  ", v(c[0]))
+            .with(b"Grn ", v(c[1]))
+            .with(b"Bl  ", v(c[2])),
+    )
+}
+
+/// Straight linear RGB from a colour object (RGB or greyscale; other
+/// models read as mid grey).
+fn color_of(o: &Desc) -> [f32; 3] {
+    let lin = |v: f64| srgb_to_linear_f((v / 255.0).clamp(0.0, 1.0) as f32);
+    match &o.class[..] {
+        b"RGBC" => [
+            lin(o.num(b"Rd  ").unwrap_or(0.0)),
+            lin(o.num(b"Grn ").unwrap_or(0.0)),
+            lin(o.num(b"Bl  ").unwrap_or(0.0)),
+        ],
+        b"Grsc" => {
+            // Grey as ink percent: 0 is white.
+            let k = 1.0 - (o.num(b"Gry ").unwrap_or(50.0) / 100.0).clamp(0.0, 1.0);
+            [srgb_to_linear_f(k as f32); 3]
+        }
+        _ => [srgb_to_linear_f(0.5); 3],
+    }
+}
+
+fn style_key(s: GradientStyle) -> &'static [u8] {
+    match s {
+        GradientStyle::Linear => b"Lnr ",
+        GradientStyle::Radial => b"Rdl ",
+        GradientStyle::Angle => b"Angl",
+        GradientStyle::Reflected => b"Rflc",
+        GradientStyle::Diamond => b"Dmnd",
+    }
+}
+
+/// The tagged-block key and payload of a fill layer.
+pub(super) fn fill_block(fill: &Fill) -> (&'static [u8; 4], Vec<u8>) {
+    match fill {
+        Fill::Solid { color } => (
+            b"SoCo",
+            descriptor_block(&Desc::new(b"null").with(b"Clr ", rgbc(*color))),
+        ),
+        Fill::Gradient {
+            gradient,
+            style,
+            angle,
+            scale,
+            reverse,
+            offset,
+        } => {
+            let stops = gradient.sorted();
+            let loc = |p: f32| Val::Long((p * LOC).round() as i32);
+            let colors = stops
+                .iter()
+                .map(|s| {
+                    Val::Obj(
+                        Desc::new(b"Clrt")
+                            .with(b"Clr ", rgbc(s.color))
+                            .with(b"Type", Val::Enum(b"Clry".to_vec(), b"UsrS".to_vec()))
+                            .with(b"Lctn", loc(s.pos))
+                            .with(b"Mdpn", Val::Long(50)),
+                    )
+                })
+                .collect();
+            let alphas = stops
+                .iter()
+                .map(|s| {
+                    Val::Obj(
+                        Desc::new(b"TrnS")
+                            .with(b"Opct", Val::Unit(*b"#Prc", (s.alpha * 100.0).round() as f64))
+                            .with(b"Lctn", loc(s.pos))
+                            .with(b"Mdpn", Val::Long(50)),
+                    )
+                })
+                .collect();
+            let grad = Desc::new(b"Grdn")
+                .with(b"Nm  ", Val::Text("Custom".into()))
+                .with(b"GrdF", Val::Enum(b"GrdF".to_vec(), b"CstS".to_vec()))
+                // Smoothness 0: straight interpolation, as we render it.
+                .with(b"Intr", Val::Doub(0.0))
+                .with(b"Clrs", Val::List(colors))
+                .with(b"Trns", Val::List(alphas));
+            let desc = Desc::new(b"null")
+                .with(b"Grad", Val::Obj(grad))
+                .with(b"Angl", Val::Unit(*b"#Ang", *angle as f64))
+                .with(b"Type", Val::Enum(b"GrdT".to_vec(), style_key(*style).to_vec()))
+                .with(b"Rvrs", Val::Bool(*reverse))
+                .with(b"Dthr", Val::Bool(false))
+                .with(b"Algn", Val::Bool(true))
+                .with(b"Scl ", Val::Unit(*b"#Prc", (*scale * 100.0) as f64))
+                .with(
+                    b"Ofst",
+                    Val::Obj(
+                        Desc::new(b"Pnt ")
+                            .with(b"Hrzn", Val::Unit(*b"#Prc", (offset[0] * 100.0) as f64))
+                            .with(b"Vrtc", Val::Unit(*b"#Prc", (offset[1] * 100.0) as f64)),
+                    ),
+                );
+            (b"GdFl", descriptor_block(&desc))
+        }
+    }
+}
+
+/// Decode a `SoCo` / `GdFl` block into a fill.
+pub(super) fn parse_fill(key: &[u8], data: &[u8]) -> Option<Fill> {
+    let desc = parse_descriptor(data)?;
+    match key {
+        b"SoCo" => Some(Fill::Solid {
+            color: color_of(desc.obj(b"Clr ")?),
+        }),
+        b"GdFl" => {
+            let grad = desc.obj(b"Grad")?;
+            let list = |k: &[u8]| match grad.get(k) {
+                Some(Val::List(v)) => v
+                    .iter()
+                    .filter_map(|x| match x {
+                        Val::Obj(o) => Some(o.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let pos = |o: &Desc| (o.num(b"Lctn").unwrap_or(0.0) as f32 / LOC).clamp(0.0, 1.0);
+            let mut stops: Vec<GradientStop> = list(b"Clrs")
+                .iter()
+                .map(|o| {
+                    let color = match o.get(b"Type") {
+                        // Foreground / background stops: black and white.
+                        Some(Val::Enum(_, e)) if e == b"FrgC" => [0.0; 3],
+                        Some(Val::Enum(_, e)) if e == b"BckC" => [1.0; 3],
+                        _ => o.obj(b"Clr ").map_or([0.5; 3], color_of),
+                    };
+                    GradientStop::new(pos(o), color)
+                })
+                .collect();
+            if stops.is_empty() {
+                stops = Gradient::default().stops;
+            }
+            // Opacity stops live on their own positions: give each colour
+            // stop the opacity there, and add a stop wherever opacity
+            // alone changes, so the transparency keeps its shape.
+            let mut alphas: Vec<(f32, f32)> = list(b"Trns")
+                .iter()
+                .map(|o| {
+                    (
+                        pos(o),
+                        (o.num(b"Opct").unwrap_or(100.0) / 100.0).clamp(0.0, 1.0) as f32,
+                    )
+                })
+                .collect();
+            alphas.sort_by(|a, b| a.0.total_cmp(&b.0));
+            if !alphas.is_empty() {
+                let colour_ramp = Gradient { stops: stops.clone() };
+                // Opacity interpolates linearly between its own stops.
+                let a_at = |p: f32| {
+                    let (first, last) = (alphas[0], alphas[alphas.len() - 1]);
+                    if p <= first.0 {
+                        return first.1;
+                    }
+                    if p >= last.0 {
+                        return last.1;
+                    }
+                    let i = alphas
+                        .iter()
+                        .position(|(q, _)| *q >= p)
+                        .unwrap_or(alphas.len() - 1);
+                    let (a, b) = (alphas[i - 1], alphas[i]);
+                    let span = (b.0 - a.0).max(1e-6);
+                    a.1 + (b.1 - a.1) * (p - a.0) / span
+                };
+                for s in &mut stops {
+                    s.alpha = a_at(s.pos);
+                }
+                for (p, a) in &alphas {
+                    if !stops.iter().any(|s| (s.pos - p).abs() < 1e-4) {
+                        let c = colour_ramp.eval_gamma(*p);
+                        stops.push(GradientStop {
+                            pos: *p,
+                            color: [c[0], c[1], c[2]].map(srgb_to_linear_f),
+                            alpha: *a,
+                        });
+                    }
+                }
+                stops.sort_by(|a, b| a.pos.total_cmp(&b.pos));
+            }
+            let style = match desc.get(b"Type") {
+                Some(Val::Enum(_, e)) => match &e[..] {
+                    b"Rdl " => GradientStyle::Radial,
+                    b"Angl" => GradientStyle::Angle,
+                    b"Rflc" => GradientStyle::Reflected,
+                    b"Dmnd" => GradientStyle::Diamond,
+                    _ => GradientStyle::Linear,
+                },
+                _ => GradientStyle::Linear,
+            };
+            let off = desc.obj(b"Ofst");
+            let pct = |o: Option<&Desc>, k: &[u8]| o.and_then(|o| o.num(k)).unwrap_or(0.0) as f32 / 100.0;
+            Some(Fill::Gradient {
+                gradient: Gradient { stops },
+                style,
+                angle: desc.num(b"Angl").unwrap_or(90.0) as f32,
+                scale: (desc.num(b"Scl ").unwrap_or(100.0) as f32 / 100.0).clamp(0.1, 10.0),
+                reverse: matches!(desc.get(b"Rvrs"), Some(Val::Bool(true))),
+                offset: [pct(off, b"Hrzn"), pct(off, b"Vrtc")],
+            })
+        }
+        _ => None,
+    }
 }
 
 /// CIE L*a*b* (D50, Photoshop's Lab) to straight linear sRGB, clipped.

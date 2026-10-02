@@ -172,9 +172,16 @@ fn write_layer<W: Write + std::io::Seek>(
                 layer.name
             ));
         }
-        LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) => {
+        LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) | LayerContent::Fill(_) => {
             if matches!(layer.content, LayerContent::Text(_)) {
                 warnings.push(format!("text layer '{}' was exported as pixels", layer.name));
+            }
+            if let LayerContent::Fill(f) = &layer.content {
+                warnings.push(format!(
+                    "fill layer '{}' ({}) was exported as pixels",
+                    layer.name,
+                    f.fill.name()
+                ));
             }
             if matches!(layer.content, LayerContent::Smart(_)) {
                 warnings.push(format!("smart object '{}' was exported as pixels", layer.name));

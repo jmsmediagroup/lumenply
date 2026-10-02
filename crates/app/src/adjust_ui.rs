@@ -6,7 +6,7 @@
 use super::*;
 use crate::color_picker::{format_hex, paint_swatch, picker_popup, Placement};
 use lumenply_doc::adjust::SELECTIVE_FAMILIES;
-use lumenply_doc::{Gradient, GradientStop};
+use lumenply_doc::{Fill, Gradient, GradientStop, GradientStyle};
 use lumenply_io::{linear_to_srgb_f, srgb_to_linear_f};
 
 /// What an editor did this frame: `changed` edits the document (coalesced),
@@ -308,6 +308,93 @@ pub(crate) fn gradient_editor(ui: &mut egui::Ui, salt: u64, g: &mut Gradient, al
 }
 
 impl App {
+    /// Layer ▸ New fill layer: a solid fill in the foreground colour, or a
+    /// foreground → background gradient, above the active layer (masked
+    /// by the selection, if any).
+    pub(crate) fn add_fill_layer(&mut self, gradient: bool) {
+        let fill = if gradient {
+            Fill::gradient(Gradient::two(self.brush_rgb, self.bg_rgb))
+        } else {
+            Fill::Solid {
+                color: self.brush_rgb,
+            }
+        };
+        let new_id = self.editor.doc().next_id();
+        let mut cmd = AddFillLayer::new(fill);
+        cmd.above = self.active;
+        self.run(&cmd);
+        self.set_active(Some(new_id));
+        self.fix_active();
+    }
+
+    /// Properties of a fill layer: its kind, then the colour or the
+    /// gradient with its style, angle, scale and direction.
+    pub(crate) fn fill_ui(&mut self, ui: &mut egui::Ui, id: LayerId, mut fill: Fill) {
+        let before = fill.clone();
+        let mut finished = false;
+        ui.horizontal(|ui| {
+            row_label(ui, "Fill", LABEL_W);
+            let mut grad = matches!(fill, Fill::Gradient { .. });
+            if segmented(ui, &mut grad, &[(false, "Solid color"), (true, "Gradient")]) {
+                fill = match &fill {
+                    Fill::Solid { color } => Fill::gradient(Gradient::two(*color, [1.0; 3])),
+                    Fill::Gradient { gradient, .. } => Fill::Solid {
+                        color: gradient.sorted()[0].color,
+                    },
+                };
+                finished = true;
+            }
+        });
+        match &mut fill {
+            Fill::Solid { color } => {
+                ui.horizontal(|ui| {
+                    row_label(ui, "Color", LABEL_W);
+                    let mut srgb = color.map(linear_to_srgb_f);
+                    let r = crate::color_picker::color_edit_button_rgb(ui, &mut srgb);
+                    if r.changed() {
+                        *color = srgb.map(srgb_to_linear_f);
+                    }
+                    finished |= r.drag_stopped() || (r.changed() && !r.dragged());
+                });
+            }
+            Fill::Gradient {
+                gradient,
+                style,
+                angle,
+                scale,
+                reverse,
+                offset: _,
+            } => {
+                finished |= gradient_editor(ui, id, gradient, true).finished;
+                let current = style.name();
+                combo_row(ui, "Style", ("fill-style", id), current, |ui| {
+                    for s in GradientStyle::ALL {
+                        if ui.selectable_label(*style == s, s.name()).clicked() {
+                            *style = s;
+                            finished = true;
+                        }
+                    }
+                });
+                finished |= slider_row(ui, "Angle", angle, -180.0..=180.0, "°");
+                finished |= slider_row_scaled(ui, "Scale", scale, 0.1..=1.5, 100.0, "%");
+                if check(ui, reverse, "Reverse").changed() {
+                    finished = true;
+                }
+            }
+        }
+        if fill != before {
+            self.run_coalescing(&SetFill { layer: id, fill }, &format!("fill-{id}"));
+        }
+        if finished && !crate::color_picker::is_dragging(ui.ctx()) {
+            self.editor.end_coalescing();
+        }
+        ui.label(
+            RichText::new("Covers the canvas; mask it to shape it.")
+                .small()
+                .color(MUTED),
+        );
+    }
+
     /// Screenshot tokens for this area (`adj:...`): `adj:add=<name>` adds
     /// the adjustment preset of that name (slugged: `gradient-map`) above
     /// the active layer; `adj:gradient=<n>` sets the active gradient map
@@ -331,6 +418,105 @@ impl App {
         let set = |app: &mut App, layer: LayerId, adjustment: Adjustment| {
             app.run(&SetAdjustment { layer, adjustment });
         };
+        // Fill layers: `adj:fill=solid|gradient` adds one;
+        // `adj:fillgrad=<n>` gives the active gradient fill preset `n`,
+        // `adj:fillstyle=<style>` its style, `adj:fillfade` fades its end
+        // stop to transparent.
+        let fill_now = self
+            .active_layer()
+            .and_then(|l| l.fill_layer())
+            .map(|f| f.fill.clone());
+        let set_fill = |app: &mut App, f: Fill| {
+            if let Some(layer) = app.active {
+                app.run(&SetFill { layer, fill: f });
+            }
+        };
+        match (key, fill_now) {
+            ("fill", _) => {
+                self.add_fill_layer(arg == "gradient");
+                return true;
+            }
+            (
+                "fillgrad",
+                Some(Fill::Gradient {
+                    style,
+                    angle,
+                    scale,
+                    reverse,
+                    offset,
+                    ..
+                }),
+            ) => {
+                if let Some((_, gradient)) = Gradient::presets().into_iter().nth(n) {
+                    set_fill(
+                        self,
+                        Fill::Gradient {
+                            gradient,
+                            style,
+                            angle,
+                            scale,
+                            reverse,
+                            offset,
+                        },
+                    );
+                }
+                return true;
+            }
+            (
+                "fillstyle",
+                Some(Fill::Gradient {
+                    gradient,
+                    angle,
+                    scale,
+                    reverse,
+                    offset,
+                    ..
+                }),
+            ) => {
+                if let Some(style) = GradientStyle::ALL.into_iter().find(|s| slug(s.name()) == arg) {
+                    set_fill(
+                        self,
+                        Fill::Gradient {
+                            gradient,
+                            style,
+                            angle,
+                            scale,
+                            reverse,
+                            offset,
+                        },
+                    );
+                }
+                return true;
+            }
+            (
+                "fillfade",
+                Some(Fill::Gradient {
+                    mut gradient,
+                    style,
+                    angle,
+                    scale,
+                    reverse,
+                    offset,
+                }),
+            ) => {
+                if let Some(s) = gradient.stops.iter_mut().max_by(|a, b| a.pos.total_cmp(&b.pos)) {
+                    s.alpha = 0.0;
+                }
+                set_fill(
+                    self,
+                    Fill::Gradient {
+                        gradient,
+                        style,
+                        angle,
+                        scale,
+                        reverse,
+                        offset,
+                    },
+                );
+                return true;
+            }
+            _ => {}
+        }
         match (key, current) {
             ("add", _) => {
                 if let Some((_, a)) = adjustment_presets()

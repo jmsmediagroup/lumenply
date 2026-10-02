@@ -115,6 +115,8 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Actual pixels", "actual"),
     ("Show or hide the history strip", "toggle-history"),
     ("About Lumenply", "about"),
+    ("New fill layer: solid color", "fill-solid"),
+    ("New fill layer: gradient", "fill-gradient"),
 ];
 
 /// The id of the destructive filter dialog for a filter kind.
@@ -424,8 +426,12 @@ impl App {
                 _ => None,
             },
             "unclip" if !layer.is_some_and(|l| l.clip) => Some("This layer is not clipped"),
-            "rasterize" if !layer.is_some_and(|l| l.smart_layer().is_some() || l.text_layer().is_some()) => {
-                Some("Select a smart object or text layer first")
+            "rasterize"
+                if !layer.is_some_and(|l| {
+                    l.smart_layer().is_some() || l.text_layer().is_some() || l.fill_layer().is_some()
+                }) =>
+            {
+                Some("Select a smart object, text or fill layer first")
             }
             _ => None,
         }
@@ -538,6 +544,7 @@ impl App {
                     self.run(&RasterizeLayer { layer });
                 }
             }
+            "fill-solid" | "fill-gradient" => self.add_fill_layer(id == "fill-gradient"),
             "delete-layer" => self.delete_active(),
             "layer-up" => self.reorder_active(1),
             "layer-down" => self.reorder_active(-1),
@@ -641,7 +648,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 64); // + zoom in, zoom out, history strip
+        assert_eq!(n, 66); // + new solid colour and gradient fill layers
     }
 
     #[test]

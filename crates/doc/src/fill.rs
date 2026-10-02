@@ -77,8 +77,13 @@ impl Fill {
     }
 
     pub fn gradient_default() -> Fill {
+        Fill::gradient(Gradient::default())
+    }
+
+    /// A linear, bottom-to-top gradient fill at 100% scale.
+    pub fn gradient(gradient: Gradient) -> Fill {
         Fill::Gradient {
-            gradient: Gradient::default(),
+            gradient,
             style: GradientStyle::Linear,
             angle: 90.0,
             scale: 1.0,

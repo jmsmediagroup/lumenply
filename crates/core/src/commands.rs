@@ -9,6 +9,8 @@ use lumenply_tiles::{Affine, Raster, Rect, Rgba, TileStore};
 
 use crate::{Command, EditError, EditResult};
 
+pub use crate::fill_cmds::{AddFillLayer, SetFill};
+
 /// Add an empty pixel layer (or one filled from a raster) on top of the stack.
 pub struct AddPixelLayer {
     pub name: String,
@@ -254,6 +256,7 @@ impl Command for RasterizeLayer {
     }
 
     fn apply(&self, doc: &mut Document) -> EditResult {
+        let (w, h) = (doc.width, doc.height);
         let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
         let store = match &mut l.content {
             LayerContent::Text(t) => {
@@ -264,6 +267,10 @@ impl Command for RasterizeLayer {
                 .cache
                 .take()
                 .unwrap_or_else(|| lumenply_render::transform_store(&sm.source, &sm.transform)),
+            LayerContent::Fill(f) => match f.cache.take() {
+                Some(c) => c,
+                None => lumenply_render::fill::render_fill(&f.fill, Rect::new(0, 0, w, h), false),
+            },
             _ => {
                 return Err(EditError::Invalid(format!(
                     "layer {} cannot be rasterized",

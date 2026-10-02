@@ -134,8 +134,10 @@ impl App {
                     | LayerContent::Text(_)
                     | LayerContent::Smart(_)
                     | LayerContent::Group(_)
+                    | LayerContent::Fill(_)
             );
         let is_smart = layer.smart_layer().is_some();
+        let fill = layer.fill_layer().map(|f| f.fill.clone());
         // The painted bounds' centre: transforms pivot about it.
         let pivot = layer
             .raster_store()
@@ -218,6 +220,9 @@ impl App {
         } else if let Some(adj) = adj {
             section_title(ui, &adj.name().to_uppercase());
             self.adjustment_ui(ui, id, adj);
+        } else if let Some(f) = fill {
+            section_title(ui, &f.name().to_uppercase());
+            self.fill_ui(ui, id, f);
         } else if let Some(mut f) = filt {
             section_title(ui, &format!("{} · LIVE", f.name().to_uppercase()));
             let before = f.clone();

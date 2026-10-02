@@ -8,6 +8,7 @@
 
 pub mod commands;
 pub mod demo;
+pub mod fill_cmds;
 
 use lumenply_doc::{Document, LayerId};
 
@@ -119,6 +120,11 @@ pub fn compact_storage(doc: &mut Document) {
                     c.compact();
                 }
             }
+            lumenply_doc::LayerContent::Fill(f) => {
+                if let Some(c) = f.cache.as_mut() {
+                    c.compact();
+                }
+            }
             _ => {}
         }
         if let Some(m) = l.mask.as_mut() {
@@ -159,7 +165,8 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn new(doc: Document) -> Self {
+    pub fn new(mut doc: Document) -> Self {
+        lumenply_render::fill::refresh_stale(&mut doc);
         Editor {
             doc,
             undo: Vec::new(),
@@ -207,6 +214,7 @@ impl Editor {
         if self.coalesce_key.as_deref() == Some(key) {
             let mut next = self.doc.clone();
             cmd.apply(&mut next)?;
+            lumenply_render::fill::refresh_stale(&mut next);
             compact_storage(&mut next);
             self.last_affected = cmd.affected(&self.doc);
             self.last_target = cmd.target_layer();
@@ -235,6 +243,8 @@ impl Editor {
     fn push_command(&mut self, cmd: &dyn Command) -> EditResult {
         let mut next = self.doc.clone();
         cmd.apply(&mut next)?;
+        // Fill layers follow canvas size changes (crop, resize, rotate).
+        lumenply_render::fill::refresh_stale(&mut next);
         compact_storage(&mut next);
         self.last_affected = cmd.affected(&self.doc);
         self.last_target = cmd.target_layer();

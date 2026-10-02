@@ -488,6 +488,9 @@ pub enum LayerContent {
     /// A smart object: untouched source pixels plus a cumulative
     /// transform, re-rendered from the source on every change.
     Smart(SmartLayer),
+    /// A solid colour or gradient over the whole canvas, composited like
+    /// pixels from its derived cache (see [`fill`]).
+    Fill(FillLayer),
 }
 
 /// Non-destructive pixels: the source never changes; edits compose into
@@ -574,6 +577,26 @@ impl Layer {
             LayerContent::Pixel(s) => Some(s),
             LayerContent::Text(t) => t.cache.as_ref(),
             LayerContent::Smart(s) => s.cache.as_ref(),
+            LayerContent::Fill(f) => f.cache.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn fill(id: LayerId, fill: Fill) -> Self {
+        let name = fill.name().to_string();
+        Layer::with_content(id, name, LayerContent::Fill(FillLayer::new(fill)))
+    }
+
+    pub fn fill_layer(&self) -> Option<&FillLayer> {
+        match &self.content {
+            LayerContent::Fill(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn fill_layer_mut(&mut self) -> Option<&mut FillLayer> {
+        match &mut self.content {
+            LayerContent::Fill(f) => Some(f),
             _ => None,
         }
     }

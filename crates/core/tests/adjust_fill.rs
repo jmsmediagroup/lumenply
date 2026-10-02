@@ -2,11 +2,16 @@
 //! through the editor: added and edited by commands, composited with exact
 //! expected colours, undone.
 
-use lumenply_core::commands::{AddAdjustmentLayer, AddPixelLayer, SetAdjustment};
+use lumenply_core::commands::{
+    AddAdjustmentLayer, AddFillLayer, AddPixelLayer, RasterizeLayer, ResizeCanvas, SetAdjustment,
+    SetBlendMode, SetClipped, SetFill, SetOpacity, SetSelection,
+};
 use lumenply_core::Editor;
 use lumenply_doc::adjust::{srgb_decode, srgb_encode};
-use lumenply_doc::{Adjustment, Document, Gradient, LayerContent, LayerId};
-use lumenply_tiles::{Raster, Rgba};
+use lumenply_doc::{
+    Adjustment, BlendMode, Document, Fill, Gradient, GradientStyle, LayerContent, LayerId, Selection,
+};
+use lumenply_tiles::{Raster, Rect, Rgba};
 
 fn close(a: f32, b: f32) -> bool {
     (a - b).abs() < 3e-3
@@ -118,4 +123,128 @@ fn mixer_filter_and_selective_layers_composite_exact_colours() {
         ed.doc().layer(id).unwrap().content,
         LayerContent::Adjustment(Adjustment::SelectiveColor { .. })
     ));
+}
+
+// ---- Fill layers -----------------------------------------------------------------
+
+fn same(a: [f32; 4], b: [f32; 4]) -> bool {
+    a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4)
+}
+
+/// Straight gamma colour and alpha of the composite at `(x, y)`.
+fn at(ed: &Editor, x: i32, y: i32) -> [f32; 4] {
+    let [r, g, b, a] = lumenply_render::composite(ed.doc()).get_pixel(x, y).to_straight();
+    [srgb_encode(r), srgb_encode(g), srgb_encode(b), a]
+}
+
+#[test]
+fn solid_fill_covers_the_canvas_and_takes_the_selection_as_mask() {
+    let mut ed = editor_with([0.5; 3]);
+    ed.execute(&SetSelection {
+        selection: Some(Selection::rect(Rect::new(0, 0, 2, 4))),
+    })
+    .unwrap();
+    let red = Fill::Solid {
+        color: [1.0, 0.0, 0.0],
+    };
+    ed.execute(&AddFillLayer::new(red)).unwrap();
+    let id = top_id(&ed);
+    let l = ed.doc().layer(id).unwrap();
+    assert_eq!(l.name, "Color Fill");
+    assert!(l.mask.is_some(), "the selection became the mask");
+    // Inside the selection: red; outside: the grey below.
+    assert!(same(at(&ed, 1, 1), [1.0, 0.0, 0.0, 1.0]), "{:?}", at(&ed, 1, 1));
+    let out = at(&ed, 3, 1);
+    assert!(close(out[0], 0.5) && close(out[1], 0.5), "{out:?}");
+
+    // Multiply at 50%: red × grey is (grey, 0, 0) in linear light, mixed
+    // halfway with the grey itself.
+    ed.execute(&SetBlendMode {
+        layer: id,
+        blend: BlendMode::Multiply,
+    })
+    .unwrap();
+    ed.execute(&SetOpacity {
+        layer: id,
+        opacity: 0.5,
+    })
+    .unwrap();
+    let grey = srgb_decode(0.5);
+    let p = lumenply_render::composite(ed.doc()).get_pixel(1, 1);
+    assert!(close(p.r, grey) && close(p.g, grey / 2.0), "{p:?}");
+
+    // Editing the colour re-renders; undo brings the red back.
+    ed.execute(&SetFill {
+        layer: id,
+        fill: Fill::Solid {
+            color: [0.0, 0.0, 1.0],
+        },
+    })
+    .unwrap();
+    let p = lumenply_render::composite(ed.doc()).get_pixel(1, 1);
+    assert!(close(p.b, grey) && close(p.r, grey / 2.0), "{p:?}");
+    ed.undo();
+    let p = lumenply_render::composite(ed.doc()).get_pixel(1, 1);
+    assert!(close(p.r, grey) && close(p.b, grey / 2.0), "{p:?}");
+}
+
+#[test]
+fn gradient_fill_spans_the_canvas_and_follows_canvas_changes() {
+    let mut ed = Editor::new(Document::new(100, 10));
+    ed.execute(&AddFillLayer::new(Fill::Gradient {
+        gradient: Gradient::default(),
+        style: GradientStyle::Linear,
+        angle: 0.0,
+        scale: 1.0,
+        reverse: false,
+        offset: [0.0, 0.0],
+    }))
+    .unwrap();
+    // Black on the left, white on the right, sRGB 0.495 at x = 49.
+    assert!(at(&ed, 0, 5)[0] < 0.01);
+    assert!(close(at(&ed, 49, 5)[0], 0.495), "{:?}", at(&ed, 49, 5));
+    assert!(at(&ed, 99, 5)[0] > 0.99);
+    // A wider canvas re-spans the ramp: x = 99 is now the middle.
+    ed.execute(&ResizeCanvas {
+        width: 200,
+        height: 10,
+        anchor: (0.0, 0.0),
+    })
+    .unwrap();
+    let f = ed.doc().layers()[0].fill_layer().unwrap();
+    assert_eq!(f.cache_canvas, (200, 10));
+    assert!(close(at(&ed, 99, 5)[0], 0.4975), "{:?}", at(&ed, 99, 5));
+    assert!(at(&ed, 199, 5)[0] > 0.99);
+
+    // Rasterizing keeps exactly the rendered pixels.
+    let before = lumenply_render::composite(ed.doc());
+    let id = ed.doc().layers()[0].id;
+    ed.execute(&RasterizeLayer { layer: id }).unwrap();
+    assert!(ed.doc().layers()[0].pixels().is_some());
+    let after = lumenply_render::composite(ed.doc());
+    for x in [0, 50, 120, 199] {
+        assert_eq!(before.get_pixel(x, 3), after.get_pixel(x, 3), "x = {x}");
+    }
+}
+
+#[test]
+fn fill_clipped_to_a_layer_paints_only_inside_it() {
+    // Base: opaque pixels on the left half only.
+    let mut ed = Editor::new(Document::new(4, 4));
+    let raster = Raster::filled(2, 4, Rgba::new(1.0, 1.0, 1.0, 1.0));
+    ed.execute(&AddPixelLayer::from_raster("Base", raster, 0, 0))
+        .unwrap();
+    let mut add = AddFillLayer::new(Fill::Solid {
+        color: [0.0, 1.0, 0.0],
+    });
+    add.mask_selection = false;
+    ed.execute(&add).unwrap();
+    let id = top_id(&ed);
+    ed.execute(&SetClipped {
+        layer: id,
+        clip: true,
+    })
+    .unwrap();
+    assert!(same(at(&ed, 1, 1), [0.0, 1.0, 0.0, 1.0]), "{:?}", at(&ed, 1, 1));
+    assert_eq!(at(&ed, 3, 1)[3], 0.0, "nothing outside the base");
 }

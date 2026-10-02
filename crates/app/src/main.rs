@@ -1612,6 +1612,12 @@ mod a11y_tests {
             check(&mut app, &format!("{name} adjustment layer"));
             app.run_menu_action("undo");
         }
+        for (name, id) in [("solid", "fill-solid"), ("gradient", "fill-gradient")] {
+            app.run_menu_action(id);
+            assert!(app.active_layer().unwrap().fill_layer().is_some());
+            check(&mut app, &format!("{name} fill layer"));
+            app.run_menu_action("undo");
+        }
         for (name, f) in filter_presets() {
             app.add_filter_layer(f.clone());
             check(&mut app, &format!("{name} filter layer"));

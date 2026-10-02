@@ -981,9 +981,25 @@ fn collect_records(
         });
         let mask_enabled = l.mask.as_ref().is_some_and(|m| m.enabled);
         match &l.content {
-            LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) => {
+            LayerContent::Pixel(_)
+            | LayerContent::Text(_)
+            | LayerContent::Smart(_)
+            | LayerContent::Fill(_) => {
                 let owned_store;
+                // A fill layer carries its settings block next to its
+                // rendered pixels, so readers without fills still see it.
+                let mut blocks = Vec::new();
                 let store: &TileStore = match &l.content {
+                    LayerContent::Fill(f) => {
+                        let (key, data) = extra::fill_block(&f.fill);
+                        blocks.push(additional_block(key, &data));
+                        owned_store = f
+                            .cache
+                            .clone()
+                            .filter(|_| f.cache_canvas == (canvas.w, canvas.h))
+                            .unwrap_or_else(|| lumenply_render::fill::render_fill(&f.fill, canvas, false));
+                        &owned_store
+                    }
                     LayerContent::Pixel(s) => s,
                     LayerContent::Text(t) => {
                         warnings.push(format!(
@@ -1049,7 +1065,7 @@ fn collect_records(
                     l.visible,
                     mask,
                     mask_enabled,
-                    vec![],
+                    blocks,
                 ));
             }
             LayerContent::Group(children) => {
@@ -1251,6 +1267,8 @@ struct RawLayer {
     section: u32, // 0 none, 1/2 group open, 3 close
     is_adjustment: bool,
     adjustment: Option<Adjustment>,
+    /// A Solid Color or Gradient fill layer's settings.
+    fill: Option<lumenply_doc::Fill>,
 }
 
 /// Largest dimension the PSD v1 format allows for the canvas, a layer or a
@@ -1389,6 +1407,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let mut section = 0u32;
                 let mut is_adjustment = false;
                 let mut adjustment = None;
+                let mut fill = None;
                 while rd.pos + 12 <= extra_end {
                     let sig = rd.bytes(4)?;
                     if sig != b"8BIM" && sig != b"8B64" {
@@ -1433,9 +1452,14 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                             let mut d = Rd::new(data);
                             section = d.u32()?;
                         }
+                        b"SoCo" | b"GdFl" => match extra::parse_fill(&k, data) {
+                            Some(f) => fill = Some(f),
+                            // An unreadable fill keeps its rendered pixels.
+                            None => warnings.push(format!("fill layer '{name}': settings not readable")),
+                        },
                         b"levl" | b"curv" | b"brit" | b"CgEd" | b"hue2" | b"hue " | b"blnc" | b"blwh"
                         | b"expA" | b"vibA" | b"thrs" | b"post" | b"nvrt" | b"phfl" | b"mixr" | b"clrL"
-                        | b"grdm" | b"selc" | b"SoCo" | b"GdFl" | b"PtFl" => {
+                        | b"grdm" | b"selc" | b"PtFl" => {
                             is_adjustment = true;
                             if adjustment.is_none() {
                                 adjustment = parse_adjustment(&k, data)?;
@@ -1461,6 +1485,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         section,
                         is_adjustment,
                         adjustment,
+                        fill,
                     },
                     chans,
                 ));
@@ -1621,6 +1646,19 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     }
                     continue;
                 }
+                if let Some(fill) = rl.fill.clone() {
+                    // The cache renders below, once every layer is in.
+                    let id = doc.alloc_id();
+                    let mut l = Layer::fill(id, fill);
+                    l.name = rl.name.clone();
+                    l.blend = rl.blend;
+                    l.clip = rl.clip;
+                    l.opacity = rl.opacity;
+                    l.visible = rl.visible;
+                    l.mask = build_mask(&rl);
+                    stack.last_mut().expect("root").push(l);
+                    continue;
+                }
                 let id = doc.alloc_id();
                 let mut l = Layer::pixel(id, rl.name.clone());
                 l.blend = rl.blend;
@@ -1672,6 +1710,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     for l in top {
         doc.add_layer(l);
     }
+    lumenply_render::fill::refresh_stale(&mut doc);
     Ok(Report { value: doc, warnings })
 }
 

@@ -458,6 +458,10 @@ impl App {
                 }
             }
         });
+        menu(ui, "New fill layer", |ui| {
+            self.act(ui, "Solid color", "fill-solid");
+            self.act(ui, "Gradient", "fill-gradient");
+        });
         menu_separator(ui);
         self.act(ui, "Rename", "rename");
         self.act(ui, "Delete layer", "delete-layer");
@@ -506,7 +510,7 @@ impl App {
         };
         let group = l.children().is_some();
         let pixel = l.pixels().is_some();
-        let rasterizable = l.smart_layer().is_some() || l.text_layer().is_some();
+        let rasterizable = l.smart_layer().is_some() || l.text_layer().is_some() || l.fill_layer().is_some();
         let clip = l.clip;
         let mask = l.mask.as_ref().map(|m| m.enabled);
         self.act(ui, "Rename", "rename");
