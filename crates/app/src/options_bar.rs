@@ -8,10 +8,18 @@ impl App {
             .exact_height(42.0)
             .frame(bar_frame())
             .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().slider_width = 110.0;
+                // Narrower windows get shorter sliders, a mode menu instead
+                // of a row of mode buttons, and hints moved into tooltips;
+                // whatever still doesn't fit scrolls sideways.
+                let tier = Tier::for_width(ui.available_width());
+                bar_scroll(ui, |ui| {
+                    ui.spacing_mut().slider_width = tier.slider_w();
                     if let Some(mut x) = self.xform.clone() {
-                        ui.label(RichText::new("Free Transform").strong());
+                        ui.label(
+                            RichText::new("Free Transform")
+                                .family(egui::FontFamily::Name("semibold".into()))
+                                .color(TEXT),
+                        );
                         ui.separator();
                         // Editable numbers; the canvas handles drive the
                         // same fields. In perspective mode the corners are
@@ -30,27 +38,21 @@ impl App {
                             let mut sy = x.sy * 100.0;
                             let mut rot = x.angle.to_degrees();
                             let mut skew = x.shear.atan().to_degrees();
-                            ui.label(RichText::new("W").color(MUTED));
-                            let c1 = ui
-                                .add(egui::DragValue::new(&mut sx).speed(1.0).suffix("%"))
-                                .changed();
-                            ui.label(RichText::new("H").color(MUTED));
-                            let c2 = ui
-                                .add(egui::DragValue::new(&mut sy).speed(1.0).suffix("%"))
-                                .changed();
-                            ui.label(RichText::new("Rotate").color(MUTED));
-                            let c3 = ui
-                                .add(egui::DragValue::new(&mut rot).speed(0.5).suffix("°"))
-                                .changed();
-                            ui.label(RichText::new("Skew").color(MUTED));
-                            let c4 = ui
-                                .add(
-                                    egui::DragValue::new(&mut skew)
-                                        .speed(0.5)
-                                        .range(-80.0..=80.0)
-                                        .suffix("°"),
-                                )
-                                .changed();
+                            let field = |ui: &mut egui::Ui, label: &str, dv: egui::DragValue| {
+                                ui.label(RichText::new(label).color(MUTED));
+                                num_field(ui, dv.fixed_decimals(1), 70.0).changed()
+                            };
+                            let c1 = field(ui, "W", egui::DragValue::new(&mut sx).speed(1.0).suffix("%"));
+                            let c2 = field(ui, "H", egui::DragValue::new(&mut sy).speed(1.0).suffix("%"));
+                            let c3 = field(ui, "Rotate", egui::DragValue::new(&mut rot).speed(0.5).suffix("°"));
+                            let c4 = field(
+                                ui,
+                                "Skew",
+                                egui::DragValue::new(&mut skew)
+                                    .speed(0.5)
+                                    .range(-80.0..=80.0)
+                                    .suffix("°"),
+                            );
                             if c1 || c2 || c3 || c4 {
                                 x.sx = (sx / 100.0).clamp(-50.0, 50.0);
                                 x.sy = (sy / 100.0).clamp(-50.0, 50.0);
@@ -87,26 +89,41 @@ impl App {
                             self.xform = Some(x.clone());
                         }
                         ui.separator();
-                        if ui.button("Apply   Enter").clicked() {
+                        if ui
+                            .add(primary_button("Apply").shortcut_text("Enter"))
+                            .on_hover_text("Commit the transform (Enter)")
+                            .clicked()
+                        {
                             self.commit_free_transform();
                         }
-                        if ui.button("Cancel   Esc").clicked() {
+                        if ui
+                            .add(footer_button("Cancel").shortcut_text("Esc"))
+                            .on_hover_text("Drop the transform (Esc)")
+                            .clicked()
+                        {
                             self.cancel_free_transform();
                         }
                         return;
                     }
+                    // The tool's name; its full tip (and, on narrow windows,
+                    // the usage hint the bar has no room for) on hover.
+                    let hint = tool_hint(self.tool);
+                    let tip = match (tier, hint) {
+                        (Tier::Tight, Some(h)) => format!("{}\n{h}", self.tool.tip()),
+                        _ => self.tool.tip().to_string(),
+                    };
                     ui.label(
                         RichText::new(self.tool.name())
                             .family(egui::FontFamily::Name("semibold".into()))
                             .color(TEXT),
-                    );
+                    )
+                    .on_hover_text(tip);
                     if self.quick_mask {
-                        let red = Color32::from_rgb(0xE8, 0x5D, 0x5D);
-                        let chip = RichText::new("QUICK MASK").small().color(red);
+                        let chip = RichText::new("QUICK MASK").small().color(DANGER);
                         ui.add(
                             egui::Button::new(chip)
                                 .fill(PANEL)
-                                .stroke(Stroke::new(1.0, red))
+                                .stroke(Stroke::new(1.0, DANGER))
                                 .sense(Sense::hover()),
                         )
                         .on_hover_text("Painting edits the selection (Q exits)");
@@ -124,43 +141,39 @@ impl App {
                     ui.separator();
                     match self.tool {
                         Tool::Move => {
-                            ui.label(RichText::new("Drag to move the active layer").weak());
                             if ui
-                                .add_enabled(self.active_is_pixel(), egui::Button::new("Free transform"))
+                                .add_enabled(
+                                    self.active_is_pixel(),
+                                    egui::Button::new("Free transform").shortcut_text("Ctrl+T"),
+                                )
+                                .on_hover_text("Scale, rotate, skew, distort or warp the active layer")
+                                .on_disabled_hover_text("Select a pixel layer to transform it")
                                 .clicked()
                             {
                                 self.begin_free_transform();
                             }
+                            hint_label(ui, tier, self.tool);
                         }
                         Tool::Eyedropper => {
-                            ui.label(RichText::new("Click to pick the brush colour from the image").weak());
+                            hint_label(ui, tier, self.tool);
                         }
                         Tool::Bucket | Tool::Wand => {
                             let mut tol = self.tolerance * 100.0;
-                            ui.label("Tolerance");
-                            if ui
-                                .add(egui::Slider::new(&mut tol, 0.0..=100.0).suffix("%"))
-                                .changed()
-                            {
+                            if bar_slider(ui, "Tolerance", &mut tol, 0.0..=100.0, "%", false) {
                                 self.tolerance = tol / 100.0;
                             }
-                            ui.checkbox(&mut self.contiguous, "Contiguous");
-                            ui.checkbox(&mut self.sample_merged, "Sample all layers");
+                            ui.checkbox(&mut self.contiguous, "Contiguous")
+                                .on_hover_text("Only fill/select connected pixels");
+                            ui.checkbox(&mut self.sample_merged, "All layers")
+                                .on_hover_text("Sample the merged image instead of the active layer only");
                             if self.tool == Tool::Bucket {
                                 let mut op = self.brush.color[3] * 100.0;
-                                ui.label("Opacity");
-                                if ui
-                                    .add(egui::Slider::new(&mut op, 1.0..=100.0).suffix("%"))
-                                    .changed()
-                                {
+                                if bar_slider(ui, "Opacity", &mut op, 1.0..=100.0, "%", false) {
                                     self.brush.color[3] = op / 100.0;
                                 }
                             } else {
                                 ui.separator();
-                                ui.selectable_value(&mut self.select_op, CombineOp::Replace, "New");
-                                ui.selectable_value(&mut self.select_op, CombineOp::Union, "Add");
-                                ui.selectable_value(&mut self.select_op, CombineOp::Subtract, "Subtract");
-                                ui.selectable_value(&mut self.select_op, CombineOp::Intersect, "Intersect");
+                                select_ops(ui, &mut self.select_op);
                             }
                         }
                         Tool::Text => {
@@ -185,32 +198,50 @@ impl App {
                             }
                         }
                         Tool::Gradient => {
-                            ui.selectable_value(&mut self.gradient_kind, GradientKind::Linear, "Linear");
-                            ui.selectable_value(&mut self.gradient_kind, GradientKind::Radial, "Radial");
+                            segmented(
+                                ui,
+                                &mut self.gradient_kind,
+                                &[(GradientKind::Linear, "Linear"), (GradientKind::Radial, "Radial")],
+                            );
                             ui.separator();
                             ui.label("From");
                             egui::color_picker::color_edit_button_rgb(ui, &mut self.brush_rgb);
                             ui.label("To");
                             egui::color_picker::color_edit_button_rgb(ui, &mut self.bg_rgb);
                             ui.checkbox(&mut self.gradient_to_transparent, "To transparent");
-                            ui.label(RichText::new("Drag on the canvas").weak());
+                            hint_label(ui, tier, self.tool);
                         }
                         Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal => {
                             if self.tool == Tool::Brush {
-                                for (m, label) in [
+                                const MODES: [(BrushMode, &str); 6] = [
                                     (BrushMode::Paint, "Paint"),
                                     (BrushMode::Dodge, "Dodge"),
                                     (BrushMode::Burn, "Burn"),
                                     (BrushMode::Smudge, "Smudge"),
                                     (BrushMode::Saturate, "Sat+"),
                                     (BrushMode::Desaturate, "Sat−"),
-                                ] {
-                                    if ui.selectable_label(self.brush.mode == m, label).clicked() {
-                                        self.brush.mode = m;
-                                    }
+                                ];
+                                if tier == Tier::Wide {
+                                    segmented(ui, &mut self.brush.mode, &MODES);
+                                } else {
+                                    // Narrow: the six modes fold into a menu.
+                                    let current = MODES
+                                        .iter()
+                                        .find(|(m, _)| *m == self.brush.mode)
+                                        .map_or("Paint", |(_, l)| *l);
+                                    egui::ComboBox::from_id_salt("brush-mode")
+                                        .selected_text(current)
+                                        .width(86.0)
+                                        .show_ui(ui, |ui| {
+                                            for (m, label) in MODES {
+                                                ui.selectable_value(&mut self.brush.mode, m, label);
+                                            }
+                                        })
+                                        .response
+                                        .on_hover_text("Brush mode");
                                 }
                                 ui.separator();
-                                self.brush_presets_ui(ui);
+                                self.brush_presets_ui(ui, tier);
                                 ui.separator();
                             }
                             if self.tool == Tool::Heal {
@@ -230,95 +261,92 @@ impl App {
                                     self.clone_picking = true;
                                 }
                                 match self.clone_source {
-                                    Some((x, y)) => ui.label(format!("Source {:.0}, {:.0}", x, y)),
-                                    None => ui.label(RichText::new("No source yet").weak()),
+                                    Some((x, y)) => ui.label(
+                                        RichText::new(format!("Source {:.0}, {:.0}", x, y)).monospace(),
+                                    ),
+                                    None => ui.label(RichText::new("No source yet").color(MUTED)),
                                 };
-                                ui.checkbox(&mut self.sample_merged, "Sample all layers");
+                                ui.checkbox(&mut self.sample_merged, "All layers")
+                                    .on_hover_text("Sample the merged image instead of the active layer only");
+                            }
+                            if self.tool == Tool::Heal || needs_source {
                                 ui.separator();
                             }
                             let mut size = self.brush.radius * 2.0;
-                            ui.label("Size");
-                            if ui
-                                .add(
-                                    egui::Slider::new(&mut size, 2.0..=400.0)
-                                        .logarithmic(true)
-                                        .suffix(" px"),
-                                )
-                                .changed()
-                            {
+                            if bar_slider(ui, "Size", &mut size, 2.0..=400.0, " px", true) {
                                 self.brush.radius = size / 2.0;
                             }
                             let mut hard = self.brush.hardness * 100.0;
-                            ui.label("Hardness");
-                            if ui
-                                .add(egui::Slider::new(&mut hard, 0.0..=100.0).suffix("%"))
-                                .changed()
-                            {
+                            if bar_slider(ui, "Hardness", &mut hard, 0.0..=100.0, "%", false) {
                                 self.brush.hardness = hard / 100.0;
                             }
                             let mut op = self.brush.color[3] * 100.0;
-                            ui.label("Opacity");
-                            if ui
-                                .add(egui::Slider::new(&mut op, 1.0..=100.0).suffix("%"))
-                                .changed()
-                            {
+                            if bar_slider(ui, "Opacity", &mut op, 1.0..=100.0, "%", false) {
                                 self.brush.color[3] = op / 100.0;
                             }
                             let mut sc = self.brush.jitter * 100.0;
-                            ui.label("Scatter");
-                            if ui
-                                .add(egui::Slider::new(&mut sc, 0.0..=100.0).suffix("%"))
-                                .changed()
-                            {
+                            if bar_slider(ui, "Scatter", &mut sc, 0.0..=100.0, "%", false) {
                                 self.brush.jitter = sc / 100.0;
                             }
                             if self.tool == Tool::Brush && self.editing_mask {
-                                if ui.small_button("White").clicked() {
+                                ui.separator();
+                                if ui
+                                    .button("White")
+                                    .on_hover_text("Paint white: reveal the layer")
+                                    .clicked()
+                                {
                                     self.brush_rgb = [1.0; 3];
                                 }
-                                if ui.small_button("Black").clicked() {
+                                if ui
+                                    .button("Black")
+                                    .on_hover_text("Paint black: hide the layer")
+                                    .clicked()
+                                {
                                     self.brush_rgb = [0.0; 3];
                                 }
                             }
                         }
                         Tool::RectSelect | Tool::EllipseSelect | Tool::Lasso | Tool::PolyLasso => {
-                            if self.tool == Tool::PolyLasso {
-                                ui.label(RichText::new("Click to add points, double-click to close").weak());
-                                if !self.lasso.is_empty() {
-                                    if ui.button("Close").clicked() {
-                                        self.finish_polygon(ctx);
-                                    }
-                                    if ui.button("Cancel").clicked() {
-                                        self.lasso.clear();
-                                    }
+                            if self.tool == Tool::PolyLasso && !self.lasso.is_empty() {
+                                if ui
+                                    .add(primary_button("Close"))
+                                    .on_hover_text("Close the polygon into a selection")
+                                    .clicked()
+                                {
+                                    self.finish_polygon(ctx);
+                                }
+                                if ui.button("Cancel").clicked() {
+                                    self.lasso.clear();
                                 }
                                 ui.separator();
                             }
-                            ui.selectable_value(&mut self.select_op, CombineOp::Replace, "New");
-                            ui.selectable_value(&mut self.select_op, CombineOp::Union, "Add");
-                            ui.selectable_value(&mut self.select_op, CombineOp::Subtract, "Subtract");
-                            ui.selectable_value(&mut self.select_op, CombineOp::Intersect, "Intersect");
+                            select_ops(ui, &mut self.select_op);
                             ui.separator();
-                            ui.label("Feather");
-                            ui.add(egui::Slider::new(&mut self.feather, 0.0..=100.0).suffix(" px"));
+                            bar_slider(ui, "Feather", &mut self.feather, 0.0..=100.0, " px", false);
                             let has_sel = self.editor.doc().selection.is_some();
-                            if ui.add_enabled(has_sel, egui::Button::new("Apply")).clicked() {
+                            if ui
+                                .add_enabled(has_sel, egui::Button::new("Apply"))
+                                .on_hover_text("Feather the current selection by this radius")
+                                .on_disabled_hover_text("Make a selection first")
+                                .clicked()
+                            {
                                 self.run(&FeatherSelection { radius: self.feather });
                             }
-                            ui.label(RichText::new("Shift adds, Alt subtracts").weak());
+                            hint_label(ui, tier, self.tool);
                         }
                         Tool::Pen => {
                             let has_path = self.editor.doc().work_path.is_some();
-                            ui.label(
-                                RichText::new("Click corners, drag curves; click the first point to close")
-                                    .weak(),
-                            );
-                            ui.separator();
+                            let on_pixels = self.active_is_pixel();
+                            let need_path = "Draw a path on the canvas first";
+                            let need_pixels = if has_path {
+                                "Select a pixel layer to paint the path onto"
+                            } else {
+                                need_path
+                            };
                             if ui
-                                .add_enabled(
-                                    has_path && self.active_is_pixel(),
-                                    egui::Button::new("Fill path"),
-                                )
+                                .add_enabled(has_path && on_pixels, egui::Button::new("Fill path"))
+                                .on_hover_text("Fill the path's area with the brush colour")
+                                .on_disabled_hover_text(need_pixels)
                                 .clicked()
                             {
                                 if let Some(layer) = self.active {
@@ -327,10 +355,9 @@ impl App {
                                 }
                             }
                             if ui
-                                .add_enabled(
-                                    has_path && self.active_is_pixel(),
-                                    egui::Button::new("Stroke path"),
-                                )
+                                .add_enabled(has_path && on_pixels, egui::Button::new("Stroke path"))
+                                .on_hover_text("Paint along the path with the current brush")
+                                .on_disabled_hover_text(need_pixels)
                                 .clicked()
                             {
                                 if let Some(layer) = self.active {
@@ -341,6 +368,8 @@ impl App {
                             }
                             if ui
                                 .add_enabled(has_path, egui::Button::new("Make selection"))
+                                .on_hover_text("Turn the closed path into a selection")
+                                .on_disabled_hover_text(need_path)
                                 .clicked()
                             {
                                 self.run(&PathToSelection {
@@ -349,6 +378,8 @@ impl App {
                             }
                             if ui
                                 .add_enabled(has_path, egui::Button::new("Clear path"))
+                                .on_hover_text("Delete the work path")
+                                .on_disabled_hover_text(need_path)
                                 .clicked()
                             {
                                 self.pen_open = false;
@@ -358,6 +389,7 @@ impl App {
                             if ui
                                 .add_enabled(has_path, egui::Button::new("Save path"))
                                 .on_hover_text("Keep a named copy in the document's Paths list")
+                                .on_disabled_hover_text(need_path)
                                 .clicked()
                             {
                                 let name = format!("Path {}", self.editor.doc().saved_paths.len() + 1);
@@ -401,9 +433,10 @@ impl App {
                                     self.run(&DeleteSavedPath { index: i });
                                 }
                             }
+                            hint_label(ui, tier, self.tool);
                         }
                         Tool::Hand => {
-                            ui.label(RichText::new("Drag to pan, scroll to zoom").weak());
+                            hint_label(ui, tier, self.tool);
                         }
                     }
                 });
@@ -411,10 +444,15 @@ impl App {
     }
 
     /// Preset dropdown + save button for the brush's shape parameters.
-    fn brush_presets_ui(&mut self, ui: &mut egui::Ui) {
+    fn brush_presets_ui(&mut self, ui: &mut egui::Ui, tier: Tier) {
+        let save = if tier == Tier::Tight {
+            "Save"
+        } else {
+            "Save preset"
+        };
         if ui
-            .button("Save preset")
-            .on_hover_text("Remember the current size, hardness, opacity, spacing and scatter")
+            .button(save)
+            .on_hover_text("Save a brush preset: the current size, hardness, opacity, spacing and scatter")
             .clicked()
         {
             let name = format!(
@@ -470,5 +508,176 @@ impl App {
             self.prefs.brush_presets.remove(i);
             self.prefs.save();
         }
+    }
+}
+
+/// How much horizontal room the options bar has.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Tier {
+    /// Everything at full size.
+    Wide,
+    /// Shorter sliders; brush modes fold into a menu.
+    Compact,
+    /// Shortest sliders; usage hints move into the tool name's tooltip.
+    Tight,
+}
+
+impl Tier {
+    fn for_width(w: f32) -> Tier {
+        if w >= 1400.0 {
+            Tier::Wide
+        } else if w >= 1100.0 {
+            Tier::Compact
+        } else {
+            Tier::Tight
+        }
+    }
+
+    fn slider_w(self) -> f32 {
+        match self {
+            Tier::Wide => 110.0,
+            Tier::Compact => 84.0,
+            Tier::Tight => 56.0,
+        }
+    }
+}
+
+/// The bar's content in a sideways scroll area (wheel scrolls it too), so
+/// no control is ever cut off; a fade marks an edge with more beyond it.
+fn bar_scroll(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    raise_controls(ui);
+    ui.style_mut().always_scroll_the_only_direction = true;
+    let out = egui::ScrollArea::horizontal()
+        .id_salt("options-scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.horizontal_centered(add);
+        });
+    let r = out.inner_rect;
+    let hidden_right = out.content_size.x - out.state.offset.x - r.width();
+    let fade = |a: egui::Pos2, b: egui::Pos2, from: Color32, to: Color32| {
+        let mut mesh = egui::Mesh::default();
+        mesh.colored_vertex(egui::pos2(a.x, r.min.y), from);
+        mesh.colored_vertex(egui::pos2(b.x, r.min.y), to);
+        mesh.colored_vertex(egui::pos2(b.x, r.max.y), to);
+        mesh.colored_vertex(egui::pos2(a.x, r.max.y), from);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        ui.painter().add(Shape::mesh(mesh));
+    };
+    if hidden_right > 1.0 {
+        fade(
+            egui::pos2(r.max.x - 32.0, 0.0),
+            egui::pos2(r.max.x, 0.0),
+            Color32::TRANSPARENT,
+            PANEL,
+        );
+    }
+    if out.state.offset.x > 1.0 {
+        fade(
+            egui::pos2(r.min.x, 0.0),
+            egui::pos2(r.min.x + 32.0, 0.0),
+            PANEL,
+            Color32::TRANSPARENT,
+        );
+    }
+}
+
+/// A slider cluster in the bar: muted label, slider, typeable mono value.
+/// Returns true when the value changed.
+fn bar_slider(
+    ui: &mut egui::Ui,
+    label: &str,
+    v: &mut f32,
+    range: RangeInclusive<f32>,
+    suffix: &str,
+    log: bool,
+) -> bool {
+    // Tighter spacing inside the cluster than between clusters.
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.label(RichText::new(label).color(MUTED));
+        let span = range.end() - range.start();
+        let a = ui
+            .add(
+                egui::Slider::new(v, range.clone())
+                    .logarithmic(log)
+                    .show_value(false),
+            )
+            .on_hover_text(label)
+            .changed();
+        let b = num_field(
+            ui,
+            egui::DragValue::new(v)
+                .range(range)
+                .speed(span / 300.0)
+                .fixed_decimals(0)
+                .suffix(suffix),
+            58.0,
+        )
+        .changed();
+        a || b
+    })
+    .inner
+}
+
+/// New / Add / Subtract / Intersect for the selection tools.
+fn select_ops(ui: &mut egui::Ui, op: &mut CombineOp) {
+    segmented(
+        ui,
+        op,
+        &[
+            (CombineOp::Replace, "New"),
+            (CombineOp::Union, "Add"),
+            (CombineOp::Subtract, "Subtract"),
+            (CombineOp::Intersect, "Intersect"),
+        ],
+    );
+}
+
+/// How to use a tool, in a phrase.
+fn tool_hint(tool: Tool) -> Option<&'static str> {
+    Some(match tool {
+        Tool::Move => "Drag to move the active layer",
+        Tool::Eyedropper => "Click to pick the brush colour from the image",
+        Tool::Gradient => "Drag on the canvas",
+        Tool::RectSelect | Tool::EllipseSelect | Tool::Lasso => "Shift adds, Alt subtracts",
+        Tool::PolyLasso => "Click to add points, double-click to close",
+        Tool::Pen => "Click corners, drag curves; click the first point to close",
+        Tool::Hand => "Drag to pan, scroll to zoom",
+        _ => return None,
+    })
+}
+
+/// The tool's usage hint at the end of the bar (on narrow windows it lives
+/// in the tool name's tooltip instead).
+fn hint_label(ui: &mut egui::Ui, tier: Tier, tool: Tool) {
+    if let (false, Some(h)) = (tier == Tier::Tight, tool_hint(tool)) {
+        ui.label(RichText::new(h).weak());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bar_tiers_follow_the_window_width() {
+        assert!(Tier::for_width(1600.0) == Tier::Wide);
+        assert!(Tier::for_width(1400.0) == Tier::Wide);
+        assert!(Tier::for_width(1399.0) == Tier::Compact);
+        assert!(Tier::for_width(1100.0) == Tier::Compact);
+        assert!(Tier::for_width(1024.0) == Tier::Tight);
+        assert_eq!(Tier::Wide.slider_w(), 110.0);
+        assert_eq!(Tier::Compact.slider_w(), 84.0);
+        assert_eq!(Tier::Tight.slider_w(), 56.0);
+    }
+
+    #[test]
+    fn hints_cover_the_tools_that_need_one() {
+        assert_eq!(tool_hint(Tool::Hand), Some("Drag to pan, scroll to zoom"));
+        assert_eq!(tool_hint(Tool::Lasso), Some("Shift adds, Alt subtracts"));
+        assert_eq!(tool_hint(Tool::Brush), None);
+        assert_eq!(tool_hint(Tool::Text), None);
     }
 }

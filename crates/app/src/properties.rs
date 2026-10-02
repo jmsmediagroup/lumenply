@@ -8,14 +8,11 @@ impl App {
         section_title(ui, "ADD ABOVE ACTIVE LAYER");
         let mut add_adj: Option<Adjustment> = None;
         let mut add_filter: Option<Filter> = None;
-        let chip = |ui: &mut egui::Ui, label: &str| {
-            ui.add(
-                egui::Button::new(RichText::new(label).size(12.0))
-                    .fill(RAISED)
-                    .stroke(Stroke::new(1.0, LINE))
-                    .min_size(egui::vec2(64.0, 24.0)),
-            )
-            .clicked()
+        // Raised by the dock's `raise_controls`, so hover and press show.
+        let chip = |ui: &mut egui::Ui, label: &str, tip: String| {
+            ui.add(egui::Button::new(RichText::new(label).size(12.0)).min_size(egui::vec2(64.0, 24.0)))
+                .on_hover_text(tip)
+                .clicked()
         };
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
@@ -26,17 +23,29 @@ impl App {
                 ("Hue/Sat", "Hue/Saturation"),
                 ("B & W", "Black & White"),
             ] {
-                if chip(ui, label) {
+                if chip(
+                    ui,
+                    label,
+                    format!("New {name} adjustment layer above the active layer"),
+                ) {
                     add_adj = adjustment_presets()
                         .into_iter()
                         .find(|(n, _)| *n == name)
                         .map(|(_, a)| a);
                 }
             }
-            if chip(ui, "Blur") {
+            if chip(
+                ui,
+                "Blur",
+                "New live Gaussian Blur layer above the active layer".into(),
+            ) {
                 add_filter = Some(Filter::GaussianBlur { radius: 8.0 });
             }
-            if chip(ui, "Sharpen") {
+            if chip(
+                ui,
+                "Sharpen",
+                "New live Sharpen layer above the active layer".into(),
+            ) {
                 add_filter = Some(Filter::Sharpen {
                     amount: 1.0,
                     radius: 2.0,
@@ -44,9 +53,7 @@ impl App {
             }
             egui::menu::menu_custom_button(
                 ui,
-                egui::Button::new(RichText::new("More...").size(12.0).color(MUTED))
-                    .fill(RAISED)
-                    .stroke(Stroke::new(1.0, LINE))
+                egui::Button::new(RichText::new("More…").size(12.0).color(MUTED))
                     .min_size(egui::vec2(64.0, 24.0)),
                 |ui| {
                     for (name, adj) in adjustment_presets() {
@@ -76,7 +83,13 @@ impl App {
     pub(crate) fn properties_ui(&mut self, ui: &mut egui::Ui) {
         let Some(id) = self.active else {
             section_title(ui, "PROPERTIES");
-            ui.label(RichText::new("No layer selected").weak());
+            ui.add_space(2.0);
+            let hint = if self.editor.doc().layer_count() == 0 {
+                "Nothing to edit yet: add a layer below."
+            } else {
+                "Select a layer to see its settings."
+            };
+            ui.label(RichText::new(hint).color(MUTED));
             return;
         };
         let Some(layer) = self.editor.doc().layer(id) else {
@@ -84,18 +97,20 @@ impl App {
         };
         let name = layer.name.clone();
         // Header: PROPERTIES on the left, a breadcrumb to the edit target
-        // ("Hiker › Mask") on the right.
+        // ("Hiker › Mask") on the right; a long name is elided, never
+        // allowed to run into the title or widen the dock.
         let on_mask = self.editing_mask && layer.mask.is_some();
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("PROPERTIES").small().strong().color(MUTED));
+            ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 if on_mask {
                     ui.label(RichText::new("Mask").color(ACCENT));
                     ui.label(RichText::new("›").color(MUTED));
                 }
-                ui.label(RichText::new(&name).color(TEXT));
+                ui.add(egui::Label::new(RichText::new(&name).color(TEXT)).truncate());
             });
         });
         let blend = layer.blend;
@@ -116,26 +131,10 @@ impl App {
             _ => None,
         };
         let mut opacity = layer.opacity * 100.0;
-        ui.label(RichText::new(name).strong());
-
-        let r = ui
-            .horizontal(|ui| {
-                ui.add_sized(
-                    [70.0, 18.0],
-                    egui::Label::new(RichText::new("Opacity").color(MUTED)),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_sized(
-                        [58.0, 18.0],
-                        egui::Label::new(RichText::new(format!("{opacity:.0}%")).monospace().color(TEXT)),
-                    );
-                    ui.spacing_mut().slider_width = (ui.available_width() - 10.0).max(60.0);
-                    ui.add(egui::Slider::new(&mut opacity, 0.0..=100.0).show_value(false))
-                })
-                .inner
-            })
-            .inner;
-        if r.changed() {
+        let before = opacity;
+        ui.add_space(2.0);
+        let finished = slider_row(ui, "Opacity", &mut opacity, 0.0..=100.0, "%");
+        if opacity != before {
             self.run_coalescing(
                 &SetOpacity {
                     layer: id,
@@ -144,7 +143,7 @@ impl App {
                 &format!("opacity-{id}"),
             );
         }
-        if r.drag_stopped() || (r.changed() && !r.dragged()) {
+        if finished {
             self.editor.end_coalescing();
         }
 
@@ -159,10 +158,7 @@ impl App {
             })
         };
         ui.horizontal(|ui| {
-            ui.add_sized(
-                [70.0, 18.0],
-                egui::Label::new(RichText::new("Blend").color(MUTED)),
-            );
+            row_label(ui, "Blend", LABEL_W);
             ui.spacing_mut().combo_width = ui.available_width();
             egui::ComboBox::from_id_salt("blend-mode")
                 .selected_text(sel.map_or("Pass Through".into(), title))
@@ -194,12 +190,10 @@ impl App {
             _ => {}
         }
 
-        if can_fx {
-            self.effects_ui(ui, id, effects);
-        }
+        // What this kind of layer does comes first; the (long, mostly
+        // unused) effects list folds away below it.
         if let Some(adj) = adj {
-            ui.add_space(4.0);
-            ui.label(RichText::new(adj.name()).small().strong());
+            section_title(ui, &adj.name().to_uppercase());
             self.adjustment_ui(ui, id, adj);
         } else if let Some(t) = self.active_text() {
             ui.add_space(4.0);
@@ -209,19 +203,12 @@ impl App {
                 self.run(&RasterizeLayer { layer: id });
             }
         } else if let Some(mut f) = filt {
-            ui.add_space(4.0);
-            ui.label(RichText::new(format!("{} (live)", f.name())).small().strong());
+            section_title(ui, &format!("{} · LIVE", f.name().to_uppercase()));
             let before = f.clone();
             let mut finished = false;
             match &mut f {
                 Filter::GaussianBlur { radius } | Filter::BoxBlur { radius } => {
-                    let r = ui.add(
-                        egui::Slider::new(radius, 0.5..=60.0)
-                            .logarithmic(true)
-                            .suffix(" px")
-                            .text("Radius"),
-                    );
-                    finished |= r.drag_stopped() || (r.changed() && !r.dragged());
+                    finished |= slider_row_log(ui, "Radius", radius, 0.5..=60.0, " px");
                 }
                 Filter::Sharpen { amount, radius } => {
                     finished |= slider_row(ui, "Amount", amount, 0.0..=5.0, "");
@@ -235,7 +222,11 @@ impl App {
                     finished |= slider_row(ui, "Distance", distance, 1.0..=200.0, " px");
                 }
                 Filter::Median { radius } => {
-                    finished |= slider_row(ui, "Radius", radius, 1.0..=8.0, " px");
+                    let o = RowOpts {
+                        int: true,
+                        ..RowOpts::default()
+                    };
+                    finished |= slider_row_ex(ui, "Radius", radius, 1.0..=8.0, " px", o);
                 }
                 Filter::HighPass { radius } => {
                     finished |= slider_row(ui, "Radius", radius, 0.5..=60.0, " px");
@@ -249,36 +240,46 @@ impl App {
             }
             ui.label(
                 RichText::new("Applies to everything below; the pixels stay untouched.")
-                    .weak()
-                    .small(),
+                    .small()
+                    .color(MUTED),
             );
         } else if self.active_is_pixel() {
-            ui.add_space(4.0);
-            ui.label(RichText::new("Transform").small().strong());
-            ui.add(
-                egui::Slider::new(&mut self.xform_scale, 10.0..=400.0)
-                    .suffix("%")
-                    .text("Scale"),
-            );
-            ui.add(
-                egui::Slider::new(&mut self.xform_angle, -180.0..=180.0)
-                    .suffix("°")
-                    .text("Rotate"),
-            );
+            section_title(ui, "TRANSFORM");
+            slider_row(ui, "Scale", &mut self.xform_scale, 10.0..=400.0, "%");
+            slider_row(ui, "Rotate", &mut self.xform_angle, -180.0..=180.0, "°");
+            let pending = (self.xform_scale - 100.0).abs() > 0.01 || self.xform_angle.abs() > 0.01;
             let mut apply = false;
             let mut flip = None;
             let mut free = false;
-            ui.horizontal(|ui| {
-                if ui.button("Apply").clicked() {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                if ui
+                    .add_enabled(pending, primary_button("Apply"))
+                    .on_hover_text("Scale and rotate the layer about its centre")
+                    .on_disabled_hover_text("Set a scale or angle first")
+                    .clicked()
+                {
                     apply = true;
                 }
-                if ui.button("Flip H").clicked() {
+                if ui
+                    .button("Flip H")
+                    .on_hover_text("Flip the layer horizontally")
+                    .clicked()
+                {
                     flip = Some(true);
                 }
-                if ui.button("Flip V").clicked() {
+                if ui
+                    .button("Flip V")
+                    .on_hover_text("Flip the layer vertically")
+                    .clicked()
+                {
                     flip = Some(false);
                 }
-                if ui.button("Free transform").clicked() {
+                if ui
+                    .add(egui::Button::new("Free transform…").shortcut_text("Ctrl+T"))
+                    .on_hover_text("Transform on the canvas with handles")
+                    .clicked()
+                {
                     free = true;
                 }
             });
@@ -300,14 +301,44 @@ impl App {
                 self.begin_free_transform();
             }
         }
+        if can_fx {
+            self.effects_ui(ui, id, effects);
+        }
         self.histogram_footer(ui);
+    }
+
+    /// The layer-effects section, folded by default (the header says how
+    /// many are on) so the layer's own settings stay in view.
+    fn effects_ui(&mut self, ui: &mut egui::Ui, id: LayerId, fx: lumenply_doc::LayerEffects) {
+        let on = [
+            fx.drop_shadow.is_some(),
+            fx.outer_glow.is_some(),
+            fx.inner_shadow.is_some(),
+            fx.inner_glow.is_some(),
+            fx.bevel.is_some(),
+            fx.color_overlay.is_some(),
+            fx.gradient_overlay.is_some(),
+            fx.stroke.is_some(),
+        ]
+        .into_iter()
+        .filter(|b| *b)
+        .count();
+        let title = if on > 0 {
+            format!("EFFECTS · {on} ON")
+        } else {
+            "EFFECTS".to_string()
+        };
+        ui.add_space(4.0);
+        egui::CollapsingHeader::new(RichText::new(title).small().strong().color(MUTED))
+            .id_salt("layer-effects")
+            .default_open(on > 0)
+            .show(ui, |ui| self.effects_body(ui, id, fx));
     }
 
     /// Non-destructive layer effects: toggles and parameters, coalescing
     /// into one history step per drag.
-    fn effects_ui(&mut self, ui: &mut egui::Ui, id: LayerId, mut fx: lumenply_doc::LayerEffects) {
+    fn effects_body(&mut self, ui: &mut egui::Ui, id: LayerId, mut fx: lumenply_doc::LayerEffects) {
         use lumenply_doc::{GlowFx, ShadowFx, StrokeFx};
-        section_title(ui, "EFFECTS");
         let mut changed = false;
         let mut finished = false;
         let color_btn = |ui: &mut egui::Ui, c: &mut [f32; 3]| -> bool {
@@ -334,14 +365,23 @@ impl App {
         });
         if let Some(mut sfx) = fx.drop_shadow {
             ui.horizontal(|ui| {
-                ui.add_sized(
-                    [70.0, 18.0],
-                    egui::Label::new(RichText::new("Offset").color(MUTED)),
-                );
-                let rx = ui.add(egui::DragValue::new(&mut sfx.dx).speed(0.5).range(-200.0..=200.0));
-                let ry = ui.add(egui::DragValue::new(&mut sfx.dy).speed(0.5).range(-200.0..=200.0));
+                row_label(ui, "Offset", LABEL_W);
+                let field = |ui: &mut egui::Ui, v: &mut f32, axis: &str| {
+                    let dv = egui::DragValue::new(v)
+                        .speed(0.5)
+                        .range(-200.0..=200.0)
+                        .fixed_decimals(0)
+                        .prefix(axis)
+                        .suffix(" px");
+                    num_field(ui, dv, 78.0)
+                };
+                let rx = field(ui, &mut sfx.dx, "x ");
+                let ry = field(ui, &mut sfx.dy, "y ");
                 changed |= rx.changed() || ry.changed();
-                finished |= rx.drag_stopped() || ry.drag_stopped();
+                finished |= rx.drag_stopped()
+                    || ry.drag_stopped()
+                    || (rx.changed() && !rx.dragged())
+                    || (ry.changed() && !ry.dragged());
             });
             let f = slider_row(ui, "Blur", &mut sfx.blur, 0.0..=60.0, " px");
             finished |= f;
@@ -392,14 +432,23 @@ impl App {
         });
         if let Some(mut sfx) = fx.inner_shadow {
             ui.horizontal(|ui| {
-                ui.add_sized(
-                    [70.0, 18.0],
-                    egui::Label::new(RichText::new("Offset").color(MUTED)),
-                );
-                let rx = ui.add(egui::DragValue::new(&mut sfx.dx).speed(0.5).range(-200.0..=200.0));
-                let ry = ui.add(egui::DragValue::new(&mut sfx.dy).speed(0.5).range(-200.0..=200.0));
+                row_label(ui, "Offset", LABEL_W);
+                let field = |ui: &mut egui::Ui, v: &mut f32, axis: &str| {
+                    let dv = egui::DragValue::new(v)
+                        .speed(0.5)
+                        .range(-200.0..=200.0)
+                        .fixed_decimals(0)
+                        .prefix(axis)
+                        .suffix(" px");
+                    num_field(ui, dv, 78.0)
+                };
+                let rx = field(ui, &mut sfx.dx, "x ");
+                let ry = field(ui, &mut sfx.dy, "y ");
                 changed |= rx.changed() || ry.changed();
-                finished |= rx.drag_stopped() || ry.drag_stopped();
+                finished |= rx.drag_stopped()
+                    || ry.drag_stopped()
+                    || (rx.changed() && !rx.dragged())
+                    || (ry.changed() && !ry.dragged());
             });
             let f = slider_row(ui, "Blur", &mut sfx.blur, 0.0..=60.0, " px");
             finished |= f;
@@ -582,12 +631,11 @@ impl App {
                 out_white,
                 channels,
             } => {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.levels_ch, 0, "Master");
-                    ui.selectable_value(&mut self.levels_ch, 1, "R");
-                    ui.selectable_value(&mut self.levels_ch, 2, "G");
-                    ui.selectable_value(&mut self.levels_ch, 3, "B");
-                });
+                segmented(
+                    ui,
+                    &mut self.levels_ch,
+                    &[(0, "Master"), (1, "Red"), (2, "Green"), (3, "Blue")],
+                );
                 let (ib, iw, g, ob, ow) = match self.levels_ch {
                     0 => (in_black, in_white, gamma, out_black, out_white),
                     n => {
@@ -630,19 +678,24 @@ impl App {
                 highlights,
                 preserve_luminosity,
             } => {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.cb_tone, 0, "Shadows");
-                    ui.selectable_value(&mut self.cb_tone, 1, "Midtones");
-                    ui.selectable_value(&mut self.cb_tone, 2, "Highlights");
-                });
+                segmented(
+                    ui,
+                    &mut self.cb_tone,
+                    &[(0, "Shadows"), (1, "Midtones"), (2, "Highlights")],
+                );
                 let tone = match self.cb_tone {
                     0 => shadows,
                     1 => midtones,
                     _ => highlights,
                 };
-                finished |= slider_row(ui, "Cyan ↔ Red", &mut tone[0], -1.0..=1.0, "");
-                finished |= slider_row(ui, "Magenta ↔ Green", &mut tone[1], -1.0..=1.0, "");
-                finished |= slider_row(ui, "Yellow ↔ Blue", &mut tone[2], -1.0..=1.0, "");
+                // The pair labels are longer than the usual column.
+                let o = RowOpts {
+                    label_w: 112.0,
+                    ..RowOpts::default()
+                };
+                finished |= slider_row_ex(ui, "Cyan ↔ Red", &mut tone[0], -1.0..=1.0, "", o);
+                finished |= slider_row_ex(ui, "Magenta ↔ Green", &mut tone[1], -1.0..=1.0, "", o);
+                finished |= slider_row_ex(ui, "Yellow ↔ Blue", &mut tone[2], -1.0..=1.0, "", o);
                 if ui.checkbox(preserve_luminosity, "Preserve luminosity").changed() {
                     finished = true;
                 }
@@ -656,9 +709,12 @@ impl App {
             }
             Adjustment::Posterize { levels } => {
                 let mut v = *levels as f32;
-                let r = ui.add(egui::Slider::new(&mut v, 2.0..=32.0).integer().text("Levels"));
-                *levels = v.round() as u32;
-                finished |= r.drag_stopped() || (r.changed() && !r.dragged());
+                let o = RowOpts {
+                    int: true,
+                    ..RowOpts::default()
+                };
+                finished |= slider_row_ex(ui, "Levels", &mut v, 2.0..=32.0, "", o);
+                *levels = (v.round() as u32).clamp(2, 32);
             }
         }
         if adj != before {

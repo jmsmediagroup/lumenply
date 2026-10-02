@@ -1125,25 +1125,54 @@ impl App {
 
     // ---- right panel ---------------------------------------------------------------
 
+    /// The right dock: Properties, the quick-add chips, Layers. Properties
+    /// gets whatever height Layers can spare (Layers always keeps room for
+    /// its footer and at least three rows), so on a tall window nothing
+    /// scrolls and on a short one both sections stay usable.
     fn side_panel(&mut self, ctx: &egui::Context) {
+        // Never let the dock squeeze the canvas below about 60% of the
+        // window on narrow screens.
+        let max_w = (ctx.screen_rect().width() * 0.4).max(300.0);
         egui::SidePanel::right("side")
-            .default_width(330.0)
-            .min_width(300.0)
+            .default_width(320.0)
+            .min_width(280.0)
+            .max_width(max_w)
             .frame(
                 egui::Frame::none()
                     .fill(PANEL)
                     .inner_margin(egui::Margin::symmetric(12.0, 10.0)),
             )
             .show(ctx, |ui| {
+                raise_controls(ui);
+                let rows = self.layer_rows().len().max(1) as f32;
+                let quick_id = egui::Id::new("dock-quick-add-h");
+                let quick_h = ctx.data(|d| d.get_temp::<f32>(quick_id)).unwrap_or(96.0);
+                // Layers get their full height up to ~45% of the dock (never
+                // fewer than three rows); Properties gets the rest.
+                let avail = ui.available_height();
+                let layers_full = layers::HEADER_H + rows * layers::ROW_PITCH + layers::FOOTER_H;
+                let layers_min = layers::HEADER_H + 3.0 * layers::ROW_PITCH + layers::FOOTER_H;
+                let layers_want = layers_full.min(layers_min.max(avail * 0.45));
+                let props_max = (avail - quick_h - layers_want - 24.0).max(72.0);
                 egui::ScrollArea::vertical()
                     .id_salt("props")
-                    .max_height(330.0)
+                    .max_height(props_max)
                     .auto_shrink([false, true])
-                    .show(ui, |ui| self.properties_ui(ui));
-                ui.add_space(4.0);
-                ui.separator();
-                self.quick_add_ui(ui);
+                    .show(ui, |ui| {
+                        // Keep the floating scroll bar off the values.
+                        egui::Frame::none()
+                            .inner_margin(egui::Margin {
+                                right: 8.0,
+                                ..Default::default()
+                            })
+                            .show(ui, |ui| self.properties_ui(ui));
+                    });
                 ui.add_space(2.0);
+                ui.separator();
+                let top = ui.cursor().top();
+                self.quick_add_ui(ui);
+                let h = ui.cursor().top() - top;
+                ctx.data_mut(|d| d.insert_temp(quick_id, h));
                 ui.separator();
                 self.layers_ui(ui);
             });

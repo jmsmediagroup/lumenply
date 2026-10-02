@@ -661,14 +661,20 @@ impl App {
                                 ui.close_menu();
                             }
                         });
+                        // Shrink (shorter label) rather than overlap the
+                        // document tabs on a narrow window.
+                        let room = ui.available_width() - 8.0;
+                        let (search, search_w) = if room >= 230.0 {
+                            ("Search tools, filters...   Ctrl K", 230.0)
+                        } else {
+                            ("Search...   Ctrl K", room.max(110.0))
+                        };
                         if ui
                             .add(
-                                egui::Button::new(
-                                    RichText::new("Search tools, filters...   Ctrl K").color(MUTED),
-                                )
-                                .fill(GROUND)
-                                .stroke(Stroke::new(1.0, LINE))
-                                .min_size(egui::vec2(230.0, 26.0)),
+                                egui::Button::new(RichText::new(search).color(MUTED))
+                                    .fill(GROUND)
+                                    .stroke(Stroke::new(1.0, LINE))
+                                    .min_size(egui::vec2(search_w, 26.0)),
                             )
                             .clicked()
                         {

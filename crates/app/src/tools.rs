@@ -21,7 +21,7 @@ pub(crate) enum Tool {
 }
 
 impl Tool {
-    const ALL: [Tool; 16] = [
+    pub(crate) const ALL: [Tool; 16] = [
         Tool::Move,
         Tool::RectSelect,
         Tool::EllipseSelect,
@@ -106,58 +106,133 @@ impl Tool {
     }
 }
 
+/// Rail button size, the gap between buttons, and the rail's padding.
+const BTN: f32 = 34.0;
+const GAP: f32 = 3.0;
+const PAD: f32 = 9.0;
+/// Height of a family separator.
+const SEP: f32 = 7.0;
+/// Height kept free at the foot of the rail for the colour well.
+const WELL_H: f32 = 56.0;
+
+/// Tool families, separated by a hairline on the rail: move / select /
+/// paint / type & sample / navigate.
+fn starts_family(tool: Tool) -> bool {
+    matches!(tool, Tool::RectSelect | Tool::Brush | Tool::Text | Tool::Hand)
+}
+
+/// Columns the rail needs to show every tool and the colour well in a
+/// column `height` tall: one when it fits, else two.
+fn rail_columns(height: f32) -> usize {
+    let n = Tool::ALL.len() as f32;
+    let seps = Tool::ALL.into_iter().filter(|t| starts_family(*t)).count() as f32;
+    let one_col = n * BTN + seps * SEP + (n + seps - 1.0) * GAP + WELL_H + 2.0 * PAD;
+    if height >= one_col {
+        1
+    } else {
+        2
+    }
+}
+
+/// The rail's panel width for `cols` columns of buttons.
+fn rail_width(cols: usize) -> f32 {
+    2.0 * PAD + cols as f32 * BTN + (cols as f32 - 1.0) * GAP
+}
+
+/// A hairline between tool families.
+fn rail_separator(ui: &mut egui::Ui) {
+    let w = ui.available_width();
+    let (r, _) = ui.allocate_exact_size(egui::vec2(w, SEP), Sense::hover());
+    ui.painter().hline(
+        r.min.x + 6.0..=r.max.x - 6.0,
+        r.center().y,
+        Stroke::new(1.0, LINE),
+    );
+}
+
 impl App {
+    /// The tool rail. One column when the window is tall enough; two
+    /// columns (packed in rail order) when it isn't; and a scroll area as
+    /// the last resort, so every tool stays reachable at any height.
     pub(crate) fn tool_palette(&mut self, ctx: &egui::Context) {
+        let cols = rail_columns(ctx.available_rect().height());
+        let width = rail_width(cols);
         egui::SidePanel::left("tools")
-            .exact_width(58.0)
+            .exact_width(width)
             .resizable(false)
-            .frame(egui::Frame::none().fill(PANEL).inner_margin(9.0))
+            .frame(egui::Frame::none().fill(PANEL).inner_margin(PAD))
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing.y = 4.0;
-                for tool in Tool::ALL {
-                    // A breath between tool families: move / select / paint /
-                    // type & sample / navigate.
-                    if matches!(tool, Tool::RectSelect | Tool::Brush | Tool::Text | Tool::Hand) {
-                        ui.add_space(3.0);
-                        let (r, _) = ui.allocate_exact_size(egui::vec2(36.0, 1.0), Sense::hover());
-                        ui.painter().hline(
-                            r.min.x + 6.0..=r.max.x - 6.0,
-                            r.center().y,
-                            Stroke::new(1.0, LINE),
-                        );
-                        ui.add_space(3.0);
-                    }
-                    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(36.0), Sense::click());
-                    let active = self.tool == tool;
-                    let bg = if active {
-                        ACCENT
-                    } else if resp.hovered() {
-                        Color32::from_rgb(0x32, 0x38, 0x3F)
-                    } else {
-                        PANEL
-                    };
-                    ui.painter().rect_filled(rect, 6.0, bg);
-                    let ink = if active { ACCENT_INK } else { TEXT };
-                    draw_icon(ui.painter(), rect.shrink(10.0), tool, ink);
-                    ui.painter().text(
-                        rect.right_bottom() + egui::vec2(-4.0, -2.0),
-                        Align2::RIGHT_BOTTOM,
-                        tool.key(),
-                        FontId::monospace(8.5),
-                        if active { ACCENT_INK } else { MUTED },
-                    );
-                    if resp.on_hover_text(tool.tip()).clicked() {
-                        self.tool = tool;
-                        self.lasso.clear();
-                        self.pen_open = false;
-                        self.editor.end_coalescing();
-                        if tool != Tool::Move {
-                            self.cancel_free_transform();
+                let tools_h = (ui.available_height() - WELL_H).max(BTN);
+                egui::ScrollArea::vertical()
+                    .id_salt("tool-rail")
+                    .max_height(tools_h)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
+                        if cols == 1 {
+                            for tool in Tool::ALL {
+                                if starts_family(tool) {
+                                    rail_separator(ui);
+                                }
+                                self.rail_button(ui, tool);
+                            }
+                        } else {
+                            // Two columns, packed; the select family ends a
+                            // row exactly, so it keeps its separator.
+                            for (row, pair) in Tool::ALL.chunks(2).enumerate() {
+                                if row == 3 {
+                                    rail_separator(ui);
+                                }
+                                ui.horizontal(|ui| {
+                                    for tool in pair {
+                                        self.rail_button(ui, *tool);
+                                    }
+                                });
+                            }
                         }
-                    }
-                }
-                self.color_well(ui);
+                    });
+                ui.vertical_centered(|ui| self.color_well(ui));
             });
+    }
+
+    /// One tool button: icon, shortcut letter in the corner, accent fill
+    /// when active, hover fill, keyboard focus ring.
+    fn rail_button(&mut self, ui: &mut egui::Ui, tool: Tool) {
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(BTN), Sense::hover());
+        let resp = ui.interact(rect, rail_id(tool), Sense::click());
+        let active = self.tool == tool;
+        let bg = if active {
+            ACCENT
+        } else if resp.hovered() || resp.has_focus() {
+            HOVER
+        } else {
+            PANEL
+        };
+        ui.painter().rect_filled(rect, RADIUS, bg);
+        focus_ring(ui, &resp, rect, RADIUS);
+        let ink = if active { ACCENT_INK } else { TEXT };
+        // The icon sits a touch up-left so the letter owns the corner.
+        let icon = egui::Rect::from_center_size(rect.center() - egui::vec2(1.5, 1.5), Vec2::splat(16.0));
+        draw_icon(ui.painter(), icon, tool, ink);
+        ui.painter().text(
+            rect.right_bottom() + egui::vec2(-3.5, -1.5),
+            Align2::RIGHT_BOTTOM,
+            tool.key(),
+            FontId::monospace(9.0),
+            if active { ACCENT_INK } else { MUTED },
+        );
+        resp.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, tool.name())
+        });
+        if resp.on_hover_text(tool.tip()).clicked() {
+            self.tool = tool;
+            self.lasso.clear();
+            self.pen_open = false;
+            self.editor.end_coalescing();
+            if tool != Tool::Move {
+                self.cancel_free_transform();
+            }
+        }
     }
 
     /// The foreground/background colour well at the foot of the rail:
@@ -230,6 +305,11 @@ impl App {
     }
 }
 
+/// The rail button's widget id, stable so focus can be requested on it.
+pub(crate) fn rail_id(tool: Tool) -> egui::Id {
+    egui::Id::new(("tool-rail", tool.name()))
+}
+
 /// A colour-picker popup anchored to a painted swatch.
 fn color_popup(ui: &mut egui::Ui, resp: &egui::Response, id: &str, rgb: &mut [f32; 3]) {
     let popup = ui.make_persistent_id(id);
@@ -256,197 +336,220 @@ fn color_popup(ui: &mut egui::Ui, resp: &egui::Response, id: &str, rgb: &mut [f3
     );
 }
 
+/// Draw a tool's icon into `r` (nominally 16 × 16) in ink `c`. Every
+/// icon is an outline on a 16-unit grid with the same 1.5 px stroke, so
+/// the rail reads as one family; only the gradient ramp is filled.
 pub(crate) fn draw_icon(p: &egui::Painter, r: egui::Rect, tool: Tool, c: Color32) {
-    let s = Stroke::new(1.6, c);
+    let k = r.width() / 16.0;
+    // Grid point (x, y) in 0..16 design units.
+    let g = |x: f32, y: f32| r.min + egui::vec2(x * k, y * k);
+    let s = Stroke::new(1.5, c);
+    let line = |pts: &[(f32, f32)]| Shape::line(pts.iter().map(|&(x, y)| g(x, y)).collect(), s);
+    let closed = |pts: &[(f32, f32)]| Shape::closed_line(pts.iter().map(|&(x, y)| g(x, y)).collect(), s);
     match tool {
-        Tool::Brush => {
-            p.line_segment(
-                [
-                    egui::pos2(r.min.x + 1.0, r.max.y - 1.0),
-                    egui::pos2(r.center().x + 2.0, r.center().y - 2.0),
-                ],
-                Stroke::new(3.0, c),
-            );
-            p.circle_filled(egui::pos2(r.max.x - 4.0, r.min.y + 4.0), 4.5, c);
+        Tool::Move => {
+            p.add(line(&[(8.0, 1.0), (8.0, 15.0)]));
+            p.add(line(&[(1.0, 8.0), (15.0, 8.0)]));
+            p.add(line(&[(5.8, 3.2), (8.0, 1.0), (10.2, 3.2)]));
+            p.add(line(&[(5.8, 12.8), (8.0, 15.0), (10.2, 12.8)]));
+            p.add(line(&[(3.2, 5.8), (1.0, 8.0), (3.2, 10.2)]));
+            p.add(line(&[(12.8, 5.8), (15.0, 8.0), (12.8, 10.2)]));
         }
         Tool::RectSelect => {
             let pts = [
-                r.left_top(),
-                r.right_top(),
-                r.right_bottom(),
-                r.left_bottom(),
-                r.left_top(),
+                g(1.5, 2.5),
+                g(14.5, 2.5),
+                g(14.5, 13.5),
+                g(1.5, 13.5),
+                g(1.5, 2.5),
             ];
-            p.extend(Shape::dashed_line(&pts, s, 3.0, 2.5));
+            p.extend(Shape::dashed_line(&pts, s, 2.6 * k, 2.0 * k));
         }
         Tool::EllipseSelect => {
-            p.extend(Shape::dashed_line(&ellipse_points(r, 40), s, 3.0, 2.5));
-        }
-        Tool::Pen => {
-            // A pen nib: pointed outline with a slit and an eye.
-            let tip = egui::pos2(r.center().x, r.max.y);
-            let l = egui::pos2(r.min.x + 2.0, r.min.y + 4.0);
-            let rr = egui::pos2(r.max.x - 2.0, r.min.y + 4.0);
-            let top = egui::pos2(r.center().x, r.min.y);
-            p.add(Shape::closed_line(vec![tip, l, top, rr], s));
-            let eye = egui::pos2(r.center().x, r.min.y + r.height() * 0.42);
-            p.circle_stroke(eye, 1.6, s);
-            p.line_segment([eye + egui::vec2(0.0, 1.6), tip], s);
-        }
-        Tool::Heal => {
-            // A bandaid: a diagonal capsule with two dots.
-            let c1 = r.min + egui::vec2(3.0, r.height() - 3.0);
-            let c2 = r.min + egui::vec2(r.width() - 3.0, 3.0);
-            let d = (c2 - c1).normalized();
-            let n = egui::vec2(-d.y, d.x) * 3.5;
-            p.add(Shape::closed_line(vec![c1 + n, c2 + n, c2 - n, c1 - n], s));
-            let mid = egui::pos2((c1.x + c2.x) / 2.0, (c1.y + c2.y) / 2.0);
-            p.circle_filled(mid + n * 0.45, 0.9, c);
-            p.circle_filled(mid - n * 0.45, 0.9, c);
-        }
-        Tool::Hand => {
-            let ctr = r.center();
-            let h = r.width() / 2.0;
-            for v in [
-                egui::vec2(0.0, -h),
-                egui::vec2(0.0, h),
-                egui::vec2(-h, 0.0),
-                egui::vec2(h, 0.0),
-            ] {
-                p.arrow(ctr, v, s);
-            }
-        }
-        Tool::Move => {
-            let pts = vec![
-                egui::pos2(r.min.x + 2.0, r.min.y),
-                egui::pos2(r.min.x + 2.0, r.max.y - 3.0),
-                egui::pos2(r.min.x + 7.0, r.max.y - 8.0),
-                egui::pos2(r.min.x + 10.0, r.max.y),
-                egui::pos2(r.min.x + 13.0, r.max.y - 2.0),
-                egui::pos2(r.min.x + 10.0, r.max.y - 9.0),
-                egui::pos2(r.max.x, r.max.y - 9.0),
-            ];
-            p.add(Shape::convex_polygon(pts, c, Stroke::NONE));
-        }
-        Tool::Eraser => {
-            let ctr = r.center();
-            let a = egui::pos2(ctr.x - 6.0, ctr.y + 6.0);
-            let b = egui::pos2(ctr.x + 6.0, ctr.y - 6.0);
-            p.line_segment([a, b], Stroke::new(7.0, c));
-            p.line_segment(
-                [
-                    egui::pos2(ctr.x - 8.0, ctr.y + 10.0),
-                    egui::pos2(ctr.x + 1.0, ctr.y + 10.0),
-                ],
-                s,
-            );
-        }
-        Tool::Eyedropper => {
-            let ctr = r.center();
-            p.line_segment(
-                [
-                    egui::pos2(ctr.x - 7.0, ctr.y + 7.0),
-                    egui::pos2(ctr.x + 3.0, ctr.y - 3.0),
-                ],
-                Stroke::new(2.5, c),
-            );
-            p.circle_filled(egui::pos2(ctr.x + 5.0, ctr.y - 5.0), 4.0, c);
-        }
-        Tool::Clone => {
-            let ctr = r.center();
-            p.rect_filled(
-                egui::Rect::from_center_size(egui::pos2(ctr.x, ctr.y - 6.0), egui::vec2(6.0, 8.0)),
-                2.0,
-                c,
-            );
-            p.rect_filled(
-                egui::Rect::from_center_size(egui::pos2(ctr.x, ctr.y + 1.0), egui::vec2(3.0, 6.0)),
-                0.0,
-                c,
-            );
-            p.rect_filled(
-                egui::Rect::from_center_size(egui::pos2(ctr.x, ctr.y + 7.0), egui::vec2(18.0, 6.0)),
-                2.0,
-                c,
-            );
-        }
-        Tool::Text => {
-            p.text(
-                r.center(),
-                Align2::CENTER_CENTER,
-                "T",
-                FontId::proportional(20.0),
-                c,
-            );
-        }
-        Tool::Bucket => {
-            let ctr = r.center();
-            let pts = vec![
-                egui::pos2(ctr.x - 8.0, ctr.y - 2.0),
-                egui::pos2(ctr.x + 1.0, ctr.y - 9.0),
-                egui::pos2(ctr.x + 8.0, ctr.y - 1.0),
-                egui::pos2(ctr.x - 1.0, ctr.y + 7.0),
-            ];
-            p.add(Shape::convex_polygon(pts, c, Stroke::NONE));
-            p.circle_filled(egui::pos2(ctr.x + 7.0, ctr.y + 7.0), 2.5, c);
-        }
-        Tool::Gradient => {
-            let steps = 6;
-            for i in 0..steps {
-                let t = i as f32 / (steps - 1) as f32;
-                let x0 = r.min.x + r.width() * i as f32 / steps as f32;
-                let x1 = r.min.x + r.width() * (i + 1) as f32 / steps as f32;
-                let g = (255.0 * (1.0 - t * 0.8)) as u8;
-                p.rect_filled(
-                    egui::Rect::from_min_max(egui::pos2(x0, r.min.y + 2.0), egui::pos2(x1, r.max.y - 2.0)),
-                    0.0,
-                    Color32::from_gray(g),
-                );
-            }
+            let e = egui::Rect::from_min_max(g(1.0, 2.5), g(15.0, 13.5));
+            p.extend(Shape::dashed_line(&ellipse_points(e, 40), s, 2.6 * k, 2.0 * k));
         }
         Tool::Lasso => {
-            let ctr = r.center();
-            let pts: Vec<Pos2> = (0..=24)
+            let pts: Vec<Pos2> = (0..=28)
                 .map(|i| {
-                    let t = i as f32 / 24.0 * std::f32::consts::TAU;
-                    egui::pos2(
-                        ctr.x + t.cos() * 9.0 + (t * 2.0).sin() * 2.0,
-                        ctr.y - 2.0 + t.sin() * 6.0,
-                    )
+                    let t = i as f32 / 28.0 * std::f32::consts::TAU;
+                    g(8.0 + t.cos() * 6.8, 6.5 + t.sin() * 4.6)
                 })
                 .collect();
-            p.extend(Shape::dashed_line(&pts, s, 3.0, 2.0));
-            p.line_segment(
-                [
-                    egui::pos2(ctr.x + 7.0, ctr.y + 3.0),
-                    egui::pos2(ctr.x + 4.0, ctr.y + 10.0),
-                ],
-                s,
-            );
+            p.extend(Shape::dashed_line(&pts, s, 2.6 * k, 2.0 * k));
+            // The rope's tail with its knot.
+            p.add(line(&[(5.5, 10.8), (4.5, 13.0), (6.0, 15.0)]));
         }
         Tool::PolyLasso => {
             let pts = [
-                egui::pos2(r.min.x, r.min.y + 4.0),
-                egui::pos2(r.center().x + 2.0, r.min.y),
-                egui::pos2(r.max.x, r.center().y),
-                egui::pos2(r.max.x - 6.0, r.max.y),
-                egui::pos2(r.min.x + 3.0, r.max.y - 4.0),
-                egui::pos2(r.min.x, r.min.y + 4.0),
+                g(1.5, 5.0),
+                g(9.0, 1.5),
+                g(14.5, 7.0),
+                g(10.0, 14.5),
+                g(3.5, 11.5),
+                g(1.5, 5.0),
             ];
-            p.extend(Shape::dashed_line(&pts, s, 3.0, 2.0));
+            p.extend(Shape::dashed_line(&pts, s, 2.6 * k, 2.0 * k));
         }
         Tool::Wand => {
-            let ctr = r.center();
-            p.line_segment(
-                [
-                    egui::pos2(ctr.x - 7.0, ctr.y + 7.0),
-                    egui::pos2(ctr.x + 2.0, ctr.y - 2.0),
-                ],
-                Stroke::new(2.5, c),
-            );
-            for (dx, dy) in [(6.0, -6.0), (9.0, -2.0), (3.0, -9.0)] {
-                p.circle_filled(egui::pos2(ctr.x + dx, ctr.y + dy), 1.8, c);
+            p.add(line(&[(1.5, 14.5), (9.5, 6.5)]));
+            // Sparkles: one star and two glints.
+            p.add(line(&[(12.0, 1.0), (12.0, 6.0)]));
+            p.add(line(&[(9.5, 3.5), (14.5, 3.5)]));
+            p.add(line(&[(15.0, 8.8), (15.0, 9.2)]));
+            p.add(line(&[(6.8, 1.3), (6.8, 1.7)]));
+        }
+        Tool::Brush => {
+            // Handle, ferrule, and a bristle tip sweeping to a point.
+            p.add(line(&[(14.5, 1.5), (9.0, 7.0)]));
+            p.add(closed(&[
+                (7.6, 5.9),
+                (10.1, 8.4),
+                (8.9, 11.4),
+                (5.8, 13.9),
+                (1.5, 14.5),
+                (2.3, 10.4),
+                (4.9, 7.4),
+            ]));
+        }
+        Tool::Eraser => {
+            // A tilted block with its rubber tip split off, on a baseline.
+            p.add(closed(&[(1.5, 10.0), (8.0, 3.5), (13.5, 9.0), (7.0, 15.0)]));
+            p.add(line(&[(4.7, 6.8), (10.2, 12.2)]));
+            p.add(line(&[(9.0, 15.0), (15.0, 15.0)]));
+        }
+        Tool::Clone => {
+            // A rubber stamp: knob, neck, block, pad.
+            p.circle_stroke(g(8.0, 3.5), 2.5 * k, s);
+            p.add(line(&[(6.8, 6.0), (6.8, 9.0)]));
+            p.add(line(&[(9.2, 6.0), (9.2, 9.0)]));
+            p.add(closed(&[(2.0, 9.0), (14.0, 9.0), (14.0, 12.5), (2.0, 12.5)]));
+            p.add(line(&[(3.0, 15.0), (13.0, 15.0)]));
+        }
+        Tool::Heal => {
+            // A sticking plaster: a diagonal capsule with a pad of dots.
+            let a = egui::vec2(3.5, 12.5);
+            let b = egui::vec2(12.5, 3.5);
+            let d = (b - a).normalized();
+            let n = egui::vec2(-d.y, d.x) * 3.2;
+            p.add(closed(&[
+                ((a + n).x, (a + n).y),
+                ((b + n).x, (b + n).y),
+                ((b - n).x, (b - n).y),
+                ((a - n).x, (a - n).y),
+            ]));
+            for (x, y) in [(7.0, 7.0), (9.0, 9.0), (9.0, 7.0), (7.0, 9.0)] {
+                p.circle_filled(g(x, y), 0.9 * k, c);
             }
         }
+        Tool::Bucket => {
+            // A tipped bucket pouring a drop.
+            p.add(closed(&[(1.5, 7.0), (7.0, 1.5), (12.5, 7.0), (7.0, 12.5)]));
+            p.add(line(&[(4.0, 7.0), (12.5, 7.0)]));
+            p.add(line(&[(12.5, 7.0), (14.3, 10.5)]));
+            p.circle_filled(g(14.3, 12.6), 1.4 * k, c);
+        }
+        Tool::Gradient => {
+            let well = egui::Rect::from_min_max(g(1.5, 3.5), g(14.5, 12.5));
+            let steps = 6;
+            for i in 0..steps {
+                let t = i as f32 / (steps - 1) as f32;
+                let x0 = well.min.x + well.width() * i as f32 / steps as f32;
+                let x1 = well.min.x + well.width() * (i + 1) as f32 / steps as f32;
+                let shade = (255.0 * (1.0 - t * 0.85)) as u8;
+                p.rect_filled(
+                    egui::Rect::from_min_max(egui::pos2(x0, well.min.y), egui::pos2(x1, well.max.y)),
+                    0.0,
+                    Color32::from_gray(shade),
+                );
+            }
+            p.rect_stroke(well, 1.5, s);
+        }
+        Tool::Pen => {
+            // A nib: shoulders, pointed tip, slit and breather hole.
+            p.add(closed(&[
+                (8.0, 15.0),
+                (3.0, 8.0),
+                (5.5, 3.5),
+                (10.5, 3.5),
+                (13.0, 8.0),
+            ]));
+            p.add(line(&[(8.0, 15.0), (8.0, 10.0)]));
+            p.circle_stroke(g(8.0, 8.6), 1.3 * k, s);
+            p.add(line(&[(5.5, 1.0), (10.5, 1.0)]));
+        }
+        Tool::Text => {
+            p.add(line(&[(3.0, 4.5), (3.0, 2.0), (13.0, 2.0), (13.0, 4.5)]));
+            p.add(line(&[(8.0, 2.0), (8.0, 14.5)]));
+            p.add(line(&[(5.5, 14.5), (10.5, 14.5)]));
+        }
+        Tool::Eyedropper => {
+            // A pipette: squeeze bulb, collar, glass tube, tip.
+            let a = egui::vec2(3.5, 12.5);
+            let b = egui::vec2(9.5, 6.5);
+            let d = (b - a).normalized();
+            let n = egui::vec2(-d.y, d.x) * 1.7;
+            p.add(closed(&[
+                ((a + n).x, (a + n).y),
+                ((b + n).x, (b + n).y),
+                ((b - n).x, (b - n).y),
+                ((a - n).x, (a - n).y),
+            ]));
+            p.add(line(&[(7.8, 4.6), (11.4, 8.2)]));
+            p.circle_stroke(g(12.2, 3.8), 2.4 * k, s);
+            p.add(line(&[(3.0, 13.0), (1.2, 14.8)]));
+        }
+        Tool::Hand => {
+            // An open hand: thumb, four fingers, palm.
+            p.add(line(&[
+                (5.5, 15.0),
+                (2.8, 11.2),
+                (1.4, 8.6),
+                (2.0, 7.6),
+                (3.2, 7.8),
+                (5.0, 9.8),
+                (5.0, 3.6),
+                (6.0, 2.6),
+                (7.0, 3.6),
+                (7.0, 8.0),
+                (7.0, 2.0),
+                (8.0, 1.0),
+                (9.0, 2.0),
+                (9.0, 8.0),
+                (9.0, 2.8),
+                (10.0, 1.8),
+                (11.0, 2.8),
+                (11.0, 8.4),
+                (11.0, 4.6),
+                (12.0, 3.6),
+                (13.0, 4.6),
+                (13.0, 11.0),
+                (11.8, 15.0),
+                (5.5, 15.0),
+            ]));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rail_folds_to_two_columns_when_short() {
+        // 16 buttons, 4 family separators, gaps, colour well and padding.
+        let one_col = 16.0 * BTN + 4.0 * SEP + 19.0 * GAP + WELL_H + 2.0 * PAD;
+        assert_eq!(one_col, 703.0);
+        assert_eq!(rail_columns(703.0), 1);
+        assert_eq!(rail_columns(702.0), 2);
+        assert_eq!(rail_columns(430.0), 2);
+        assert_eq!(rail_width(1), 52.0);
+        assert_eq!(rail_width(2), 89.0);
+    }
+
+    #[test]
+    fn every_tool_has_a_distinct_rail_id() {
+        let ids: std::collections::HashSet<egui::Id> = Tool::ALL.into_iter().map(rail_id).collect();
+        assert_eq!(ids.len(), 16);
     }
 }
