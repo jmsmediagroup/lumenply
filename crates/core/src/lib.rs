@@ -9,6 +9,7 @@
 pub mod commands;
 pub mod demo;
 pub mod liquify;
+pub mod quick_select;
 
 use lumenply_doc::{Document, LayerId};
 

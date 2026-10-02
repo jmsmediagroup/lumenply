@@ -13,3 +13,6 @@ lumenply-tiles.workspace = true
 lumenply-doc.workspace = true
 lumenply-render.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+image.workspace = true
