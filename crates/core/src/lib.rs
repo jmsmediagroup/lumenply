@@ -272,6 +272,31 @@ impl Editor {
         self.coalesce_key = None;
     }
 
+    /// Is `key` the open coalescing run (its edits still share the last
+    /// undo step)?
+    pub fn coalescing(&self, key: &str) -> bool {
+        self.coalesce_key.as_deref() == Some(key)
+    }
+
+    /// Abandon the open coalescing run `key`: put the document back as it
+    /// was before the run and forget the run's undo step (it leaves no redo
+    /// entry either). For edit sessions that end with nothing worth
+    /// keeping, such as new text closed before anything was typed. Returns
+    /// false, changing nothing, when `key` is not the open run.
+    pub fn discard_coalescing(&mut self, key: &str) -> bool {
+        if !self.coalescing(key) {
+            return false;
+        }
+        let Some(snap) = self.undo.pop() else {
+            return false;
+        };
+        self.coalesce_key = None;
+        self.last_target = None;
+        self.last_affected = snap.affected;
+        self.doc = snap.doc;
+        true
+    }
+
     fn push_command(&mut self, cmd: &dyn Command) -> EditResult {
         let mut next = self.doc.clone();
         cmd.apply(&mut next)?;
@@ -419,6 +444,58 @@ mod tests {
         });
         assert!(matches!(err, Err(EditError::NoLayer(42))));
         assert!(!ed.can_undo());
+    }
+
+    #[test]
+    fn discarding_a_coalesced_run_leaves_no_trace() {
+        let mut ed = Editor::new(Document::new(64, 64));
+        ed.execute(&AddPixelLayer::new("L")).unwrap();
+        let steps = ed.history().len();
+        let text = |s: &str| lumenply_doc::TextLayer::new(s, 4.0, 40.0, 20.0, [0.0, 0.0, 0.0, 1.0]);
+        let id = ed.doc().next_id();
+        ed.execute_coalescing(
+            &AddTextLayer {
+                text: text(""),
+                above: None,
+            },
+            "type",
+        )
+        .unwrap();
+        ed.execute_coalescing(
+            &SetText {
+                layer: id,
+                text: text("ab"),
+            },
+            "type",
+        )
+        .unwrap();
+        assert!(ed.coalescing("type") && !ed.coalescing("other"));
+        assert_eq!(ed.history().len(), steps + 1, "add + typing is one step");
+        assert_eq!(ed.doc().layer_count(), 2);
+
+        // Another key does nothing.
+        assert!(!ed.discard_coalescing("other"));
+        assert_eq!(ed.doc().layer_count(), 2);
+        // The open run goes away entirely: no layer, no step, no redo.
+        assert!(ed.discard_coalescing("type"));
+        assert_eq!(ed.doc().layer_count(), 1);
+        assert_eq!(ed.history().len(), steps);
+        assert!(!ed.can_redo());
+        assert!(!ed.coalescing("type"));
+        assert!(!ed.discard_coalescing("type"), "only once");
+
+        // A closed run cannot be discarded.
+        ed.execute_coalescing(
+            &AddTextLayer {
+                text: text("x"),
+                above: None,
+            },
+            "type",
+        )
+        .unwrap();
+        ed.end_coalescing();
+        assert!(!ed.discard_coalescing("type"));
+        assert_eq!(ed.doc().layer_count(), 2);
     }
 
     #[test]

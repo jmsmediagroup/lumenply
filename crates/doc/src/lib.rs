@@ -498,6 +498,18 @@ pub struct TextLayer {
     /// Extra space between glyphs, in thousandths of an em (Photoshop units).
     #[serde(default)]
     pub tracking: f32,
+    /// Paragraph (area) text: the text box's width and height in canvas
+    /// pixels. With a box, (x, y) is the box's top-left corner and lines
+    /// wrap at its width; without one (point text), (x, y) anchors the
+    /// first baseline.
+    #[serde(default)]
+    pub box_size: Option<[f32; 2]>,
+    /// Raises (positive) or lowers every glyph from its baseline, in pixels.
+    #[serde(default)]
+    pub baseline_shift: f32,
+    /// Show every letter as a capital (the stored text keeps its case).
+    #[serde(default)]
+    pub all_caps: bool,
     #[serde(skip)]
     pub cache: Option<TileStore>,
 }
@@ -510,6 +522,9 @@ pub enum TextAlign {
     Left,
     Center,
     Right,
+    /// Box text only: wrapped lines stretch to the box width (the last line
+    /// of each paragraph stays left-aligned); point text treats it as Left.
+    Justify,
 }
 
 impl PartialEq for TextLayer {
@@ -526,6 +541,9 @@ impl PartialEq for TextLayer {
             && self.italic == o.italic
             && self.align == o.align
             && self.tracking == o.tracking
+            && self.box_size == o.box_size
+            && self.baseline_shift == o.baseline_shift
+            && self.all_caps == o.all_caps
     }
 }
 
@@ -543,6 +561,9 @@ impl TextLayer {
             italic: false,
             align: TextAlign::Left,
             tracking: 0.0,
+            box_size: None,
+            baseline_shift: 0.0,
+            all_caps: false,
             cache: None,
         }
     }

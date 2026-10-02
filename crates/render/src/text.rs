@@ -2,15 +2,14 @@
 //! installed system family (resolved through `fontdb`), or a font file
 //! named by the layer. Italic uses a real italic face when the family has
 //! one and a synthetic oblique shear when it does not; bold likewise uses
-//! a real bold face or a synthetic horizontal emboldening. Lines align
-//! left, centre or right against the layer's anchor.
+//! a real bold face or a synthetic horizontal emboldening. Where each
+//! glyph goes (lines, wrapping, alignment) comes from [`crate::text_layout`].
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use fontdue::layout::{CoordinateSystem, Layout, TextStyle};
 use fontdue::Font;
-use lumenply_doc::{Layer, TextAlign, TextLayer};
+use lumenply_doc::{Layer, TextLayer};
 use lumenply_tiles::{Rgba, TileStore};
 
 static REGULAR: &[u8] = include_bytes!("../fonts/DejaVuSans.ttf");
@@ -20,22 +19,22 @@ static BOLD: &[u8] = include_bytes!("../fonts/DejaVuSans-Bold.ttf");
 pub const BUNDLED_FAMILY: &str = "DejaVu Sans";
 
 /// Shear factor for synthetic oblique (≈ 12°).
-const OBLIQUE: f32 = 0.21;
+pub(crate) const OBLIQUE: f32 = 0.21;
 
 /// Synthetic bold widens every stem by this fraction of the font size
 /// (FreeType's emboldening strength), never by less than one pixel.
-const EMBOLDEN: f32 = 1.0 / 24.0;
+pub(crate) const EMBOLDEN: f32 = 1.0 / 24.0;
 
 /// Faces at or above this weight count as bold; lighter faces asked for
 /// bold are emboldened synthetically.
 const BOLD_WEIGHT: u16 = 600;
 
-struct Resolved {
-    font: Arc<Font>,
+pub(crate) struct Resolved {
+    pub(crate) font: Arc<Font>,
     /// The face itself is not italic, so the blit shears it.
-    synthetic_oblique: bool,
+    pub(crate) synthetic_oblique: bool,
     /// The face itself is not bold, so the blit thickens it.
-    synthetic_bold: bool,
+    pub(crate) synthetic_bold: bool,
 }
 
 fn fonts() -> &'static Mutex<HashMap<String, Arc<Resolved>>> {
@@ -150,7 +149,7 @@ pub fn font_label(t: &TextLayer) -> String {
 
 /// Load (and cache) the face for a text layer. Unknown names fall back to
 /// the bundled default so a document always renders.
-fn resolve(t: &TextLayer) -> Arc<Resolved> {
+pub(crate) fn resolve(t: &TextLayer) -> Arc<Resolved> {
     let key = format!("{}|{}|{}", t.font, t.bold, t.italic);
     if let Some(f) = fonts().lock().expect("font cache").get(&key) {
         return f.clone();
@@ -226,88 +225,49 @@ pub fn font_for(t: &TextLayer) -> Arc<Font> {
     resolve(t).font.clone()
 }
 
-/// Rasterise a text layer into a sparse tile store at its canvas position.
+/// Rasterise a text layer into a sparse tile store at its canvas position,
+/// glyph by glyph from its [`layout`](crate::text_layout::layout).
 pub fn rasterize(t: &TextLayer) -> TileStore {
     let mut store = TileStore::new();
     if t.text.trim().is_empty() || t.size <= 0.5 || !t.size.is_finite() {
         return store;
     }
-    let resolved = resolve(t);
-    let font = resolved.font.as_ref();
-    let fonts_arr = [font];
+    let lay = crate::text_layout::layout(t);
+    let font = lay.font.as_ref();
     let [cr, cg, cb, ca] = t.color;
-    let ascent = font
-        .horizontal_line_metrics(t.size)
-        .map_or(t.size * 0.8, |m| m.ascent);
-    let line_step = t.line_height.max(0.5) * t.size;
-
-    // Lay each line out on its own so alignment can place it.
-    struct Line {
-        glyphs: Vec<fontdue::layout::GlyphPosition>,
-        width: f32,
-    }
-    let track_px = t.tracking / 1000.0 * t.size;
-    // Synthetic bold smears each glyph rightwards by `bold_px` and widens
-    // every advance by the same amount so neighbours do not collide.
-    let bold_px = if resolved.synthetic_bold {
-        (t.size * EMBOLDEN).max(1.0)
-    } else {
-        0.0
-    };
-    let mut lines = Vec::new();
-    for line in t.text.split('\n') {
-        let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
-        layout.reset(&fontdue::layout::LayoutSettings::default());
-        layout.append(&fonts_arr, &TextStyle::new(line, t.size, 0));
-        let mut glyphs: Vec<_> = layout.glyphs().clone();
-        // Tracking: widen each inter-glyph gap by a fixed fraction of an em.
-        for (n, g) in glyphs.iter_mut().enumerate() {
-            g.x += n as f32 * (track_px + bold_px);
+    for g in &lay.glyphs {
+        let line = &lay.lines[g.line];
+        if line.hidden {
+            continue;
         }
-        let width = glyphs
-            .iter()
-            .map(|g| g.x + g.width as f32 + if g.width > 0 { bold_px } else { 0.0 })
-            .fold(0.0f32, f32::max);
-        lines.push(Line { glyphs, width });
-    }
-
-    for (i, line) in lines.iter().enumerate() {
-        let align_dx = match t.align {
-            TextAlign::Left => 0.0,
-            TextAlign::Center => -line.width / 2.0,
-            TextAlign::Right => -line.width,
+        let (metrics, bitmap) = font.rasterize_indexed(g.glyph, lay.size);
+        if metrics.width == 0 || metrics.height == 0 {
+            continue;
+        }
+        let (width, bitmap) = if lay.bold_px > 0.0 {
+            embolden(&bitmap, metrics.width, metrics.height, lay.bold_px)
+        } else {
+            (metrics.width, bitmap)
         };
-        let baseline_y = t.y + i as f32 * line_step;
-        let oy = (baseline_y - ascent).round() as i32;
-        for g in &line.glyphs {
-            if g.width == 0 || g.height == 0 {
-                continue;
-            }
-            let (metrics, bitmap) = font.rasterize_config(g.key);
-            let (width, bitmap) = if bold_px > 0.0 {
-                embolden(&bitmap, metrics.width, metrics.height, bold_px)
+        let baseline_y = line.baseline;
+        let gx = g.x.round() as i32 + metrics.xmin;
+        let gy = baseline_y.round() as i32 - metrics.ymin - metrics.height as i32;
+        for row in 0..metrics.height {
+            let py = gy + row as i32;
+            // Synthetic oblique: shear rows around the baseline.
+            let shear = if lay.oblique {
+                ((baseline_y - py as f32) * OBLIQUE).round() as i32
             } else {
-                (metrics.width, bitmap)
+                0
             };
-            let gx = (t.x + align_dx + g.x).round() as i32;
-            let gy = oy + g.y.round() as i32;
-            for row in 0..metrics.height {
-                let py = gy + row as i32;
-                // Synthetic oblique: shear rows around the baseline.
-                let shear = if resolved.synthetic_oblique {
-                    ((baseline_y - py as f32) * OBLIQUE).round() as i32
-                } else {
-                    0
-                };
-                for col in 0..width {
-                    let cov = bitmap[row * width + col] as f32 / 255.0;
-                    if cov <= 0.0 {
-                        continue;
-                    }
-                    let px = gx + col as i32 + shear;
-                    let dst = store.get_pixel(px, py);
-                    store.set_pixel(px, py, Rgba::from_straight(cr, cg, cb, ca * cov).over(dst));
+            for col in 0..width {
+                let cov = bitmap[row * width + col] as f32 / 255.0;
+                if cov <= 0.0 {
+                    continue;
                 }
+                let px = gx + col as i32 + shear;
+                let dst = store.get_pixel(px, py);
+                store.set_pixel(px, py, Rgba::from_straight(cr, cg, cb, ca * cov).over(dst));
             }
         }
     }
@@ -347,6 +307,7 @@ pub fn refresh_cache(t: &mut TextLayer) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumenply_doc::TextAlign;
 
     #[test]
     fn text_renders_glyphs_at_the_baseline_origin() {

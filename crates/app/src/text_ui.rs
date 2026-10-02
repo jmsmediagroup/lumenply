@@ -1,12 +1,11 @@
 //! Text tool: what a canvas click does, the Text options bar, the
-//! Properties text section and the searchable font picker.
+//! Properties text section and the searchable font picker. Typing on the
+//! canvas itself lives in text_edit.rs.
 
 use lumenply_render::text::{font_display_name, font_is_available, BUNDLED_FAMILY};
 
 use super::*;
-
-/// Fixed id of the options-bar text field, so a canvas click can focus it.
-pub(crate) const TEXT_FIELD_ID: &str = "text-edit-field";
+use crate::text_edit::EditStart;
 
 /// Missing fonts and other warnings: the quick-mask red.
 const WARN: Color32 = Color32::from_rgb(0xE8, 0x5D, 0x5D);
@@ -17,99 +16,43 @@ const ROW_H: f32 = 24.0;
 /// What a Text-tool click on the canvas does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextClick {
-    /// Select the text layer whose glyphs were clicked and edit it.
+    /// Edit the text layer whose glyphs (or paragraph box) were clicked,
+    /// caret at the click.
     Edit(LayerId),
-    /// Move the active text layer's anchor to the click (one undo step).
-    Move(LayerId),
-    /// Start a new text layer at the click.
+    /// Start new text at the click.
     New,
 }
 
 /// Decide a Text-tool click at document position (x, y). `force_new` is
 /// Shift held or the "New text" button armed: a deliberate new layer even
-/// over existing text. Otherwise a click on any visible text layer's glyphs
-/// edits it, a click elsewhere moves the active text layer (when it is a
-/// visible text layer) and only then does a click start new text.
-pub(crate) fn text_click_action(
-    doc: &Document,
-    active: Option<LayerId>,
-    x: f32,
-    y: f32,
-    force_new: bool,
-) -> TextClick {
+/// over existing text. Otherwise a click on any visible text layer edits
+/// it, and a click anywhere else starts new text (which disappears again
+/// if nothing is typed).
+pub(crate) fn text_click_action(doc: &Document, x: f32, y: f32, force_new: bool) -> TextClick {
     if force_new {
         return TextClick::New;
     }
-    if let Some(id) = text_layer_at(doc.layers(), x, y) {
-        return TextClick::Edit(id);
-    }
-    match active.and_then(|id| doc.layer(id)) {
-        Some(l) if l.visible && l.text_layer().is_some() => TextClick::Move(l.id),
-        _ => TextClick::New,
-    }
-}
-
-/// Focus the options-bar text field; with `select_all`, select its whole
-/// content so typing replaces the placeholder.
-fn focus_text_field(ctx: &egui::Context, text: &str, select_all: bool) {
-    let id = egui::Id::new(TEXT_FIELD_ID);
-    ctx.memory_mut(|m| m.request_focus(id));
-    if select_all {
-        use egui::text::{CCursor, CCursorRange};
-        let mut state = egui::text_edit::TextEditState::load(ctx, id).unwrap_or_default();
-        let end = text.chars().count();
-        state
-            .cursor
-            .set_char_range(Some(CCursorRange::two(CCursor::new(0), CCursor::new(end))));
-        state.store(ctx, id);
+    match text_layer_at(doc.layers(), x, y) {
+        Some(id) => TextClick::Edit(id),
+        None => TextClick::New,
     }
 }
 
 impl App {
-    /// A Text-tool click at document position (x, y).
+    /// A Text-tool click at document position (x, y): edit the text there
+    /// with the caret at the click, or start new point text.
     pub(crate) fn text_click(&mut self, ctx: &egui::Context, x: f32, y: f32, shift: bool) {
+        self.commit_text_edit();
+        self.tool = Tool::Text;
         let force_new = shift || std::mem::take(&mut self.text_new_armed);
-        match text_click_action(self.editor.doc(), self.active, x, y, force_new) {
-            TextClick::Edit(id) => {
-                self.set_active(Some(id));
-                self.fix_active();
-                focus_text_field(ctx, "", false);
-                self.status = "Editing the text under the cursor".into();
-            }
-            TextClick::Move(id) => {
-                let Some(mut t) = self.active_text() else {
-                    return;
-                };
-                t.x = x;
-                t.y = y;
-                let text = t.text.clone();
-                self.run(&SetText { layer: id, text: t });
-                focus_text_field(ctx, &text, false);
-                self.status = format!("Moved the text to {x:.0}, {y:.0}; Shift+click starts new text");
-            }
-            TextClick::New => {
-                // New text follows the style of the text layer in hand.
-                self.adopt_active_text_style();
-                let mut t = TextLayer::new("Text", x, y, self.text_size, linear_rgba(self.brush_rgb, 1.0));
-                t.bold = self.text_bold;
-                t.italic = self.text_italic;
-                t.font = self.text_font.clone();
-                t.align = self.text_align;
-                let new_id = self.editor.doc().next_id();
-                self.run(&AddTextLayer {
-                    text: t,
-                    above: self.active,
-                });
-                self.set_active(Some(new_id));
-                self.fix_active();
-                focus_text_field(ctx, "Text", true);
-                self.status = "New text: type to replace the placeholder".into();
-            }
+        match text_click_action(self.editor.doc(), x, y, force_new) {
+            TextClick::Edit(id) => self.begin_text_edit(ctx, id, EditStart::At(x, y)),
+            TextClick::New => self.begin_new_text(ctx, x, y, None),
         }
     }
 
     /// Copy the active text layer's style into the new-text defaults.
-    fn adopt_active_text_style(&mut self) {
+    pub(crate) fn adopt_active_text_style(&mut self) {
         if let Some(t) = self.active_text() {
             self.text_size = t.size;
             self.text_bold = t.bold;
@@ -154,16 +97,12 @@ impl App {
             let before = t.clone();
             let mut finished = false;
             // On a narrow window Tracking stays in Properties so the hint
-            // still fits; the text field takes what is left.
+            // still fits.
             let narrow = ui.available_width() < 1100.0;
-            let reserve = if narrow { 800.0 } else { 760.0 };
-            let field_w = (ui.available_width() - reserve).clamp(110.0, 240.0);
-            let r = text_field(ui, &mut t.text, field_w);
-            finished |= r.lost_focus();
             finished |= font_picker(ui, "bar", &mut t.font, 170.0);
-            finished |= style_toggles(ui, &mut t.bold, &mut t.italic);
+            finished |= style_toggles(ui, &mut t.bold, &mut t.italic, Some(&mut t.all_caps));
             bar_separator(ui);
-            finished |= align_toggles(ui, &mut t.align);
+            finished |= align_toggles(ui, &mut t.align, t.box_size.is_some());
             bar_separator(ui);
             muted(ui, "Size");
             finished |= edit_finished(&value_field(
@@ -174,6 +113,8 @@ impl App {
                 " px",
                 66.0,
             ));
+            muted(ui, "Leading");
+            finished |= leading_field(ui, &mut t, 58.0);
             if !narrow {
                 muted(ui, "Tracking");
                 finished |= edit_finished(&value_field(
@@ -189,13 +130,18 @@ impl App {
             self.commit_text(id, &before, t, finished);
             bar_separator(ui);
             self.new_text_button(ui);
-            hint_full = "Click text to edit it · click elsewhere to move it · Shift+click adds new text";
-            hint_short = "Shift+click: new text";
+            if self.text_editing() {
+                hint_full = "Esc or Cmd+Enter commits · Cmd-drag moves the text";
+                hint_short = "Esc commits";
+            } else {
+                hint_full = "Click text to edit it · click elsewhere for new text · drag for a text box";
+                hint_short = "Drag: text box";
+            }
         } else {
             font_picker(ui, "bar", &mut self.text_font, 170.0);
-            style_toggles(ui, &mut self.text_bold, &mut self.text_italic);
+            style_toggles(ui, &mut self.text_bold, &mut self.text_italic, None);
             bar_separator(ui);
-            align_toggles(ui, &mut self.text_align);
+            align_toggles(ui, &mut self.text_align, true);
             bar_separator(ui);
             muted(ui, "Size");
             value_field(ui, "Font size", &mut self.text_size, 6.0..=400.0, " px", 66.0);
@@ -205,10 +151,10 @@ impl App {
                 if ui.button("Cancel").clicked() {
                     self.text_new_armed = false;
                 }
-                hint_full = "Click on the canvas to place the new text";
+                hint_full = "Click on the canvas to place the new text, or drag a text box";
                 hint_short = "Click to place";
             } else {
-                hint_full = "Click on the canvas to add text";
+                hint_full = "Click on the canvas to add text · drag to draw a text box";
                 hint_short = "Click to add text";
             }
         }
@@ -282,15 +228,61 @@ impl App {
             });
         }
         row(ui, "Style", |ui| {
-            finished |= style_toggles(ui, &mut t.bold, &mut t.italic);
-            ui.add_space(6.0);
-            finished |= align_toggles(ui, &mut t.align);
+            finished |= style_toggles(ui, &mut t.bold, &mut t.italic, Some(&mut t.all_caps));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 finished |= text_color_button(ui, &mut t.color);
             });
         });
+        row(ui, "Align", |ui| {
+            finished |= align_toggles(ui, &mut t.align, t.box_size.is_some());
+        });
         finished |= value_slider_row(ui, "Size", &mut t.size, 6.0..=400.0, " px", true);
+        let mut lead = t.line_height * t.size;
+        let lead_max = (t.size * 4.0).max(lead);
+        if value_slider_row(ui, "Leading", &mut lead, (t.size * 0.5)..=lead_max, " px", false) {
+            finished = true;
+        }
+        if (lead - t.line_height * t.size).abs() > 1e-3 && t.size > 0.0 {
+            t.line_height = (lead / t.size).clamp(0.5, 10.0);
+        }
         finished |= value_slider_row(ui, "Tracking", &mut t.tracking, -200.0..=800.0, "", false);
+        finished |= value_slider_row(
+            ui,
+            "Baseline",
+            &mut t.baseline_shift,
+            -100.0..=100.0,
+            " px",
+            false,
+        );
+        let mut convert = None;
+        row(ui, "Type", |ui| {
+            let paragraph = t.box_size.is_some();
+            if chip(ui, !paragraph, RichText::new("Point"), 0.0)
+                .on_hover_text("One line per return; the anchor sits on the first baseline")
+                .clicked()
+                && paragraph
+            {
+                convert = Some(lumenply_render::text_layout::to_point(&t));
+            }
+            if chip(ui, paragraph, RichText::new("Paragraph"), 0.0)
+                .on_hover_text("Lines wrap inside a box; drag its handles while editing")
+                .clicked()
+                && !paragraph
+            {
+                convert = Some(lumenply_render::text_layout::to_paragraph(&t));
+            }
+            if let Some([w, h]) = t.box_size.as_mut() {
+                ui.add_space(4.0);
+                let rw = value_field(ui, "Box width", w, 8.0..=20000.0, "", 54.0);
+                ui.label(RichText::new("\u{00D7}").color(MUTED));
+                let rh = value_field(ui, "Box height", h, 8.0..=20000.0, "", 54.0);
+                finished |= edit_finished(&rw) || edit_finished(&rh);
+            }
+        });
+        if let Some(c) = convert {
+            t = c;
+            finished = true;
+        }
         self.commit_text(id, &before, t, finished);
         if rasterize {
             self.run(&RasterizeLayer { layer: id });
@@ -312,10 +304,21 @@ impl App {
     /// layer with its anchor marked, and a fainter box around other text
     /// under the cursor (a click there edits it).
     pub(crate) fn paint_text_overlay(&self, painter: &egui::Painter, resp: &egui::Response) {
+        if self.paint_text_session(&resp.ctx, painter, resp) {
+            return;
+        }
         let origin = resp.rect.min + self.pan;
         let to_screen = |x: f32, y: f32| egui::pos2(origin.x + x * self.zoom, origin.y + y * self.zoom);
         let doc = self.editor.doc();
         let glyph_box = |id: LayerId| {
+            // Paragraph text: its box, glyphs or not.
+            if let Some(t) = doc.layer(id)?.text_layer().filter(|t| t.box_size.is_some()) {
+                let [w, h] = t.box_size?;
+                return Some(egui::Rect::from_min_max(
+                    to_screen(t.x, t.y),
+                    to_screen(t.x + w, t.y + h),
+                ));
+            }
             let b = doc.layer(id)?.raster_store()?.content_bounds()?;
             Some(egui::Rect::from_min_max(
                 to_screen(b.x as f32, b.y as f32),
@@ -327,7 +330,11 @@ impl App {
             .filter(|_| !self.text_new_armed)
             .and_then(|id| doc.layer(id))
             .filter(|l| l.visible)
-            .and_then(|l| l.text_layer().map(|t| (l.id, t.x, t.y)));
+            .and_then(|l| {
+                l.text_layer()
+                    .filter(|t| t.box_size.is_none())
+                    .map(|t| (l.id, t.x, t.y))
+            });
         if let Some(p) = resp.hover_pos() {
             let ox = (p.x - origin.x) / self.zoom;
             let oy = (p.y - origin.y) / self.zoom;
@@ -405,21 +412,6 @@ fn field_style<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R 
     .inner
 }
 
-/// The options bar's one-line text field (focusable by id from the canvas).
-fn text_field(ui: &mut egui::Ui, text: &mut String, width: f32) -> egui::Response {
-    let r = field_style(ui, |ui| {
-        ui.add_sized(
-            [width, ROW_H],
-            egui::TextEdit::singleline(text)
-                .id(egui::Id::new(TEXT_FIELD_ID))
-                .hint_text("Type your text")
-                .vertical_align(egui::Align::Center),
-        )
-    });
-    a11y_name(&r, "Text");
-    r
-}
-
 /// A compact numeric box: drag to scrub, click to type. Mono digits.
 fn value_field(
     ui: &mut egui::Ui,
@@ -471,30 +463,43 @@ fn chip(ui: &mut egui::Ui, on: bool, text: RichText, width: f32) -> egui::Respon
     )
 }
 
-/// Bold and Italic toggles, side by side. Returns true on a change.
-fn style_toggles(ui: &mut egui::Ui, bold: &mut bool, italic: &mut bool) -> bool {
+/// Bold and Italic toggles, side by side, plus All caps when given.
+/// Returns true on a change.
+fn style_toggles(ui: &mut egui::Ui, bold: &mut bool, italic: &mut bool, caps: Option<&mut bool>) -> bool {
     let mut changed = false;
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.spacing_mut().button_padding.x = 4.0;
         let b = RichText::new("B").family(egui::FontFamily::Name("semibold".into()));
-        if chip(ui, *bold, b, 28.0).on_hover_text("Bold").clicked() {
+        let r = chip(ui, *bold, b, 28.0).on_hover_text("Bold");
+        a11y_name(&r, "Bold");
+        if r.clicked() {
             *bold = !*bold;
             changed = true;
         }
-        if chip(ui, *italic, RichText::new("I").italics(), 28.0)
-            .on_hover_text("Italic (slanted automatically when the font has no italic)")
-            .clicked()
-        {
+        let r = chip(ui, *italic, RichText::new("I").italics(), 28.0)
+            .on_hover_text("Italic (slanted automatically when the font has no italic)");
+        a11y_name(&r, "Italic");
+        if r.clicked() {
             *italic = !*italic;
             changed = true;
+        }
+        if let Some(caps) = caps {
+            let r = chip(ui, *caps, RichText::new("TT").size(11.0), 28.0)
+                .on_hover_text("All caps (the text keeps its own case underneath)");
+            a11y_name(&r, "All caps");
+            if r.clicked() {
+                *caps = !*caps;
+                changed = true;
+            }
         }
     });
     changed
 }
 
-/// Left / centre / right alignment as three icon chips.
-fn align_toggles(ui: &mut egui::Ui, align: &mut TextAlign) -> bool {
+/// Left / centre / right / justify alignment as four icon chips. Justify
+/// needs paragraph text; on point text it is shown but disabled.
+fn align_toggles(ui: &mut egui::Ui, align: &mut TextAlign, paragraph: bool) -> bool {
     let mut changed = false;
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -503,18 +508,33 @@ fn align_toggles(ui: &mut egui::Ui, align: &mut TextAlign) -> bool {
             (TextAlign::Left, "Align left"),
             (TextAlign::Center, "Align centre"),
             (TextAlign::Right, "Align right"),
+            (TextAlign::Justify, "Justify (last line left)"),
         ] {
+            let enabled = paragraph || a != TextAlign::Justify;
             let on = *align == a;
-            let r = chip(ui, on, RichText::new(""), 28.0).on_hover_text(tip);
+            let r = ui
+                .add_enabled_ui(enabled, |ui| chip(ui, on, RichText::new(""), 28.0))
+                .inner
+                .on_hover_text(tip)
+                .on_disabled_hover_text("Justify needs paragraph text: drag a box with the Text tool");
             a11y_name(&r, tip);
             // Three lines of a paragraph, ragged on the free side.
             let c = r.rect.center();
-            let color = if on { ACCENT } else { TEXT };
+            let color = if on {
+                ACCENT
+            } else if enabled {
+                TEXT
+            } else {
+                MUTED.gamma_multiply(0.5)
+            };
             for (dy, w) in [(-4.0, 12.0), (0.0, 8.0), (4.0, 10.0)] {
                 let (x0, x1) = match a {
                     TextAlign::Left => (c.x - 6.0, c.x - 6.0 + w),
                     TextAlign::Center => (c.x - w / 2.0, c.x + w / 2.0),
                     TextAlign::Right => (c.x + 6.0 - w, c.x + 6.0),
+                    // Full lines, the last one short.
+                    TextAlign::Justify if dy < 4.0 => (c.x - 6.0, c.x + 6.0),
+                    TextAlign::Justify => (c.x - 6.0, c.x),
                 };
                 ui.painter().line_segment(
                     [egui::pos2(x0, c.y + dy), egui::pos2(x1, c.y + dy)],
@@ -528,6 +548,17 @@ fn align_toggles(ui: &mut egui::Ui, align: &mut TextAlign) -> bool {
         }
     });
     changed
+}
+
+/// Leading (line spacing) in pixels, stored as a multiple of the size.
+fn leading_field(ui: &mut egui::Ui, t: &mut TextLayer, width: f32) -> bool {
+    let mut px = t.line_height * t.size;
+    let r = value_field(ui, "Leading", &mut px, 1.0..=2000.0, "", width)
+        .on_hover_text("Leading: the distance from one baseline to the next, in pixels");
+    if r.changed() && t.size > 0.0 {
+        t.line_height = (px / t.size).clamp(0.5, 10.0);
+    }
+    edit_finished(&r)
 }
 
 /// The text colour swatch (stored linear, edited as sRGB).
@@ -797,16 +828,10 @@ mod tests {
 
     #[test]
     fn a_click_on_glyphs_edits_that_text() {
-        let (d, bg, hello, _) = doc();
+        let (d, _, hello, _) = doc();
         // "Hello" at 40 px spans roughly x 100..200, y 171..200.
-        assert_eq!(
-            text_click_action(&d, Some(bg), 120.0, 190.0, false),
-            TextClick::Edit(hello)
-        );
-        assert_eq!(
-            text_click_action(&d, Some(hello), 150.0, 185.0, false),
-            TextClick::Edit(hello)
-        );
+        assert_eq!(text_click_action(&d, 120.0, 190.0, false), TextClick::Edit(hello));
+        assert_eq!(text_click_action(&d, 150.0, 185.0, false), TextClick::Edit(hello));
         // The 4 px grab margin around the glyphs still counts.
         let b = d
             .layer(hello)
@@ -816,51 +841,48 @@ mod tests {
             .content_bounds()
             .unwrap();
         let left = b.x as f32 - 3.0;
+        assert_eq!(text_click_action(&d, left, 190.0, false), TextClick::Edit(hello));
         assert_eq!(
-            text_click_action(&d, None, left, 190.0, false),
-            TextClick::Edit(hello)
-        );
-        assert_eq!(
-            text_click_action(&d, None, b.x as f32 - 6.0, 190.0, false),
+            text_click_action(&d, b.x as f32 - 6.0, 190.0, false),
             TextClick::New
         );
     }
 
     #[test]
-    fn an_empty_click_moves_the_active_text_instead_of_stacking_layers() {
-        let (d, bg, hello, ghost) = doc();
+    fn an_empty_click_starts_new_text_and_hidden_text_is_ignored() {
+        let (d, _, _, _) = doc();
+        // Empty canvas: new text (it vanishes again if nothing is typed).
+        assert_eq!(text_click_action(&d, 450.0, 80.0, false), TextClick::New);
+        // A hidden text layer does not catch clicks on its glyphs.
+        assert_eq!(text_click_action(&d, 120.0, 310.0, false), TextClick::New);
+    }
+
+    #[test]
+    fn a_click_inside_a_paragraph_box_edits_it_even_off_the_glyphs() {
+        let (d, _, _, _) = doc();
+        let mut ed = Editor::new(d);
+        let id = ed.doc().next_id();
+        ed.execute(&AddTextLayer {
+            text: TextLayer {
+                box_size: Some([200.0, 100.0]),
+                ..TextLayer::new("Hi", 300.0, 20.0, 20.0, BLACK)
+            },
+            above: None,
+        })
+        .unwrap();
+        // The glyphs sit in the top-left corner; the box's far corner counts.
         assert_eq!(
-            text_click_action(&d, Some(hello), 450.0, 80.0, false),
-            TextClick::Move(hello)
+            text_click_action(ed.doc(), 490.0, 110.0, false),
+            TextClick::Edit(id)
         );
-        // Not a text layer active: a click starts new text.
-        assert_eq!(
-            text_click_action(&d, Some(bg), 450.0, 80.0, false),
-            TextClick::New
-        );
-        assert_eq!(text_click_action(&d, None, 450.0, 80.0, false), TextClick::New);
-        // A hidden text layer neither moves nor catches clicks on its glyphs.
-        assert_eq!(
-            text_click_action(&d, Some(ghost), 450.0, 80.0, false),
-            TextClick::New
-        );
-        assert_eq!(
-            text_click_action(&d, Some(hello), 120.0, 310.0, false),
-            TextClick::Move(hello)
-        );
+        assert_eq!(text_click_action(ed.doc(), 510.0, 110.0, false), TextClick::New);
     }
 
     #[test]
     fn shift_or_new_text_always_starts_a_new_layer() {
-        let (d, _, hello, _) = doc();
-        assert_eq!(
-            text_click_action(&d, Some(hello), 450.0, 80.0, true),
-            TextClick::New
-        );
-        assert_eq!(
-            text_click_action(&d, Some(hello), 120.0, 190.0, true),
-            TextClick::New
-        );
+        let (d, _, _, _) = doc();
+        assert_eq!(text_click_action(&d, 450.0, 80.0, true), TextClick::New);
+        assert_eq!(text_click_action(&d, 120.0, 190.0, true), TextClick::New);
     }
 
     #[test]
@@ -894,12 +916,9 @@ mod tests {
             "glyphs follow: {b:?}"
         );
         // The old spot is empty now, the new one edits the text.
+        assert_eq!(text_click_action(ed.doc(), 120.0, 190.0, false), TextClick::New);
         assert_eq!(
-            text_click_action(ed.doc(), Some(hello), 120.0, 190.0, false),
-            TextClick::Move(hello)
-        );
-        assert_eq!(
-            text_click_action(ed.doc(), None, 470.0, 70.0, false),
+            text_click_action(ed.doc(), 470.0, 70.0, false),
             TextClick::Edit(hello)
         );
         assert!(ed.undo().is_some());

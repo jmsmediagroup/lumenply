@@ -1162,18 +1162,7 @@ impl App {
                     }
                 }
             }
-            Tool::Text => {
-                if resp.hovered() {
-                    ctx.set_cursor_icon(egui::CursorIcon::Text);
-                }
-                if resp.clicked_by(primary) {
-                    if let Some(p) = resp.interact_pointer_pos() {
-                        let (x, y) = to_doc(p);
-                        let shift = ctx.input(|i| i.modifiers.shift);
-                        self.text_click(ctx, x, y, shift);
-                    }
-                }
-            }
+            Tool::Text => self.type_tool_input(ctx, resp, &to_doc),
             Tool::Move => {
                 if resp.hovered() {
                     ctx.set_cursor_icon(egui::CursorIcon::Move);
@@ -1658,8 +1647,14 @@ pub(crate) fn text_layer_at(layers: &[Layer], x: f32, y: f32) -> Option<LayerId>
             }
             continue;
         }
-        if l.text_layer().is_none() {
+        let Some(t) = l.text_layer() else {
             continue;
+        };
+        // Paragraph text: anywhere inside its box.
+        if let Some([w, h]) = t.box_size {
+            if x >= t.x && y >= t.y && x <= t.x + w && y <= t.y + h {
+                return Some(l.id);
+            }
         }
         if let Some(b) = l.raster_store().and_then(|s| s.content_bounds()) {
             let pad = 4;

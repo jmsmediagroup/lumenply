@@ -47,6 +47,7 @@ mod select_fill_tests;
 mod session;
 mod start;
 mod status;
+mod text_edit;
 mod text_ui;
 mod theme;
 mod tools;
@@ -367,6 +368,8 @@ struct App {
     crop: crop::CropTool,
     /// Rulers, guides, grid and snapping state (guides.rs).
     aids: guides::ViewAids,
+    /// On-canvas text editing with the Text tool (text_edit.rs).
+    typer: text_edit::TypeTool,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -519,6 +522,7 @@ impl App {
             start_thumb: None,
             crop: crop::CropTool::default(),
             aids: guides::ViewAids::default(),
+            typer: text_edit::TypeTool::default(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -1277,6 +1281,7 @@ impl App {
             self.dialog = Some(Dialog::ConfirmClose);
         }
         self.shortcuts(ctx);
+        self.text_edit_guard(ctx);
         self.menu_bar(ctx);
         if self.no_doc {
             self.welcome(ctx);

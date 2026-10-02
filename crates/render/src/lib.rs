@@ -22,6 +22,7 @@ pub mod gpu;
 pub mod inpaint;
 pub mod liquify;
 pub mod text;
+pub mod text_layout;
 pub mod transform;
 
 pub use cache::BelowCache;

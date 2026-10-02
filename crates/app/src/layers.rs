@@ -125,6 +125,7 @@ impl App {
         let mut select: Option<(LayerId, bool)> = None;
         let mut toggle_collapse = None;
         let mut rename_start = None;
+        let mut text_edit_start = None;
         let mut rename_commit = None;
         let mut rename_cancel = false;
         let mut mask_click = None;
@@ -508,7 +509,11 @@ impl App {
                         menu_separator(ui);
                         act(ui, true, "Delete layer", "delete");
                     });
-                    if resp.double_clicked() {
+                    let on_thumb = resp.interact_pointer_pos().is_some_and(|q| t_rect.contains(q));
+                    if resp.double_clicked() && row.kind == Kind::Text && on_thumb {
+                        // Photoshop: the text thumbnail edits the text, all selected.
+                        text_edit_start = Some(row.id);
+                    } else if resp.double_clicked() {
                         rename_start = Some((row.id, row.name.clone()));
                     } else if resp.clicked() {
                         let on_control = resp
@@ -588,6 +593,9 @@ impl App {
             renaming = rename_start;
         }
         self.renaming = renaming;
+        if let Some(id) = text_edit_start {
+            self.begin_text_edit(ui.ctx(), id, crate::text_edit::EditStart::All);
+        }
         if let Some((id, add)) = select {
             if add {
                 if let Some(i) = self.selected.iter().position(|x| *x == id) {
