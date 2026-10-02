@@ -175,6 +175,10 @@ pub fn box_radius(sigma_like: f32) -> i32 {
 pub struct LayerEffects {
     pub drop_shadow: Option<ShadowFx>,
     pub outer_glow: Option<GlowFx>,
+    /// Shadow cast by the coverage edge onto the layer's inside.
+    pub inner_shadow: Option<ShadowFx>,
+    /// Glow creeping inward from the coverage edge.
+    pub inner_glow: Option<GlowFx>,
     pub stroke: Option<StrokeFx>,
 }
 
@@ -237,16 +241,22 @@ impl Default for StrokeFx {
 
 impl LayerEffects {
     pub fn is_empty(&self) -> bool {
-        self.drop_shadow.is_none() && self.outer_glow.is_none() && self.stroke.is_none()
+        self.drop_shadow.is_none()
+            && self.outer_glow.is_none()
+            && self.inner_shadow.is_none()
+            && self.inner_glow.is_none()
+            && self.stroke.is_none()
     }
 
-    /// How far (px) any effect reaches outside the layer's coverage.
+    /// How far (px) any effect reaches outside the layer's coverage — also
+    /// how far one must read outside a tile to render it correctly, which
+    /// is why the inner effects count too.
     pub fn pad(&self) -> i32 {
         let mut p = 0.0f32;
-        if let Some(s) = &self.drop_shadow {
+        for s in [&self.drop_shadow, &self.inner_shadow].into_iter().flatten() {
             p = p.max(sane_radius(s.blur) * 2.0 + s.dx.abs().max(s.dy.abs()));
         }
-        if let Some(g) = &self.outer_glow {
+        for g in [&self.outer_glow, &self.inner_glow].into_iter().flatten() {
             p = p.max(sane_radius(g.blur) * 2.0);
         }
         if let Some(st) = &self.stroke {

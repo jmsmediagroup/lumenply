@@ -277,6 +277,7 @@ pub fn render_tile_over(
             let d = dst.get_or_insert_with(Tile::new);
             render_effects_under(d, layer, coord, canvas);
             blend_tile(d, &masked, layer.blend, layer.opacity);
+            render_inner_over(d, layer, coord, canvas);
             render_stroke_over(d, layer, coord, canvas);
             continue;
         }
@@ -400,6 +401,83 @@ fn render_effects_under(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas:
                 let gx = col as i32 + pad - dx.round() as i32;
                 let gy = row as i32 + pad - dy.round() as i32;
                 let a = at(&field, gx, gy) * opacity;
+                if a > 0.0 {
+                    px[row * TILE_SIZE + col] =
+                        Rgba::from_straight(color[0], color[1], color[2], a.clamp(0.0, 1.0));
+                }
+            }
+        }
+        blend_tile(dst, &tile, BlendMode::Normal, layer.opacity);
+    }
+}
+
+/// Inner shadow and inner glow, blended over the layer and clipped to its
+/// coverage: the blurred *inverse* coverage creeps in from the edge.
+fn render_inner_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: Rect) {
+    let fx = &layer.effects;
+    if fx.inner_shadow.is_none() && fx.inner_glow.is_none() {
+        return;
+    }
+    let pad = fx.pad();
+    let (ox, oy) = coord.origin();
+    let area = Rect::new(
+        ox - pad,
+        oy - pad,
+        TILE_SIZE as u32 + 2 * pad as u32,
+        TILE_SIZE as u32 + 2 * pad as u32,
+    );
+    let cov = coverage_raster(layer, area, canvas);
+    let (w, h) = (area.w as usize, area.h as usize);
+    let inv: Vec<f32> = cov.iter().map(|&a| 1.0 - a).collect();
+    let at = |field: &[f32], x: i32, y: i32| -> f32 {
+        if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+            // Outside the padded window counts as outside the layer.
+            1.0
+        } else {
+            field[y as usize * w + x as usize]
+        }
+    };
+    struct FxPass {
+        field: Vec<f32>,
+        offset: (f32, f32),
+        color: [f32; 3],
+        opacity: f32,
+    }
+    let mut passes: Vec<FxPass> = Vec::new();
+    if let Some(s) = &fx.inner_shadow {
+        passes.push(FxPass {
+            field: blur_field(&inv, w, h, s.blur),
+            offset: (s.dx, s.dy),
+            color: s.color,
+            opacity: s.opacity,
+        });
+    }
+    if let Some(g) = &fx.inner_glow {
+        passes.push(FxPass {
+            field: blur_field(&inv, w, h, g.blur),
+            offset: (0.0, 0.0),
+            color: g.color,
+            opacity: g.opacity,
+        });
+    }
+    for FxPass {
+        field,
+        offset: (dx, dy),
+        color,
+        opacity,
+    } in passes
+    {
+        let mut tile = Tile::new();
+        let px = tile.pixels_mut();
+        for row in 0..TILE_SIZE {
+            for col in 0..TILE_SIZE {
+                let clip = cov[(row as i32 + pad) as usize * w + (col as i32 + pad) as usize];
+                if clip <= 0.0 {
+                    continue;
+                }
+                let gx = col as i32 + pad - dx.round() as i32;
+                let gy = row as i32 + pad - dy.round() as i32;
+                let a = at(&field, gx, gy) * opacity * clip;
                 if a > 0.0 {
                     px[row * TILE_SIZE + col] =
                         Rgba::from_straight(color[0], color[1], color[2], a.clamp(0.0, 1.0));
@@ -793,12 +871,12 @@ mod tests {
                 color: [0.0, 0.0, 0.0],
                 opacity: 1.0,
             }),
-            outer_glow: None,
             stroke: Some(StrokeFx {
                 size: 3.0,
                 color: [1.0, 0.0, 0.0],
                 opacity: 1.0,
             }),
+            ..LayerEffects::default()
         };
         let out = composite_raster(&doc);
 
@@ -847,6 +925,65 @@ mod tests {
                 assert!((a - b).abs() < 2e-3, "seam mismatch at {dx},{dy}: {a} vs {b}");
             }
         }
+    }
+
+    #[test]
+    fn inner_shadow_and_glow_stay_inside_the_coverage() {
+        use lumenply_doc::{GlowFx, LayerEffects, ShadowFx};
+        let mut doc = Document::new(96, 96);
+        let id = doc.add_pixel_layer("square");
+        for y in 30..66 {
+            for x in 30..66 {
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(0.5, 0.5, 0.5, 1.0),
+                );
+            }
+        }
+        doc.layer_mut(id).unwrap().effects = LayerEffects {
+            inner_glow: Some(GlowFx {
+                blur: 4.0,
+                color: [1.0, 0.0, 0.0],
+                opacity: 1.0,
+            }),
+            ..LayerEffects::default()
+        };
+        let out = composite_raster(&doc);
+        // Just inside the edge the glow tints strongly red; at the centre
+        // the blurred inverse coverage has decayed to ~0.
+        // At 1 px inside a step edge the blurred inverse coverage is ~0.36,
+        // so red ≈ 0.36 × 1.0 + 0.64 × 0.5 = 0.68.
+        let edge = straight(out.get(31, 48));
+        let centre = straight(out.get(48, 48));
+        assert!((edge[0] - 0.68).abs() < 0.06, "glow at the inside edge: {edge:?}");
+        assert!(
+            (centre[0] - 0.5).abs() < 0.02 && (centre[1] - 0.5).abs() < 0.02,
+            "centre keeps the fill colour: {centre:?}"
+        );
+        // Nothing paints outside the coverage.
+        assert!(out.get(28, 48).a < 1e-3, "outside stays empty");
+
+        // Inner shadow with +dx/+dy darkens the top-left inside edge (the
+        // outside creeps in from above-left), not the bottom-right one.
+        doc.layer_mut(id).unwrap().effects = LayerEffects {
+            inner_shadow: Some(ShadowFx {
+                dx: 6.0,
+                dy: 6.0,
+                blur: 2.0,
+                color: [0.0, 0.0, 0.0],
+                opacity: 1.0,
+            }),
+            ..LayerEffects::default()
+        };
+        let out = composite_raster(&doc);
+        let top = straight(out.get(48, 32));
+        let bottom = straight(out.get(48, 63));
+        assert!(top[0] < 0.1, "inner shadow under the top edge: {top:?}");
+        assert!(
+            (bottom[0] - 0.5).abs() < 0.05,
+            "bottom edge keeps the fill: {bottom:?}"
+        );
     }
 
     #[test]

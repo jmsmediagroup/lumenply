@@ -378,6 +378,64 @@ impl App {
         }
 
         ui.horizontal(|ui| {
+            let mut on = fx.inner_shadow.is_some();
+            if ui.checkbox(&mut on, "Inner shadow").changed() {
+                fx.inner_shadow = on.then(ShadowFx::default);
+                changed = true;
+                finished = true;
+            }
+            if let Some(sfx) = &mut fx.inner_shadow {
+                let c = color_btn(ui, &mut sfx.color);
+                changed |= c;
+                finished |= c;
+            }
+        });
+        if let Some(mut sfx) = fx.inner_shadow {
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [70.0, 18.0],
+                    egui::Label::new(RichText::new("Offset").color(MUTED)),
+                );
+                let rx = ui.add(egui::DragValue::new(&mut sfx.dx).speed(0.5).range(-200.0..=200.0));
+                let ry = ui.add(egui::DragValue::new(&mut sfx.dy).speed(0.5).range(-200.0..=200.0));
+                changed |= rx.changed() || ry.changed();
+                finished |= rx.drag_stopped() || ry.drag_stopped();
+            });
+            let f = slider_row(ui, "Blur", &mut sfx.blur, 0.0..=60.0, " px");
+            finished |= f;
+            let f2 = slider_row(ui, "Opacity", &mut sfx.opacity, 0.0..=1.0, "");
+            finished |= f2;
+            if sfx != fx.inner_shadow.unwrap() {
+                changed = true;
+            }
+            fx.inner_shadow = Some(sfx);
+        }
+
+        ui.horizontal(|ui| {
+            let mut on = fx.inner_glow.is_some();
+            if ui.checkbox(&mut on, "Inner glow").changed() {
+                fx.inner_glow = on.then(GlowFx::default);
+                changed = true;
+                finished = true;
+            }
+            if let Some(g) = &mut fx.inner_glow {
+                let c = color_btn(ui, &mut g.color);
+                changed |= c;
+                finished |= c;
+            }
+        });
+        if let Some(mut g) = fx.inner_glow {
+            let f = slider_row(ui, "Blur", &mut g.blur, 0.0..=60.0, " px");
+            finished |= f;
+            let f2 = slider_row(ui, "Opacity", &mut g.opacity, 0.0..=1.0, "");
+            finished |= f2;
+            if g != fx.inner_glow.unwrap() {
+                changed = true;
+            }
+            fx.inner_glow = Some(g);
+        }
+
+        ui.horizontal(|ui| {
             let mut on = fx.stroke.is_some();
             if ui.checkbox(&mut on, "Stroke").changed() {
                 fx.stroke = on.then(StrokeFx::default);
