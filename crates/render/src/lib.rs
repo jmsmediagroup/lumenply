@@ -46,10 +46,17 @@ pub fn composite_rect(doc: &Document, rect: Rect) -> TileStore {
 /// tells live filters where the image ends (they clamp to that edge).
 pub fn composite_layers(layers: &[Layer], rect: Rect, canvas: Rect) -> TileStore {
     let coords = rect.tiles();
-    let tiles: Vec<(TileCoord, Option<Tile>)> = coords
-        .into_par_iter()
-        .map(|c| (c, render_tile(layers, c, canvas)))
+    let filters: Vec<usize> = (0..layers.len())
+        .filter(|&i| is_live_filter(&layers[i]))
         .collect();
+    let tiles: Vec<(TileCoord, Option<Tile>)> = if filters.is_empty() {
+        coords
+            .into_par_iter()
+            .map(|c| (c, render_tile(layers, c, canvas)))
+            .collect()
+    } else {
+        composite_staged(layers, &filters, &coords, canvas)
+    };
 
     let mut out = TileStore::new();
     for (c, tile) in tiles {
@@ -58,6 +65,157 @@ pub fn composite_layers(layers: &[Layer], rect: Rect, canvas: Rect) -> TileStore
         }
     }
     out
+}
+
+fn is_live_filter(l: &Layer) -> bool {
+    l.visible && l.opacity > 0.0 && matches!(l.content, LayerContent::Filter(_))
+}
+
+/// The tile-aligned rectangle covering `coords`.
+fn tiles_bounds(coords: &[TileCoord]) -> Rect {
+    coords
+        .iter()
+        .map(|c| c.rect())
+        .reduce(|a, b| a.union(&b))
+        .unwrap_or(Rect::new(0, 0, 0, 0))
+}
+
+/// [`composite_layers`] for a stack with live filter layers (indices
+/// `filters`, bottom first). Tile by tile, each filter would re-render
+/// everything below it over its padded neighbourhood, and every filter
+/// below that again: the cost doubles (or worse) per stacked filter. Here
+/// the stack renders in stages split at the filters: each stage is
+/// composited once over the tiles the stages above need, so every layer
+/// renders once per tile. The per-tile maths is unchanged, so the result is
+/// identical to [`render_tile`].
+fn composite_staged(
+    layers: &[Layer],
+    filters: &[usize],
+    out: &[TileCoord],
+    canvas: Rect,
+) -> Vec<(TileCoord, Option<Tile>)> {
+    use std::collections::{HashMap, HashSet};
+    let pad_of = |i: usize| match &layers[i].content {
+        LayerContent::Filter(f) => f.pad(),
+        _ => 0,
+    };
+    // From the top down: the stage below filter k (layers[..filters[k]])
+    // must cover the tiles the stage above needs plus everything filter k
+    // reads around them.
+    let mut need: Vec<Vec<TileCoord>> = vec![Vec::new(); filters.len()];
+    let mut above: Vec<TileCoord> = out.to_vec();
+    for k in (0..filters.len()).rev() {
+        let b = tiles_bounds(&above);
+        let pad = pad_of(filters[k]);
+        let grown =
+            Rect::new(b.x - pad, b.y - pad, b.w + 2 * pad as u32, b.h + 2 * pad as u32).intersect(&canvas);
+        let mut set: HashSet<TileCoord> = above.iter().copied().collect();
+        set.extend(grown.tiles());
+        need[k] = set.into_iter().collect();
+        above = need[k].clone();
+    }
+    let below = &layers[..filters[0]];
+    let mut stage: HashMap<TileCoord, Option<std::sync::Arc<Tile>>> = need[0]
+        .par_iter()
+        .map(|&c| (c, render_tile(below, c, canvas).map(std::sync::Arc::new)))
+        .collect();
+    for (k, &fi) in filters.iter().enumerate() {
+        let end = filters.get(k + 1).copied().unwrap_or(layers.len());
+        let targets: &[TileCoord] = if k + 1 < filters.len() { &need[k + 1] } else { out };
+        let next: Vec<(TileCoord, Option<Tile>)> = targets
+            .par_iter()
+            .map(|&c| {
+                let mut dst = stage.get(&c).and_then(|t| t.as_deref().cloned());
+                live_filter_into(&mut dst, &layers[fi], c, canvas, |visible| {
+                    let mut store = TileStore::new();
+                    for t in visible.tiles() {
+                        if let Some(Some(tile)) = stage.get(&t) {
+                            store.insert(t, tile.clone());
+                        }
+                    }
+                    store
+                });
+                (c, render_tile_over(dst, &layers[fi + 1..end], c, canvas))
+            })
+            .collect();
+        if k + 1 == filters.len() {
+            return next;
+        }
+        stage = next
+            .into_iter()
+            .map(|(c, t)| (c, t.map(std::sync::Arc::new)))
+            .collect();
+    }
+    unreachable!("the loop returns at the last filter")
+}
+
+/// Composites live filter layer `layer` onto `dst`, tile `coord` of the
+/// composite below it. A live filter needs the backdrop around the tile
+/// too: `below(area)` returns the layers below composited over `area` (the
+/// tile padded by the filter's reach, clipped to the canvas). Outside the
+/// canvas the edge pixel is repeated, as Photoshop does, so borders don't
+/// fade.
+fn live_filter_into(
+    dst: &mut Option<Tile>,
+    layer: &Layer,
+    coord: TileCoord,
+    canvas: Rect,
+    below: impl FnOnce(Rect) -> TileStore,
+) {
+    let LayerContent::Filter(f) = &layer.content else {
+        return;
+    };
+    let mask = layer.mask.as_ref().filter(|m| m.enabled);
+    if let Some(m) = mask {
+        if m.default <= 0.0 && m.tiles.tile(coord).is_none() {
+            return;
+        }
+    }
+    let pad = f.pad();
+    let (ox, oy) = coord.origin();
+    let area = Rect::new(
+        ox - pad,
+        oy - pad,
+        TILE_SIZE as u32 + 2 * pad as u32,
+        TILE_SIZE as u32 + 2 * pad as u32,
+    );
+    let visible = area.intersect(&canvas);
+    if visible.is_empty() {
+        return;
+    }
+    let below = below(visible);
+    if below.is_empty() && dst.is_none() {
+        return;
+    }
+    let mut src = Raster::new(area.w, area.h);
+    for y in 0..area.h as i32 {
+        let sy = (area.y + y).clamp(canvas.y, canvas.bottom() - 1);
+        for x in 0..area.w as i32 {
+            let sx = (area.x + x).clamp(canvas.x, canvas.right() - 1);
+            src.set(x as u32, y as u32, below.get_pixel(sx, sy));
+        }
+    }
+    let filtered = filter_raster(&src, f, (area.x, area.y));
+    let d = dst.get_or_insert_with(Tile::new);
+    let mask_px = mask.and_then(|m| m.tiles.tile(coord)).map(|t| t.pixels());
+    let mask_default = mask.map_or(1.0, |m| m.default);
+    for (i, p) in d.pixels_mut().iter_mut().enumerate() {
+        let w = layer.opacity * mask_px.as_ref().map_or(mask_default, |m| m[i].a);
+        if w <= 0.0 {
+            continue;
+        }
+        let (x, y) = (
+            (i % TILE_SIZE) as u32 + pad as u32,
+            (i / TILE_SIZE) as u32 + pad as u32,
+        );
+        let fp = filtered.get(x, y);
+        *p = Rgba::new(
+            p.r + (fp.r - p.r) * w,
+            p.g + (fp.g - p.g) * w,
+            p.b + (fp.b - p.b) * w,
+            p.a + (fp.a - p.a) * w,
+        );
+    }
 }
 
 /// Composite the whole canvas into a dense raster.
@@ -244,56 +402,10 @@ pub fn render_tile_over(
                 }
                 continue;
             }
-            LayerContent::Filter(f) => {
-                // A live filter needs the backdrop around this tile too, so
-                // composite the layers below over the padded area, filter,
-                // and keep the centre. Outside the canvas the edge pixel is
-                // repeated, as Photoshop does, so borders don't fade.
-                let pad = f.pad();
-                let (ox, oy) = coord.origin();
-                let area = Rect::new(
-                    ox - pad,
-                    oy - pad,
-                    TILE_SIZE as u32 + 2 * pad as u32,
-                    TILE_SIZE as u32 + 2 * pad as u32,
-                );
-                let visible = area.intersect(&canvas);
-                if visible.is_empty() {
-                    continue;
-                }
-                let below = composite_layers(&layers[..idx], visible, canvas);
-                if below.is_empty() && dst.is_none() {
-                    continue;
-                }
-                let mut src = Raster::new(area.w, area.h);
-                for y in 0..area.h as i32 {
-                    let sy = (area.y + y).clamp(canvas.y, canvas.bottom() - 1);
-                    for x in 0..area.w as i32 {
-                        let sx = (area.x + x).clamp(canvas.x, canvas.right() - 1);
-                        src.set(x as u32, y as u32, below.get_pixel(sx, sy));
-                    }
-                }
-                let filtered = filter_raster(&src, f, (area.x, area.y));
-                let d = dst.get_or_insert_with(Tile::new);
-                let mask_px = mask.and_then(|m| m.tiles.tile(coord)).map(|t| t.pixels());
-                let mask_default = mask.map_or(1.0, |m| m.default);
-                for (i, p) in d.pixels_mut().iter_mut().enumerate() {
-                    let w = layer.opacity * mask_px.as_ref().map_or(mask_default, |m| m[i].a);
-                    if w <= 0.0 {
-                        continue;
-                    }
-                    let (x, y) = (
-                        (i % TILE_SIZE) as u32 + pad as u32,
-                        (i / TILE_SIZE) as u32 + pad as u32,
-                    );
-                    let fp = filtered.get(x, y);
-                    *p = Rgba::new(
-                        p.r + (fp.r - p.r) * w,
-                        p.g + (fp.g - p.g) * w,
-                        p.b + (fp.b - p.b) * w,
-                        p.a + (fp.a - p.a) * w,
-                    );
-                }
+            LayerContent::Filter(_) => {
+                live_filter_into(&mut dst, layer, coord, canvas, |area| {
+                    composite_layers(&layers[..idx], area, canvas)
+                });
                 continue;
             }
         };
@@ -1651,6 +1763,170 @@ mod tests {
             doc.layer(id).unwrap().pixels().unwrap().get_pixel(255, 32).r,
             0.2
         ));
+    }
+
+    /// The tile-by-tile definition: what `render_tile` gives for each tile.
+    fn per_tile(layers: &[Layer], rect: Rect, canvas: Rect) -> Vec<(TileCoord, Option<Vec<Rgba>>)> {
+        rect.tiles()
+            .into_iter()
+            .map(|c| (c, render_tile(layers, c, canvas).map(|t| t.pixels().to_vec())))
+            .collect()
+    }
+
+    fn staged(layers: &[Layer], rect: Rect, canvas: Rect) -> Vec<(TileCoord, Option<Vec<Rgba>>)> {
+        let store = composite_layers(layers, rect, canvas);
+        rect.tiles()
+            .into_iter()
+            .map(|c| (c, store.tile(c).map(|t| t.pixels().to_vec())))
+            .collect()
+    }
+
+    /// A stack with every awkward neighbour a live filter can have: a base
+    /// spilling past the canvas, filters of different reach, a masked and a
+    /// half-opacity filter, a hidden one, a clip chain and an adjustment
+    /// between filters, and a group holding its own filter.
+    fn filter_stack() -> (Vec<Layer>, Rect) {
+        use lumenply_doc::Filter as F;
+        let canvas = Rect::new(0, 0, 700, 520);
+        let mut base = Layer::pixel(1, "base");
+        let px = base.pixels_mut().unwrap();
+        for y in -20..540 {
+            for x in -20..720 {
+                let v = (((x * 7) ^ (y * 3)) & 255) as f32 / 255.0;
+                px.set_pixel(
+                    x,
+                    y,
+                    Rgba::new(
+                        v,
+                        v * 0.6,
+                        1.0 - v,
+                        if (x / 50 + y / 50) % 5 == 0 { 0.4 } else { 1.0 },
+                    ),
+                );
+            }
+        }
+        let mut spot = Layer::pixel(2, "spot");
+        for y in 200..330 {
+            for x in 240..520 {
+                spot.pixels_mut()
+                    .unwrap()
+                    .set_pixel(x, y, Rgba::new(0.9, 0.2, 0.1, 1.0));
+            }
+        }
+        let mut clipped = Layer::pixel(3, "clipped");
+        clipped.clip = true;
+        for y in 0..520 {
+            for x in (0..700).step_by(3) {
+                clipped
+                    .pixels_mut()
+                    .unwrap()
+                    .set_pixel(x, y, Rgba::new(0.1, 0.8, 0.3, 1.0));
+            }
+        }
+        let mut masked = Layer::filter(5, F::BoxBlur { radius: 3.0 });
+        let mut m = lumenply_doc::Mask::hide_all();
+        for y in 100..400 {
+            for x in 100..600 {
+                m.set_value(x, y, ((x + y) % 7) as f32 / 6.0);
+            }
+        }
+        masked.mask = Some(m);
+        let mut half = Layer::filter(
+            6,
+            F::Sharpen {
+                amount: 0.8,
+                radius: 2.0,
+            },
+        );
+        half.opacity = 0.5;
+        let mut hidden = Layer::filter(7, F::Median { radius: 2.0 });
+        hidden.visible = false;
+        let mut inner_base = Layer::pixel(10, "inner");
+        for y in 50..470 {
+            for x in 60..640 {
+                inner_base
+                    .pixels_mut()
+                    .unwrap()
+                    .set_pixel(x, y, Rgba::new(0.3, 0.3, 0.9, 0.7));
+            }
+        }
+        let group = Layer::with_content(
+            11,
+            "group",
+            LayerContent::Group(vec![
+                inner_base,
+                Layer::filter(12, F::GaussianBlur { radius: 3.0 }),
+            ]),
+        );
+        let layers = vec![
+            base,
+            Layer::filter(4, F::GaussianBlur { radius: 6.0 }),
+            spot,
+            clipped,
+            masked,
+            Layer::adjustment(8, lumenply_doc::Adjustment::Invert),
+            half,
+            hidden,
+            group,
+            Layer::filter(
+                13,
+                F::MotionBlur {
+                    angle: 30.0,
+                    distance: 9.0,
+                },
+            ),
+        ];
+        (layers, canvas)
+    }
+
+    #[test]
+    fn staged_live_filters_match_the_tile_by_tile_definition_exactly() {
+        let (layers, canvas) = filter_stack();
+        let rects = [
+            canvas,
+            Rect::new(300, 100, 50, 300),
+            Rect::new(600, 400, 300, 300),
+        ];
+        // Every prefix: each stage of the staged path is checked against the
+        // per-tile path, whose own filters read stages already checked.
+        for n in 1..=layers.len() {
+            for rect in rects {
+                let a = per_tile(&layers[..n], rect, canvas);
+                let b = staged(&layers[..n], rect, canvas);
+                assert_eq!(a.len(), b.len());
+                for ((ca, ta), (cb, tb)) in a.iter().zip(&b) {
+                    assert_eq!(ca, cb);
+                    assert!(ta == tb, "{n} layers, {rect:?}, tile {ca:?} differs");
+                }
+            }
+        }
+        // And the stack really is filtered (not trivially empty).
+        let full = staged(&layers, canvas, canvas);
+        assert_eq!(
+            full.iter().filter(|(_, t)| t.is_some()).count(),
+            9,
+            "3×3 tiles, all painted"
+        );
+    }
+
+    #[test]
+    #[ignore = "timing; cargo test --release -p lumenply-render stacked_live_filter_timing -- --ignored --nocapture"]
+    fn stacked_live_filter_timing() {
+        let mut doc = Document::new(1024, 768);
+        let id = doc.add_pixel_layer("ramp");
+        let px = doc.layer_mut(id).unwrap().pixels_mut().unwrap();
+        for y in 0..768 {
+            for x in 0..1024 {
+                let v = ((x ^ y) & 255) as f32 / 255.0;
+                px.set_pixel(x, y, Rgba::new(v, v * 0.5, 1.0 - v, 1.0));
+            }
+        }
+        for n in 0..=3 {
+            let t = std::time::Instant::now();
+            let out = composite(&doc);
+            println!("{n} stacked blur layers: {:?} ({} tiles)", t.elapsed(), out.len());
+            doc.add_filter(lumenply_doc::Filter::GaussianBlur { radius: 4.0 });
+        }
     }
 
     #[test]
