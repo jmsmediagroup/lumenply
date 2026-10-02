@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libgl-dev libwayland-dev
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libgl-dev libwayland-dev
+      - run: cargo test --workspace
+
+  msrv:
+    name: MSRV 1.85
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libgl-dev libwayland-dev
+      - run: cargo check --workspace --locked
+
+  bench-gate:
+    name: performance gate
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p nge-cli
+      # Budget is deliberately loose until the GPU path lands; tighten it then.
+      - run: |
+          out=$(./target/release/nge bench --size 2048 --layers 10 --runs 3)
+          echo "$out"
+          best=$(echo "$out" | sed -n 's/^best: \([0-9.]*\) ms.*/\1/p')
+          awk -v b="$best" 'BEGIN { if (b > 2000) { print "composite too slow: " b " ms"; exit 1 } }'
+
+  nightly-build:
+    name: nightly binaries
+    if: github.event_name == 'push'
+    needs: test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libgl-dev libwayland-dev
+      - run: cargo build --release -p nge-cli -p nge-app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nge-${{ matrix.os }}
+          path: |
+            target/release/nge
+            target/release/nge.exe
+            target/release/nge-app
+            target/release/nge-app.exe
+          if-no-files-found: ignore

@@ -1,0 +1,45 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/tiles",
+    "crates/doc",
+    "crates/render",
+    "crates/io",
+    "crates/core",
+    "crates/cli",
+    "crates/app",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/CHANGE-ME/nge"
+authors = ["NGE contributors"]
+
+[workspace.dependencies]
+nge-tiles = { path = "crates/tiles" }
+nge-doc = { path = "crates/doc" }
+nge-render = { path = "crates/render" }
+nge-io = { path = "crates/io" }
+nge-core = { path = "crates/core" }
+
+rayon = "1.10"
+thiserror = "1.0"
+anyhow = "1.0"
+image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
+clap = { version = "4.4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+fontdue = "0.9"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+
+# Tests and benches that push pixels are unbearably slow unoptimised.
+[profile.dev.package."*"]
+opt-level = 2

@@ -1,0 +1,21 @@
+[package]
+name = "nge-app"
+description = "Desktop editor shell (egui)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "nge-app"
+path = "src/main.rs"
+
+[dependencies]
+nge-tiles.workspace = true
+nge-doc.workspace = true
+nge-render.workspace = true
+nge-io.workspace = true
+nge-core.workspace = true
+eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts", "x11"] }

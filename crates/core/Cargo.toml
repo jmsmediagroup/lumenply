@@ -1,0 +1,15 @@
+[package]
+name = "nge-core"
+description = "Command bus, undo history and editing commands"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+nge-tiles.workspace = true
+nge-doc.workspace = true
+nge-render.workspace = true
+thiserror.workspace = true

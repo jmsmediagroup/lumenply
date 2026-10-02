@@ -1,0 +1,15 @@
+[package]
+name = "nge-render"
+description = "Tiled compositor (CPU path; GPU path via wgpu to follow)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+nge-tiles.workspace = true
+nge-doc.workspace = true
+rayon.workspace = true
+fontdue.workspace = true
