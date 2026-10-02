@@ -179,8 +179,35 @@ pub fn save_exr(path: impl AsRef<Path>, raster: &Raster) -> Result<(), IoError> 
     Ok(())
 }
 
+/// A compact public-domain (CC0) sRGB v2 profile, embedded in JPEG exports
+/// so colour-managed readers treat the pixels as what they are. From
+/// Compact-ICC-Profiles (saucecontrol), 456 bytes.
+pub const SRGB_ICC: &[u8] = include_bytes!("../profiles/sRGB-v2-micro.icc");
+
+/// Write a PNG tagged as sRGB (the `sRGB` chunk — the standard way to
+/// declare sRGB, honoured by colour-managed readers).
+fn write_png_srgb(
+    path: &Path,
+    width: u32,
+    height: u32,
+    depth: png::BitDepth,
+    data: &[u8],
+) -> Result<(), IoError> {
+    let file = std::fs::File::create(path)?;
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(depth);
+    enc.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    let mut writer = enc.write_header().map_err(|e| IoError::Codec(e.to_string()))?;
+    writer
+        .write_image_data(data)
+        .map_err(|e| IoError::Codec(e.to_string()))?;
+    Ok(())
+}
+
 /// Save a raster as a 16-bit sRGB PNG or TIFF (by extension) with straight
-/// alpha, keeping precision an 8-bit export would round away.
+/// alpha, keeping precision an 8-bit export would round away. The PNG is
+/// tagged as sRGB; TIFF has no such lightweight tag and stays untagged.
 pub fn save_16bit(path: impl AsRef<Path>, raster: &Raster) -> Result<(), IoError> {
     let path = path.as_ref();
     let mut buf: Vec<u16> = Vec::with_capacity(raster.pixels.len() * 4);
@@ -189,19 +216,21 @@ pub fn save_16bit(path: impl AsRef<Path>, raster: &Raster) -> Result<(), IoError
         let q = |v: f32| (linear_to_srgb_f(v) * 65535.0 + 0.5) as u16;
         buf.extend_from_slice(&[q(r), q(g), q(b), (a.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16]);
     }
-    let img = image::ImageBuffer::<image::Rgba<u16>, _>::from_raw(raster.width, raster.height, buf)
-        .expect("buffer size matches dimensions");
-    let format = match path.extension().and_then(|e| e.to_str()) {
-        Some(e) if e.eq_ignore_ascii_case("tif") || e.eq_ignore_ascii_case("tiff") => {
-            image::ImageFormat::Tiff
-        }
-        _ => image::ImageFormat::Png,
-    };
-    image::DynamicImage::ImageRgba16(img).save_with_format(path, format)?;
-    Ok(())
+    let is_tiff = matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some(e) if e.eq_ignore_ascii_case("tif") || e.eq_ignore_ascii_case("tiff")
+    );
+    if is_tiff {
+        let img = image::ImageBuffer::<image::Rgba<u16>, _>::from_raw(raster.width, raster.height, buf)
+            .expect("buffer size matches dimensions");
+        image::DynamicImage::ImageRgba16(img).save_with_format(path, image::ImageFormat::Tiff)?;
+        return Ok(());
+    }
+    let bytes: Vec<u8> = buf.iter().flat_map(|v| v.to_be_bytes()).collect();
+    write_png_srgb(path, raster.width, raster.height, png::BitDepth::Sixteen, &bytes)
 }
 
-/// Save a raster as an 8-bit sRGB PNG with straight alpha.
+/// Save a raster as an 8-bit sRGB PNG with straight alpha, tagged as sRGB.
 pub fn save_png(path: impl AsRef<Path>, raster: &Raster) -> Result<(), IoError> {
     let mut buf = Vec::with_capacity(raster.pixels.len() * 4);
     for p in &raster.pixels {
@@ -213,13 +242,42 @@ pub fn save_png(path: impl AsRef<Path>, raster: &Raster) -> Result<(), IoError> 
             (a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
         ]);
     }
-    let img =
-        image::RgbaImage::from_raw(raster.width, raster.height, buf).expect("buffer size matches dimensions");
-    img.save_with_format(path, image::ImageFormat::Png)?;
-    Ok(())
+    write_png_srgb(
+        path.as_ref(),
+        raster.width,
+        raster.height,
+        png::BitDepth::Eight,
+        &buf,
+    )
 }
 
-/// Save a raster as JPEG (no alpha: composited over white), quality 1–100.
+/// Splice an ICC profile into a JPEG stream as an APP2 segment, placed
+/// after any APP0 (JFIF) marker so the segment order stays conventional.
+fn jpeg_with_icc(jpeg: &[u8], icc: &[u8]) -> Vec<u8> {
+    // One segment holds up to ~64KB; our profile is a few hundred bytes.
+    let payload_len = 2 + 12 + 2 + icc.len(); // length field + header + seq/count
+    if jpeg.len() < 4 || jpeg[0] != 0xFF || jpeg[1] != 0xD8 || payload_len > 0xFFFF {
+        return jpeg.to_vec();
+    }
+    let mut at = 2;
+    // Skip over an APP0 segment if one follows SOI.
+    if jpeg.len() >= at + 4 && jpeg[at] == 0xFF && jpeg[at + 1] == 0xE0 {
+        let seg = u16::from_be_bytes([jpeg[at + 2], jpeg[at + 3]]) as usize;
+        at += 2 + seg;
+    }
+    let mut out = Vec::with_capacity(jpeg.len() + payload_len + 2);
+    out.extend_from_slice(&jpeg[..at.min(jpeg.len())]);
+    out.extend_from_slice(&[0xFF, 0xE2]);
+    out.extend_from_slice(&(payload_len as u16).to_be_bytes());
+    out.extend_from_slice(b"ICC_PROFILE\0");
+    out.extend_from_slice(&[1, 1]); // chunk 1 of 1
+    out.extend_from_slice(icc);
+    out.extend_from_slice(&jpeg[at.min(jpeg.len())..]);
+    out
+}
+
+/// Save a raster as JPEG (no alpha: composited over white), quality 1–100,
+/// with an sRGB ICC profile embedded.
 pub fn save_jpeg(path: impl AsRef<Path>, raster: &Raster, quality: u8) -> Result<(), IoError> {
     let mut buf = Vec::with_capacity(raster.pixels.len() * 3);
     for p in &raster.pixels {
@@ -229,10 +287,10 @@ pub fn save_jpeg(path: impl AsRef<Path>, raster: &Raster, quality: u8) -> Result
     }
     let img =
         image::RgbImage::from_raw(raster.width, raster.height, buf).expect("buffer size matches dimensions");
-    let file = std::fs::File::create(path)?;
-    let mut w = std::io::BufWriter::new(file);
-    let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut w, quality.clamp(1, 100));
+    let mut encoded = Vec::new();
+    let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, quality.clamp(1, 100));
     img.write_with_encoder(enc)?;
+    std::fs::write(path, jpeg_with_icc(&encoded, SRGB_ICC))?;
     Ok(())
 }
 
@@ -264,6 +322,69 @@ mod tests {
             transparent_side[0] > 0.9,
             "transparent pixels land on white: {transparent_side:?}"
         );
+    }
+
+    #[test]
+    fn exports_are_tagged_as_srgb() {
+        let mut r = Raster::new(8, 8);
+        for y in 0..8 {
+            for x in 0..8 {
+                r.set(x, y, Rgba::from_straight(0.3, 0.5, 0.7, 1.0));
+            }
+        }
+        let dir = std::env::temp_dir().join("lumenply-io-test");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // PNG (8- and 16-bit) carries the standard sRGB chunk.
+        let chunks = |bytes: &[u8]| -> Vec<String> {
+            let mut names = Vec::new();
+            let mut at = 8; // signature
+            while at + 8 <= bytes.len() {
+                let len = u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+                names.push(String::from_utf8_lossy(&bytes[at + 4..at + 8]).into_owned());
+                at += 12 + len; // length + name + data + crc
+            }
+            names
+        };
+        for (name, deep) in [("tag8.png", false), ("tag16.png", true)] {
+            let path = dir.join(name);
+            if deep {
+                save_16bit(&path, &r).unwrap();
+            } else {
+                save_png(&path, &r).unwrap();
+            }
+            let bytes = std::fs::read(&path).unwrap();
+            let names = chunks(&bytes);
+            assert!(names.iter().any(|n| n == "sRGB"), "{name} chunks: {names:?}");
+            // The tagged file still loads with the expected values.
+            let back = load(&path).unwrap();
+            let p = back.get(3, 3).to_straight();
+            assert!((p[1] - 0.5).abs() < 0.01, "{name} round trip: {p:?}");
+        }
+
+        // JPEG embeds the bundled sRGB profile in an APP2 segment, and the
+        // profile itself must be one qcms accepts.
+        assert!(
+            qcms::Profile::new_from_slice(SRGB_ICC, false).is_some(),
+            "bundled profile parses"
+        );
+        let path = dir.join("tag.jpg");
+        save_jpeg(&path, &r, 95).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let pos = bytes
+            .windows(12)
+            .position(|w| w == b"ICC_PROFILE\0")
+            .expect("APP2 ICC marker present");
+        assert_eq!(
+            &bytes[pos + 14..pos + 14 + 4],
+            &SRGB_ICC[..4],
+            "profile bytes follow"
+        );
+        // Our own importer reads the profile back and lands on the same
+        // colours (an sRGB-to-sRGB transform is a near-no-op).
+        let back = load(&path).unwrap();
+        let p = back.get(3, 3).to_straight();
+        assert!((p[0] - 0.3).abs() < 0.05 && (p[1] - 0.5).abs() < 0.05, "{p:?}");
     }
 
     #[test]

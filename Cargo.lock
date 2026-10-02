@@ -1899,6 +1899,7 @@ dependencies = [
  "lumenply-doc",
  "lumenply-render",
  "lumenply-tiles",
+ "png 0.17.16",
  "qcms",
  "quick-xml 0.36.2",
  "serde",

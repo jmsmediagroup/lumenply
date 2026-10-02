@@ -109,7 +109,10 @@ None of these could be tested in the container.
 
 - [~] ICC colour management (qcms, pure Rust): embedded PNG/JPEG profiles are
       converted to sRGB on import (neutral-preserving, no-op on bad profiles);
-      still open: profiles on deep imports, tagging exports, display profile
+      exports are tagged — PNGs (8/16-bit) carry the sRGB chunk, JPEGs embed
+      a CC0 compact sRGB profile (APP2), both Pillow-verified. Still open:
+      profiles on deep (16-bit) imports (qcms transforms 8-bit only),
+      display profile
 - [x] 16-bit PNG/TIFF import/export (full precision in, 16-bit sRGB out)
 - [ ] Float/HDR document mode (skip compaction; ADR 0004)
 - [x] WebP import; OpenEXR import/export (linear f32 both ways — lossless for
