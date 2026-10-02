@@ -966,6 +966,32 @@ impl Command for UngroupLayer {
     }
 }
 
+/// Clip a layer to the one below it (or release the clip).
+pub struct SetClipped {
+    pub layer: LayerId,
+    pub clip: bool,
+}
+
+impl Command for SetClipped {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn label(&self) -> String {
+        if self.clip {
+            "Clip to layer below".into()
+        } else {
+            "Release clip".into()
+        }
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
+        l.clip = self.clip;
+        Ok(())
+    }
+}
+
 /// Toggle a group's pass-through compositing.
 pub struct SetPassThrough {
     pub layer: LayerId,

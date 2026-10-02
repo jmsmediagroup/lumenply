@@ -17,6 +17,7 @@ pub(crate) struct LayerRow {
     visible: bool,
     opacity: f32,
     kind: Kind,
+    clip: bool,
     /// Kind label shown at the right edge: "Text", "Curves", "Live blur"...
     chip: Option<&'static str>,
     masked: bool,
@@ -53,6 +54,7 @@ impl App {
                     visible: l.visible,
                     opacity: l.opacity,
                     kind,
+                    clip: l.clip,
                     chip,
                     masked: l.mask.is_some(),
                     mask_enabled: l.mask.as_ref().is_some_and(|m| m.enabled),
@@ -113,6 +115,23 @@ impl App {
                     }
                     let mut x = rect.min.x + 6.0 + row.depth as f32 * 16.0;
                     let cy = rect.center().y;
+                    if row.clip {
+                        // Clipped layers tuck under their base with a bent
+                        // arrow pointing at it.
+                        x += 14.0;
+                        let s = Stroke::new(1.4, MUTED);
+                        let bx = x - 8.0;
+                        p.line_segment([egui::pos2(bx, cy - 6.0), egui::pos2(bx, cy + 2.0)], s);
+                        p.line_segment([egui::pos2(bx, cy + 2.0), egui::pos2(bx + 5.0, cy + 2.0)], s);
+                        p.line_segment(
+                            [egui::pos2(bx + 5.0, cy + 2.0), egui::pos2(bx + 2.0, cy - 1.0)],
+                            s,
+                        );
+                        p.line_segment(
+                            [egui::pos2(bx + 5.0, cy + 2.0), egui::pos2(bx + 2.0, cy + 5.0)],
+                            s,
+                        );
+                    }
 
                     // visibility checkbox
                     let vis_rect = egui::Rect::from_center_size(egui::pos2(x + 8.0, cy), Vec2::splat(16.0));
@@ -283,6 +302,17 @@ impl App {
                             }
                         }
                         ui.separator();
+                        {
+                            let label = if row.clip {
+                                "Release clip"
+                            } else {
+                                "Clip to layer below"
+                            };
+                            if ui.button(label).clicked() {
+                                ctx_action = Some((if row.clip { "unclip" } else { "clip" }, row.id));
+                                ui.close_menu();
+                            }
+                        }
                         if row.masked {
                             if ui.button("Remove mask").clicked() {
                                 ctx_action = Some(("rmmask", row.id));
@@ -438,6 +468,10 @@ impl App {
                 "maskon" | "maskoff" => self.run(&SetMaskEnabled {
                     layer: id,
                     enabled: act == "maskon",
+                }),
+                "clip" | "unclip" => self.run(&SetClipped {
+                    layer: id,
+                    clip: act == "clip",
                 }),
                 _ => {}
             }

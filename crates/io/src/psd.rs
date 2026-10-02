@@ -636,6 +636,7 @@ fn layer_record(
     channels: Vec<(i16, Vec<u8>)>, // (channel id, encoded data)
     blend: BlendMode,
     pass_through: bool,
+    clip: bool,
     opacity: f32,
     visible: bool,
     mask: Option<(Rect, Vec<u8>, u8)>, // (rect, encoded data, default colour)
@@ -661,7 +662,7 @@ fn layer_record(
     rec.extend_from_slice(b"8BIM");
     rec.extend_from_slice(if pass_through { b"pass" } else { blend_key(blend) });
     rec.push((opacity.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
-    rec.push(0); // clipping: base
+    rec.push(u8::from(clip));
     let mut flags = 0u8;
     if !visible {
         flags |= 0x02;
@@ -753,6 +754,7 @@ fn collect_records(
                     chans,
                     l.blend,
                     false,
+                    l.clip,
                     l.opacity,
                     l.visible,
                     mask,
@@ -768,6 +770,7 @@ fn collect_records(
                     empty_channels(),
                     BlendMode::Normal,
                     false,
+                    false,
                     1.0,
                     true,
                     None,
@@ -781,6 +784,7 @@ fn collect_records(
                     empty_channels(),
                     l.blend,
                     l.pass_through,
+                    l.clip,
                     l.opacity,
                     l.visible,
                     mask,
@@ -815,6 +819,7 @@ fn collect_records(
                         empty_channels(),
                         l.blend,
                         false,
+                        l.clip,
                         l.opacity,
                         l.visible,
                         mask,
@@ -914,6 +919,7 @@ struct RawLayer {
     blend: BlendMode,
     blend_known: bool,
     pass_through: bool,
+    clip: bool,
     opacity: f32,
     visible: bool,
     mask: Option<(Rect, Vec<u8>, u8, bool)>,
@@ -1014,7 +1020,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 }
                 let key = rd.bytes(4)?.to_vec();
                 let opacity = rd.u8()? as f32 / 255.0;
-                let _clipping = rd.u8()?;
+                let clipping = rd.u8()?;
                 let flags = rd.u8()?;
                 let _filler = rd.u8()?;
                 let extra_len = rd.u32()? as usize;
@@ -1088,6 +1094,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 heads.push((
                     RawLayer {
                         pass_through: &key[..] == b"pass",
+                        clip: clipping == 1,
                         name,
                         bounds: checked_rect(left, top, right, bottom, "layer")?,
                         channels: Vec::new(),
@@ -1217,6 +1224,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 *g.children_mut().expect("group") = children;
                 g.blend = rl.blend;
                 g.pass_through = rl.pass_through;
+                g.clip = rl.clip;
                 g.opacity = rl.opacity;
                 g.visible = rl.visible;
                 g.collapsed = rl.section == 2;
@@ -1237,6 +1245,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                             let mut l = Layer::adjustment(id, adj);
                             l.name = rl.name.clone();
                             l.blend = rl.blend;
+                            l.clip = rl.clip;
                             l.opacity = rl.opacity;
                             l.visible = rl.visible;
                             l.mask = build_mask(&rl);
@@ -1252,6 +1261,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let id = doc.alloc_id();
                 let mut l = Layer::pixel(id, rl.name.clone());
                 l.blend = rl.blend;
+                l.clip = rl.clip;
                 l.opacity = rl.opacity;
                 l.visible = rl.visible;
                 if !rl.blend_known {
@@ -1471,6 +1481,7 @@ mod tests {
         let grp = doc.layer_mut(g).unwrap();
         grp.children_mut().unwrap().push(a);
         grp.children_mut().unwrap().push(b);
+        grp.children_mut().unwrap()[1].clip = true;
         grp.pass_through = true;
         doc.add_adjustment(nge_doc::Adjustment::Invert);
 
@@ -1496,6 +1507,7 @@ mod tests {
         assert_eq!(kids, ["Red square", "Hidden"]);
         let red = &grp.children().unwrap()[0];
         assert_eq!(red.blend, BlendMode::Multiply);
+        assert!(!red.clip);
         assert!((red.opacity - 0.6).abs() < 0.01);
         let p = red.pixels().unwrap().get_pixel(30, 40).to_straight();
         assert!(
@@ -1507,6 +1519,7 @@ mod tests {
         assert!((m.value(25, 35) - 0.25).abs() < 0.01 && (m.value(100, 100) - 1.0).abs() < 0.01);
         let hidden = &grp.children().unwrap()[1];
         assert!(!hidden.visible);
+        assert!(hidden.clip, "the clipping byte round-trips");
         assert_eq!(hidden.pixels().unwrap().get_pixel(250, 150), Rgba::WHITE);
 
         // The composite of the imported document matches the original, Invert included.

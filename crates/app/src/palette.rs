@@ -69,6 +69,8 @@ impl App {
             m("Flip layer horizontal", "", "flip-h"),
             m("Flip layer vertical", "", "flip-v"),
             m("Add layer mask", "", "add-mask"),
+            m("Clip layer to the one below", "", "clip"),
+            m("Release layer clip", "", "unclip"),
             m("Remove layer mask", "", "rm-mask"),
             m("Image size...", "", "image-size"),
             m("Canvas size...", "", "canvas-size"),
@@ -276,6 +278,14 @@ impl App {
             "layer-down" => self.reorder_active(-1),
             "flip-h" => self.flip_active(true),
             "flip-v" => self.flip_active(false),
+            "clip" | "unclip" => {
+                if let Some(layer) = self.active {
+                    self.run(&SetClipped {
+                        layer,
+                        clip: id == "clip",
+                    });
+                }
+            }
             "add-mask" => {
                 if let Some(l) = self.active {
                     self.run(&AddMask { layer: l });

@@ -328,13 +328,18 @@ impl GpuCompositor {
     /// Whether this document (over any rect) is renderable on the GPU path.
     pub fn supports(doc: &Document) -> bool {
         fn ok(layers: &[Layer]) -> bool {
-            layers.iter().all(|l| match &l.content {
-                LayerContent::Pixel(_) | LayerContent::Text(_) => true,
-                LayerContent::Group(c) => ok(c),
-                LayerContent::Filter(_) => false,
-                LayerContent::Adjustment(a) => {
-                    l.blend == nge_doc::BlendMode::Normal && matches!(a.compile(), CompiledAdjustment::Lut(_))
-                }
+            layers.iter().all(|l| {
+                // Clip chains stay on the CPU for now.
+                !l.clip
+                    && match &l.content {
+                        LayerContent::Pixel(_) | LayerContent::Text(_) => true,
+                        LayerContent::Group(c) => ok(c),
+                        LayerContent::Filter(_) => false,
+                        LayerContent::Adjustment(a) => {
+                            l.blend == nge_doc::BlendMode::Normal
+                                && matches!(a.compile(), CompiledAdjustment::Lut(_))
+                        }
+                    }
             })
         }
         ok(doc.layers())

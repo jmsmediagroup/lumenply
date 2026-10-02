@@ -294,6 +294,10 @@ pub struct Layer {
     /// 0.0 (invisible) to 1.0 (opaque).
     pub opacity: f32,
     pub blend: BlendMode,
+    /// Clip to the layer below: this layer shows only where the base of
+    /// its clip chain has coverage, and the chain composites as one unit
+    /// with the base's blend and opacity. Ignored on the bottom sibling.
+    pub clip: bool,
     /// Groups only: composite the children straight onto the backdrop
     /// instead of as an isolated unit, so adjustments and blend modes
     /// inside the group reach the layers below it.
@@ -362,6 +366,7 @@ impl Layer {
             visible: true,
             opacity: 1.0,
             blend: BlendMode::Normal,
+            clip: false,
             pass_through: false,
             mask: None,
             content,

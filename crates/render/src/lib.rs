@@ -80,7 +80,80 @@ pub fn render_tile_over(
     canvas: Rect,
 ) -> Option<Tile> {
     let mut dst: Option<Tile> = backdrop;
+    let mut skip_until = 0usize;
     for (idx, layer) in layers.iter().enumerate() {
+        if idx < skip_until {
+            continue;
+        }
+        // A clip chain: this layer is the base, the following `clip`
+        // layers paint only inside its coverage, and the whole unit
+        // composites with the base's blend and opacity.
+        let chain_end = {
+            let mut e = idx + 1;
+            while e < layers.len() && layers[e].clip && !matches!(layers[e].content, LayerContent::Filter(_))
+            {
+                e += 1;
+            }
+            e
+        };
+        let baseable = !layer.clip
+            && matches!(
+                layer.content,
+                LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Group(_)
+            );
+        if chain_end > idx + 1 && baseable {
+            skip_until = chain_end;
+            // A hidden base hides its whole chain.
+            if !layer.visible || layer.opacity <= 0.0 {
+                continue;
+            }
+            let mask = layer.mask.as_ref().filter(|m| m.enabled);
+            let Some(base_src) = source_tile(layer, coord, canvas) else {
+                continue;
+            };
+            let mut unit = match mask {
+                Some(m) => apply_mask(base_src, m, coord),
+                None => base_src,
+            };
+            let base_alpha: Vec<f32> = unit.pixels().iter().map(|p| p.a).collect();
+            for member in &layers[idx + 1..chain_end] {
+                if !member.visible || member.opacity <= 0.0 {
+                    continue;
+                }
+                let mmask = member.mask.as_ref().filter(|m| m.enabled);
+                match &member.content {
+                    LayerContent::Adjustment(adj) => {
+                        // adjust_in_place skips zero-alpha pixels, so the
+                        // base's coverage gates it automatically.
+                        adjust_in_place(&mut unit, adj, member.blend, member.opacity, mmask, coord);
+                    }
+                    _ => {
+                        let Some(src) = source_tile(member, coord, canvas) else {
+                            continue;
+                        };
+                        let masked = match mmask {
+                            Some(m) => apply_mask(src, m, coord),
+                            None => src,
+                        };
+                        blend_tile(&mut unit, &masked, member.blend, member.opacity);
+                    }
+                }
+            }
+            // Clipped content never changes coverage: restore the base's
+            // alpha, keeping the blended straight colour.
+            for (i, p) in unit.pixels_mut().iter_mut().enumerate() {
+                let ba = base_alpha[i];
+                if ba <= 0.0 || p.a <= 0.0 {
+                    *p = Rgba::TRANSPARENT;
+                } else if (p.a - ba).abs() > 1e-7 {
+                    let k = ba / p.a;
+                    *p = Rgba::new(p.r * k, p.g * k, p.b * k, ba);
+                }
+            }
+            let d = dst.get_or_insert_with(Tile::new);
+            blend_tile(d, &unit, layer.blend, layer.opacity);
+            continue;
+        }
         if !layer.visible || layer.opacity <= 0.0 {
             continue;
         }
@@ -202,6 +275,16 @@ pub fn render_tile_over(
         }
     }
     dst
+}
+
+/// A layer's own content for one tile — pixels, the text cache, or an
+/// isolated render of a group — before masks and blending.
+fn source_tile(layer: &Layer, coord: TileCoord, canvas: Rect) -> Option<Tile> {
+    match &layer.content {
+        LayerContent::Pixel(_) | LayerContent::Text(_) => layer.raster_store()?.tile(coord).cloned(),
+        LayerContent::Group(children) => render_tile(children, coord, canvas),
+        _ => None,
+    }
 }
 
 /// Mix `after` over `before` by `opacity × mask`: the result of a
@@ -473,6 +556,90 @@ mod tests {
         assert!(close(p[0], 0.75), "got {p:?}");
         let untouched = straight(out.get(0, 0));
         assert!(close(untouched[0], 1.0));
+    }
+
+    #[test]
+    fn clip_chains_paint_only_inside_the_base() {
+        let mut doc = Document::new(8, 8);
+        let bg = doc.add_pixel_layer("bg");
+        for y in 0..8 {
+            for x in 0..8 {
+                doc.layer_mut(bg).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(0.5, 0.5, 0.5, 1.0),
+                );
+            }
+        }
+        // Base: opaque on the left half, 50% at (4,4), empty on the right.
+        let base = doc.add_pixel_layer("base");
+        for y in 0..8 {
+            for x in 0..4 {
+                doc.layer_mut(base).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(0.2, 0.6, 0.2, 1.0),
+                );
+            }
+        }
+        doc.layer_mut(base).unwrap().pixels_mut().unwrap().set_pixel(
+            4,
+            4,
+            Rgba::from_straight(0.2, 0.6, 0.2, 0.5),
+        );
+        // Clipped: white everywhere, but shows only where the base is.
+        let top = doc.add_pixel_layer("clipped");
+        for y in 0..8 {
+            for x in 0..8 {
+                doc.layer_mut(top).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(1.0, 1.0, 1.0, 1.0),
+                );
+            }
+        }
+        doc.layer_mut(top).unwrap().clip = true;
+
+        let out = composite_raster(&doc);
+        let inside = straight(out.get(2, 2));
+        assert!(
+            close(inside[0], 1.0),
+            "clipped paint shows on the base: {inside:?}"
+        );
+        let outside = straight(out.get(6, 2));
+        assert!(
+            close(outside[0], 0.5),
+            "outside the base, the backdrop: {outside:?}"
+        );
+        // Coverage never grows: at the half-alpha base pixel the white
+        // shows at 50% over the grey backdrop.
+        let half = straight(out.get(4, 4));
+        assert!(close(half[0], 0.75), "alpha forced to the base: {half:?}");
+
+        // A clipped adjustment is gated the same way.
+        doc.layer_mut(top).unwrap().visible = false;
+        let adj = doc.add_adjustment(Adjustment::Invert);
+        doc.layer_mut(adj).unwrap().clip = true;
+        let out = composite_raster(&doc);
+        let inv = nge_doc::adjust::srgb_decode(1.0 - nge_doc::adjust::srgb_encode(0.2));
+        assert!(close(straight(out.get(2, 2))[0], inv), "inverted inside the base");
+        assert!(close(straight(out.get(6, 2))[0], 0.5), "untouched outside");
+
+        // Hiding the base hides its whole chain.
+        doc.layer_mut(base).unwrap().visible = false;
+        let out = composite_raster(&doc);
+        assert!(
+            close(straight(out.get(2, 2))[0], 0.5),
+            "hidden base hides the chain"
+        );
+
+        // The base's opacity applies to the unit as a whole.
+        doc.layer_mut(base).unwrap().visible = true;
+        doc.layer_mut(adj).unwrap().visible = false;
+        doc.layer_mut(top).unwrap().visible = true;
+        doc.layer_mut(base).unwrap().opacity = 0.5;
+        let out = composite_raster(&doc);
+        assert!(close(straight(out.get(2, 2))[0], 0.75), "unit at half opacity");
     }
 
     #[test]

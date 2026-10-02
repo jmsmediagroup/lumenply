@@ -125,7 +125,9 @@ None of these could be tested in the container.
 - [ ] Brush engine: presets, textures, spacing jitter, smudge, dodge/burn, sponge
 - [ ] Layer styles (drop shadow, stroke, glow) as non-destructive effects
 - [ ] Smart objects (embedded documents with transforms)
-- [ ] Clipping masks
+- [x] Clipping masks (clip chains composite as a unit gated by the base's alpha
+      and carrying its blend/opacity; context menu + palette; PSD clipping byte
+      round-trips; GPU path falls back to CPU for clipped documents)
 - [x] Pass-through groups (compositor, Blend dropdown, .nge/.psd/.ora round trip)
 - [x] Histogram panel (composite luminance, in Properties); auto contrast as a
       Levels adjustment layer

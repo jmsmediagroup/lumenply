@@ -68,6 +68,8 @@ struct LayerRecord {
     blend: BlendMode,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pass_through: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    clip: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mask: Option<MaskRecord>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -191,6 +193,7 @@ fn write_layer<W: Write + std::io::Seek>(
         opacity: layer.opacity,
         blend: layer.blend,
         pass_through: layer.pass_through,
+        clip: layer.clip,
         mask,
         collapsed: layer.collapsed,
         content,
@@ -330,6 +333,7 @@ fn read_layer<R: Read + std::io::Seek>(
     layer.opacity = r.opacity.clamp(0.0, 1.0);
     layer.blend = r.blend;
     layer.pass_through = r.pass_through;
+    layer.clip = r.clip;
     layer.mask = mask;
     layer.collapsed = r.collapsed;
     Ok(layer)
@@ -516,6 +520,7 @@ mod tests {
         grp.visible = false;
         grp.pass_through = true;
         grp.children_mut().unwrap().push(adj);
+        grp.children_mut().unwrap()[0].clip = true;
         doc.add_filter(Filter::GaussianBlur { radius: 3.5 });
         let tid = doc.alloc_id();
         let mut tl = TextLayer::new("Round trip", 10.0, 60.0, 32.0, [0.0, 0.0, 1.0, 1.0]);
@@ -530,6 +535,7 @@ mod tests {
         assert_eq!(back.next_id(), doc.next_id());
         assert_eq!(back.layer_count(), 5);
         assert!(back.layers()[1].pass_through, "pass-through survives");
+        assert!(back.layers()[1].children().unwrap()[0].clip, "clip flag survives");
         assert!(!back.layers()[0].pass_through);
         assert!(
             matches!(back.layers()[2].content, LayerContent::Filter(Filter::GaussianBlur { radius }) if radius == 3.5)

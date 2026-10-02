@@ -60,6 +60,15 @@ impl BelowCache {
         }
         let layers = doc.layers();
         let split = self.key.and_then(|k| layers.iter().position(|l| l.id == k));
+        // A clip chain composites as one unit with its base: splitting in
+        // the middle would bake the base into the backdrop without its
+        // clipped companions. Walk down to the chain's base.
+        let split = split.map(|mut s| {
+            while s > 0 && layers[s].clip {
+                s -= 1;
+            }
+            s
+        });
         let Some(split) = split.filter(|s| *s > 0) else {
             return composite_layers(layers, rect, canvas);
         };
