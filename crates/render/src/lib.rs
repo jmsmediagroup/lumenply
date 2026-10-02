@@ -495,6 +495,9 @@ mod tests {
             .unwrap()
             .push(Layer::adjustment(id, Adjustment::Invert));
 
+        // Invert runs in gamma space, so linear 0.2 maps to this:
+        let inv = nge_doc::adjust::srgb_decode(1.0 - nge_doc::adjust::srgb_encode(0.2));
+
         // Isolated: the adjustment has nothing inside the group to act on.
         let p = straight(composite_raster(&doc).get(4, 4));
         assert!(close(p[0], 0.2), "isolated group leaves the backdrop: {p:?}");
@@ -502,12 +505,15 @@ mod tests {
         // Pass-through: it inverts the background.
         doc.layer_mut(g).unwrap().pass_through = true;
         let p = straight(composite_raster(&doc).get(4, 4));
-        assert!(close(p[0], 0.8), "pass-through reaches below: {p:?}");
+        assert!(close(p[0], inv), "pass-through reaches below: {p:?}");
 
         // Group opacity scales the effect.
         doc.layer_mut(g).unwrap().opacity = 0.5;
         let p = straight(composite_raster(&doc).get(4, 4));
-        assert!(close(p[0], 0.5), "half-strength pass-through: {p:?}");
+        assert!(
+            close(p[0], (0.2 + inv) / 2.0),
+            "half-strength pass-through: {p:?}"
+        );
 
         // A mask gates where it applies.
         doc.layer_mut(g).unwrap().opacity = 1.0;
@@ -515,7 +521,7 @@ mod tests {
         mask.fill_rect(Rect::new(0, 0, 4, 8), 1.0);
         doc.layer_mut(g).unwrap().mask = Some(mask);
         let out = composite_raster(&doc);
-        assert!(close(straight(out.get(2, 4))[0], 0.8), "masked-in side inverted");
+        assert!(close(straight(out.get(2, 4))[0], inv), "masked-in side inverted");
         assert!(
             close(straight(out.get(6, 4))[0], 0.2),
             "masked-out side untouched"
@@ -562,9 +568,11 @@ mod tests {
             Rgba::from_straight(0.0, 0.0, 1.0, 1.0),
         );
 
+        // Invert runs in gamma space, like Photoshop.
+        let inv = nge_doc::adjust::srgb_decode(1.0 - nge_doc::adjust::srgb_encode(0.2));
         let out = composite_raster(&doc);
         let a = straight(out.get(0, 0));
-        assert!(close(a[0], 0.8), "inverted below: {a:?}");
+        assert!(close(a[0], inv), "inverted below: {a:?}");
         let b = straight(out.get(1, 0));
         assert!(
             close(b[2], 1.0) && close(b[0], 0.0),
@@ -575,12 +583,12 @@ mod tests {
         doc.remove_layer(top);
         let out = composite_raster(&doc);
         let c = straight(out.get(1, 0));
-        assert!(close(c[3], 0.5) && close(c[0], 0.8), "{c:?}");
+        assert!(close(c[3], 0.5) && close(c[0], inv), "{c:?}");
 
         // Adjustment at half opacity blends halfway.
         doc.layer_mut(adj).unwrap().opacity = 0.5;
         let d = straight(composite_raster(&doc).get(0, 0));
-        assert!(close(d[0], 0.5), "{d:?}");
+        assert!(close(d[0], (0.2 + inv) / 2.0), "{d:?}");
     }
 
     #[test]

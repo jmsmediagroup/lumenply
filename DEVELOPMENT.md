@@ -40,7 +40,8 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
   `execute_coalescing` for slider drags). The UI never mutates the document directly.
   New features = a new command in `crates/core/src/commands.rs` + a test there.
 - **Engine crates never depend on a window, GPU or UI toolkit.**
-- **Pixels are premultiplied, linear-light.** Math in `f32`; tiles rest as 16-bit
+- **Pixels are premultiplied, linear-light** — but **adjustment maths runs on
+  gamma-encoded values** (except Exposure; see ADR 0005). Math in `f32`; tiles rest as 16-bit
   (`Tile::compact`) after each command. Never call `tile.pixels()` inside a per-pixel
   loop: for compact tiles it converts the whole tile each call (this caused a real hang).
   Hoist it once per tile.

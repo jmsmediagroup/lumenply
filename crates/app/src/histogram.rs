@@ -5,7 +5,9 @@ use super::*;
 
 pub(crate) const BINS: usize = 64;
 
-/// Luminance (Rec. 709 weights, linear light) histogram of the composite.
+/// Luminance histogram of the composite, binned in the gamma (sRGB)
+/// domain — the same scale the Levels endpoints and every familiar
+/// histogram use.
 pub(crate) fn luminance_histogram(flat: &Raster) -> [u32; BINS] {
     let mut hist = [0u32; BINS];
     for p in &flat.pixels {
@@ -13,7 +15,7 @@ pub(crate) fn luminance_histogram(flat: &Raster) -> [u32; BINS] {
             continue;
         }
         let [r, g, b, _] = p.to_straight();
-        let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        let y = nge_doc::adjust::srgb_encode(0.2126 * r + 0.7152 * g + 0.0722 * b);
         let bin = ((y * (BINS - 1) as f32).round() as usize).min(BINS - 1);
         hist[bin] += 1;
     }
@@ -143,6 +145,8 @@ mod tests {
         assert_eq!(h.iter().sum::<u32>(), 3);
         assert_eq!(h[0], 1);
         assert_eq!(h[BINS - 1], 1);
-        assert_eq!(h[((BINS - 1) as f32 * 0.5).round() as usize], 1);
+        // Bins are gamma-domain: linear 0.5 sits at sRGB ~0.735.
+        let expect = (nge_doc::adjust::srgb_encode(0.5) * (BINS - 1) as f32).round() as usize;
+        assert_eq!(h[expect], 1);
     }
 }

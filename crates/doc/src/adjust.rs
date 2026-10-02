@@ -126,8 +126,28 @@ impl Adjustment {
         self.compile().apply(rgb)
     }
 
-    /// Precompute whatever makes per-pixel application fast.
+    /// Whether the adjustment's maths runs on gamma-encoded (sRGB) values.
+    ///
+    /// Pixels rest in linear light, but the familiar behaviour of tonal
+    /// tools — where Photoshop's mid grey sits at 0.5, a curve's diagonal
+    /// bends around perceptual tones, levels endpoints match the histogram
+    /// people know — comes from working on gamma values. Everything does,
+    /// except Exposure, which is a linear-light tool by definition.
+    pub fn gamma_space(&self) -> bool {
+        !matches!(self, Adjustment::Exposure { .. })
+    }
+
+    /// Precompute whatever makes per-pixel application fast. Gamma-space
+    /// adjustments bake the sRGB transfer into the LUT, so applying them is
+    /// no dearer than linear ones.
     pub fn compile(&self) -> CompiledAdjustment {
+        let wrap = |f: &dyn Fn(f32) -> f32, gamma: bool| {
+            if gamma {
+                CompiledAdjustment::Lut(build_lut(|x| srgb_decode(f(srgb_encode(x)))))
+            } else {
+                CompiledAdjustment::Lut(build_lut(f))
+            }
+        };
         match self {
             Adjustment::Levels {
                 in_black,
@@ -138,18 +158,96 @@ impl Adjustment {
             } => {
                 let span = (in_white - in_black).max(1e-4);
                 let g = 1.0 / gamma.max(1e-3);
-                CompiledAdjustment::Lut(build_lut(|x| {
-                    let t = ((x - in_black) / span).clamp(0.0, 1.0).powf(g);
-                    out_black + (out_white - out_black) * t
-                }))
+                wrap(
+                    &|x| {
+                        let t = ((x - in_black) / span).clamp(0.0, 1.0).powf(g);
+                        out_black + (out_white - out_black) * t
+                    },
+                    self.gamma_space(),
+                )
             }
             Adjustment::Curves { points } => {
                 let spline = MonotoneCubic::new(points);
-                CompiledAdjustment::Lut(build_lut(|x| spline.eval(x)))
+                wrap(&|x| spline.eval(x), self.gamma_space())
             }
-            other => CompiledAdjustment::Direct(other.clone()),
+            Adjustment::Invert => wrap(&|x| 1.0 - x, self.gamma_space()),
+            Adjustment::BrightnessContrast { brightness, contrast } => {
+                let k = ((contrast.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4).tan();
+                let (brightness, k) = (*brightness, k);
+                wrap(
+                    &|c| ((c + brightness - 0.5) * k + 0.5).clamp(0.0, 1.0),
+                    self.gamma_space(),
+                )
+            }
+            Adjustment::Posterize { levels } => {
+                let n = (*levels).clamp(2, 256) as f32;
+                wrap(
+                    &|c| ((c * n).floor().min(n - 1.0)) / (n - 1.0),
+                    self.gamma_space(),
+                )
+            }
+            other => CompiledAdjustment::Direct(other.clone(), other.gamma_space()),
         }
     }
+}
+
+/// The sRGB transfer function (linear → gamma), exact.
+pub fn srgb_encode(v: f32) -> f32 {
+    let v = v.clamp(0.0, 1.0);
+    if v <= 0.003_130_8 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// Inverse of [`srgb_encode`] (gamma → linear), exact.
+pub fn srgb_decode(v: f32) -> f32 {
+    let v = v.clamp(0.0, 1.0);
+    if v <= 0.04045 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Fast transfer for the per-pixel (non-LUT) adjustments: 4096 entries with
+/// linear interpolation, accurate to well under half an 8-bit step.
+fn fast_encode(v: f32) -> f32 {
+    use std::sync::OnceLock;
+    static LUT: OnceLock<Box<[f32; 4096]>> = OnceLock::new();
+    let lut = LUT.get_or_init(|| {
+        let mut l = Box::new([0f32; 4096]);
+        for (i, v) in l.iter_mut().enumerate() {
+            *v = srgb_encode(i as f32 / 4095.0);
+        }
+        l
+    });
+    interp(lut, v)
+}
+
+fn fast_decode(v: f32) -> f32 {
+    use std::sync::OnceLock;
+    static LUT: OnceLock<Box<[f32; 4096]>> = OnceLock::new();
+    let lut = LUT.get_or_init(|| {
+        let mut l = Box::new([0f32; 4096]);
+        for (i, v) in l.iter_mut().enumerate() {
+            *v = srgb_decode(i as f32 / 4095.0);
+        }
+        l
+    });
+    interp(lut, v)
+}
+
+#[inline]
+fn interp(lut: &[f32; 4096], x: f32) -> f32 {
+    let p = x.clamp(0.0, 1.0) * 4095.0;
+    let i = p as usize;
+    if i >= 4095 {
+        return lut[4095];
+    }
+    let t = p - i as f32;
+    lut[i] + (lut[i + 1] - lut[i]) * t
 }
 
 /// Number of entries in a compiled lookup table.
@@ -158,16 +256,40 @@ pub const LUT_SIZE: usize = 1024;
 /// An adjustment ready for per-pixel application.
 #[derive(Clone, Debug)]
 pub enum CompiledAdjustment {
-    Direct(Adjustment),
+    /// Per-pixel maths; the flag says whether it runs on gamma values.
+    Direct(Adjustment, bool),
     Lut(Box<[f32; LUT_SIZE]>),
 }
 
 impl CompiledAdjustment {
     #[inline]
-    pub fn apply(&self, [r, g, b]: [f32; 3]) -> [f32; 3] {
+    pub fn apply(&self, rgb: [f32; 3]) -> [f32; 3] {
         match self {
-            CompiledAdjustment::Lut(lut) => [lut_lookup(lut, r), lut_lookup(lut, g), lut_lookup(lut, b)],
-            CompiledAdjustment::Direct(adj) => match *adj {
+            CompiledAdjustment::Lut(lut) => [
+                lut_lookup(lut, rgb[0]),
+                lut_lookup(lut, rgb[1]),
+                lut_lookup(lut, rgb[2]),
+            ],
+            CompiledAdjustment::Direct(adj, gamma) => {
+                let [r, g, b] = if *gamma {
+                    [fast_encode(rgb[0]), fast_encode(rgb[1]), fast_encode(rgb[2])]
+                } else {
+                    rgb
+                };
+                let out = Self::direct(adj, [r, g, b]);
+                if *gamma {
+                    [fast_decode(out[0]), fast_decode(out[1]), fast_decode(out[2])]
+                } else {
+                    out
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn direct(adj: &Adjustment, [r, g, b]: [f32; 3]) -> [f32; 3] {
+        {
+            match *adj {
                 Adjustment::Invert => [1.0 - r, 1.0 - g, 1.0 - b],
                 Adjustment::BrightnessContrast { brightness, contrast } => {
                     let k = ((contrast.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4).tan();
@@ -248,10 +370,14 @@ impl CompiledAdjustment {
                     let f = |c: f32| ((c * n).floor().min(n - 1.0)) / (n - 1.0);
                     [f(r), f(g), f(b)]
                 }
-                Adjustment::Levels { .. } | Adjustment::Curves { .. } => {
+                Adjustment::Invert
+                | Adjustment::BrightnessContrast { .. }
+                | Adjustment::Posterize { .. }
+                | Adjustment::Levels { .. }
+                | Adjustment::Curves { .. } => {
                     unreachable!("per-channel adjustments compile to a LUT")
                 }
-            },
+            }
         }
     }
 }
@@ -408,17 +534,48 @@ mod tests {
         (a - b).abs() < 2e-3
     }
 
+    /// Run an adjustment on gamma-domain values and read the result back in
+    /// the gamma domain — the numbers a user sees in any picker. Tonal
+    /// adjustments do their maths there (see [`Adjustment::gamma_space`]),
+    /// while pixels rest in linear light.
+    fn in_gamma(adj: &Adjustment, rgb: [f32; 3]) -> [f32; 3] {
+        let lin = adj.apply([srgb_decode(rgb[0]), srgb_decode(rgb[1]), srgb_decode(rgb[2])]);
+        [srgb_encode(lin[0]), srgb_encode(lin[1]), srgb_encode(lin[2])]
+    }
+
+    #[test]
+    fn transfer_round_trips_and_has_the_srgb_anchor_points() {
+        for i in 0..=100 {
+            let v = i as f32 / 100.0;
+            assert!(close(srgb_decode(srgb_encode(v)), v));
+            assert!(close(fast_encode(v), srgb_encode(v)));
+            assert!(close(fast_decode(v), srgb_decode(v)));
+        }
+        assert!(close(srgb_decode(0.5), 0.2140), "sRGB mid grey is ~21.4% linear");
+    }
+
     #[test]
     fn invert_brightness_hue() {
-        let inv = Adjustment::Invert.apply([0.2, 0.5, 1.0]);
-        assert!(close(inv[0], 0.8) && close(inv[2], 0.0));
+        // Invert works on gamma values, like Photoshop: an sRGB 0.2 becomes
+        // an sRGB 0.8.
+        let inv = in_gamma(&Adjustment::Invert, [0.2, 0.5, 1.0]);
+        assert!(close(inv[0], 0.8) && close(inv[2], 0.0), "{inv:?}");
 
         let same = Adjustment::BrightnessContrast {
             brightness: 0.0,
             contrast: 0.0,
         }
         .apply([0.3, 0.6, 0.9]);
-        assert!(close(same[0], 0.3) && close(same[2], 0.9));
+        assert!(close(same[0], 0.3) && close(same[2], 0.9), "identity is exact");
+
+        // Contrast pivots around gamma 0.5 (linear ~0.214), so mid grey is a
+        // fixed point of any contrast change.
+        let mid = srgb_decode(0.5);
+        let c = Adjustment::BrightnessContrast {
+            brightness: 0.0,
+            contrast: 0.5,
+        };
+        assert!(close(c.apply([mid; 3])[0], mid), "mid grey pinned");
 
         let hs = Adjustment::HueSaturation {
             hue: 120.0,
@@ -434,6 +591,7 @@ mod tests {
         let id = Adjustment::levels_default();
         assert!(close(id.apply([0.37; 3])[0], 0.37));
 
+        // Levels endpoints are gamma-domain values, matching the histogram.
         let crush = Adjustment::Levels {
             in_black: 0.25,
             in_white: 0.75,
@@ -441,9 +599,9 @@ mod tests {
             out_black: 0.0,
             out_white: 1.0,
         };
-        assert!(close(crush.apply([0.25; 3])[0], 0.0));
-        assert!(close(crush.apply([0.5; 3])[0], 0.5));
-        assert!(close(crush.apply([0.9; 3])[0], 1.0));
+        assert!(close(in_gamma(&crush, [0.25; 3])[0], 0.0));
+        assert!(close(in_gamma(&crush, [0.5; 3])[0], 0.5));
+        assert!(close(in_gamma(&crush, [0.9; 3])[0], 1.0));
 
         let bright = Adjustment::Levels {
             in_black: 0.0,
@@ -452,17 +610,18 @@ mod tests {
             out_black: 0.0,
             out_white: 1.0,
         };
-        assert!(close(bright.apply([0.25; 3])[0], 0.5)); // 0.25^(1/2)
+        assert!(close(in_gamma(&bright, [0.25; 3])[0], 0.5)); // 0.25^(1/2)
     }
 
     #[test]
     fn curves_pass_through_points_and_stay_monotone() {
+        // Curve points live in the gamma domain, like the curves dialog.
         let c = Adjustment::Curves {
             points: vec![[0.0, 0.0], [0.25, 0.1], [0.75, 0.9], [1.0, 1.0]],
         };
-        assert!(close(c.apply([0.25; 3])[0], 0.1));
-        assert!(close(c.apply([0.75; 3])[0], 0.9));
-        assert!(close(c.apply([0.0; 3])[0], 0.0) && close(c.apply([1.0; 3])[0], 1.0));
+        assert!(close(in_gamma(&c, [0.25; 3])[0], 0.1));
+        assert!(close(in_gamma(&c, [0.75; 3])[0], 0.9));
+        assert!(close(in_gamma(&c, [0.0; 3])[0], 0.0) && close(in_gamma(&c, [1.0; 3])[0], 1.0));
         let mut prev = -1.0;
         for i in 0..=100 {
             let y = c.apply([i as f32 / 100.0; 3])[0];
@@ -476,25 +635,35 @@ mod tests {
 
     #[test]
     fn newer_adjustments_behave() {
+        // Exposure is the one linear-light tool: +1 EV doubles linear values.
         let e = Adjustment::Exposure {
             exposure: 1.0,
             offset: 0.0,
             gamma: 1.0,
         };
         assert!(close(e.apply([0.25; 3])[0], 0.5));
+
+        // Threshold levels compare gamma-domain luminance.
         let t = Adjustment::Threshold { level: 0.5 };
-        assert_eq!(t.apply([0.9, 0.9, 0.9]), [1.0; 3]);
-        assert_eq!(t.apply([0.1, 0.1, 0.1]), [0.0; 3]);
+        let hi = in_gamma(&t, [0.9, 0.9, 0.9]);
+        let lo = in_gamma(&t, [0.1, 0.1, 0.1]);
+        assert!(hi.iter().all(|v| close(*v, 1.0)), "{hi:?}");
+        assert!(lo.iter().all(|v| close(*v, 0.0)), "{lo:?}");
+
+        // Posterize steps are even in the gamma domain.
         let p = Adjustment::Posterize { levels: 2 };
-        assert_eq!(p.apply([0.3, 0.6, 0.99]), [0.0, 1.0, 1.0]);
+        let o = in_gamma(&p, [0.3, 0.6, 0.99]);
+        assert!(close(o[0], 0.0) && close(o[1], 1.0) && close(o[2], 1.0), "{o:?}");
+
         let cb = Adjustment::ColorBalance {
             shadows: [0.0; 3],
             midtones: [1.0, 0.0, 0.0],
             highlights: [0.0; 3],
             preserve_luminosity: false,
         };
-        let o = cb.apply([0.5; 3]);
+        let o = in_gamma(&cb, [0.5; 3]);
         assert!(o[0] > 0.5 && close(o[1], 0.5), "midtone red shift: {o:?}");
+
         let v = Adjustment::Vibrance {
             vibrance: 1.0,
             saturation: 0.0,
@@ -513,13 +682,17 @@ mod tests {
     #[test]
     fn black_white_uses_weights() {
         let bw = Adjustment::black_white_default();
-        let y = bw.apply([1.0, 0.0, 0.0]);
-        assert!(close(y[0], 0.2126) && close(y[0], y[1]) && close(y[1], y[2]));
+        let y = in_gamma(&bw, [1.0, 0.0, 0.0]);
+        // Weights mix gamma-domain channels, so pure red maps to its weight.
+        assert!(
+            close(y[0], 0.2126) && close(y[0], y[1]) && close(y[1], y[2]),
+            "{y:?}"
+        );
         let red_only = Adjustment::BlackWhite {
             red: 1.0,
             green: 0.0,
             blue: 0.0,
         };
-        assert!(close(red_only.apply([0.3, 1.0, 1.0])[0], 0.3));
+        assert!(close(in_gamma(&red_only, [0.3, 1.0, 1.0])[0], 0.3));
     }
 }
