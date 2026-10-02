@@ -1701,6 +1701,11 @@ pub enum BrushMode {
     Paint,
     /// Remove coverage (the eraser); `color[3]` acts as strength.
     Erase,
+    /// Lighten what is there (gamma-domain, like the classic tool);
+    /// `color[3]` acts as strength.
+    Dodge,
+    /// Darken what is there; `color[3]` acts as strength.
+    Burn,
 }
 
 /// A round brush. Pressure scales the radius; `hardness` 1.0 is a crisp
@@ -1713,6 +1718,10 @@ pub struct Brush {
     pub color: [f32; 4],
     /// Distance between dabs as a fraction of the radius.
     pub spacing: f32,
+    /// Scatter: each dab lands up to `jitter × radius` off the stroke, in
+    /// a direction and distance hashed from its index, so replays are
+    /// deterministic. 0 keeps dabs on the line.
+    pub jitter: f32,
     pub mode: BrushMode,
 }
 
@@ -1723,6 +1732,7 @@ impl Default for Brush {
             hardness: 0.8,
             color: [0.0, 0.0, 0.0, 1.0],
             spacing: 0.2,
+            jitter: 0.0,
             mode: BrushMode::Paint,
         }
     }
@@ -1750,7 +1760,7 @@ pub struct PaintStroke {
 
 /// Bounding box of a stroke's dabs, grown by the brush radius.
 pub fn stroke_bounds(brush: &Brush, points: &[StrokePoint], canvas: Rect) -> Rect {
-    let r = brush.radius.ceil() as i32 + 2;
+    let r = (brush.radius * (1.0 + brush.jitter.clamp(0.0, 1.0))).ceil() as i32 + 2;
     let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
     for p in points {
         x0 = x0.min(p.x.floor() as i32 - r);
@@ -1773,6 +1783,8 @@ impl Command for PaintStroke {
         match self.brush.mode {
             BrushMode::Paint => "Paint stroke".into(),
             BrushMode::Erase => "Erase".into(),
+            BrushMode::Dodge => "Dodge".into(),
+            BrushMode::Burn => "Burn".into(),
         }
     }
 
@@ -1796,6 +1808,23 @@ impl Command for PaintStroke {
                 let out = match mode {
                     BrushMode::Paint => Rgba::from_straight(cr, cg, cb, ca * cover).over(dst),
                     BrushMode::Erase => dst.scale(1.0 - (ca * cover).clamp(0.0, 1.0)),
+                    BrushMode::Dodge | BrushMode::Burn => {
+                        if dst.a <= 0.0 {
+                            return;
+                        }
+                        let k = (ca * cover).clamp(0.0, 1.0);
+                        let [r, g, b, a] = dst.to_straight();
+                        let tone = |c: f32| {
+                            let e = nge_doc::adjust::srgb_encode(c);
+                            let e = if mode == BrushMode::Dodge {
+                                e + (1.0 - e) * k
+                            } else {
+                                e * (1.0 - k)
+                            };
+                            nge_doc::adjust::srgb_decode(e)
+                        };
+                        Rgba::from_straight(tone(r), tone(g), tone(b), a)
+                    }
                 };
                 store.set_pixel(px, py, out);
             });
@@ -1839,7 +1868,8 @@ impl Command for PaintMask {
         let [cr, cg, cb, ca] = self.brush.color;
         let target = match self.brush.mode {
             BrushMode::Paint => nge_doc::adjust::luminance(cr, cg, cb).clamp(0.0, 1.0),
-            BrushMode::Erase => 0.0,
+            BrushMode::Erase | BrushMode::Burn => 0.0,
+            BrushMode::Dodge => 1.0,
         };
         for d in interpolate_dabs(&self.brush, &self.points) {
             dab_coverage(&self.brush, d, canvas, sel.as_ref(), |px, py, cover| {
@@ -1897,6 +1927,7 @@ fn interpolate_dabs(brush: &Brush, points: &[StrokePoint]) -> Vec<StrokePoint> {
     let points = &smoothed[..];
     let mut dabs = vec![points[0]];
     let mut carry = 0.0f32;
+    let jitter = brush.jitter.clamp(0.0, 1.0);
     for pair in points.windows(2) {
         let (a, b) = (pair[0], pair[1]);
         let len = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
@@ -1917,7 +1948,26 @@ fn interpolate_dabs(brush: &Brush, points: &[StrokePoint]) -> Vec<StrokePoint> {
         }
         carry = len - (t - step);
     }
+    if jitter > 0.0 {
+        // Scatter each dab by a hash of its index: deterministic, so undo
+        // previews and replays stamp identical pixels.
+        for (i, d) in dabs.iter_mut().enumerate() {
+            let angle = hash01(i as u32, 0x9E37_79B9) * std::f32::consts::TAU;
+            let dist = hash01(i as u32, 0x85EB_CA6B).sqrt() * jitter * brush.radius;
+            d.x += angle.cos() * dist;
+            d.y += angle.sin() * dist;
+        }
+    }
     dabs
+}
+
+/// Deterministic hash of (n, salt) onto [0, 1).
+fn hash01(n: u32, salt: u32) -> f32 {
+    let mut h = n.wrapping_mul(0x27D4_EB2F) ^ salt;
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2C1B_3C6D);
+    h ^= h >> 12;
+    (h >> 8) as f32 / (1u32 << 24) as f32
 }
 
 /// Call `f(x, y, coverage)` for every canvas pixel a dab touches, with the
@@ -1973,6 +2023,7 @@ mod tests {
                 hardness: 1.0,
                 color: [0.0, 0.0, 1.0, 1.0],
                 spacing: 0.3,
+                jitter: 0.0,
                 mode: BrushMode::Paint,
             },
             points: vec![
@@ -2651,6 +2702,103 @@ mod tests {
             .is_ok(),
             "a seed outside the canvas is a no-op"
         );
+    }
+
+    #[test]
+    fn dodge_lightens_burn_darkens_and_jitter_is_deterministic() {
+        let mut doc = Document::new(64, 64);
+        let id = doc.add_pixel_layer("L");
+        let grey = Rgba::from_straight(0.5, 0.5, 0.5, 1.0);
+        for y in 0..64 {
+            for x in 0..64 {
+                doc.layer_mut(id)
+                    .unwrap()
+                    .pixels_mut()
+                    .unwrap()
+                    .set_pixel(x, y, grey);
+            }
+        }
+        let stroke = |mode, strength: f32| PaintStroke {
+            layer: id,
+            brush: Brush {
+                radius: 6.0,
+                hardness: 1.0,
+                color: [0.0, 0.0, 0.0, strength],
+                mode,
+                ..Brush::default()
+            },
+            points: vec![StrokePoint::new(32.0, 32.0, 1.0)],
+        };
+        let mut d = doc.clone();
+        stroke(BrushMode::Dodge, 0.5).apply(&mut d).unwrap();
+        let p = d
+            .layer(id)
+            .unwrap()
+            .pixels()
+            .unwrap()
+            .get_pixel(32, 32)
+            .to_straight();
+        let expect = nge_doc::adjust::srgb_decode(
+            nge_doc::adjust::srgb_encode(0.5) + (1.0 - nge_doc::adjust::srgb_encode(0.5)) * 0.5,
+        );
+        assert!((p[0] - expect).abs() < 1e-3, "dodge: {} vs {expect}", p[0]);
+        assert!((p[3] - 1.0).abs() < 1e-5, "alpha untouched");
+        let edge = d
+            .layer(id)
+            .unwrap()
+            .pixels()
+            .unwrap()
+            .get_pixel(50, 50)
+            .to_straight();
+        assert!((edge[0] - 0.5).abs() < 1e-5, "outside the dab untouched");
+
+        let mut b = doc.clone();
+        stroke(BrushMode::Burn, 0.5).apply(&mut b).unwrap();
+        let p = b
+            .layer(id)
+            .unwrap()
+            .pixels()
+            .unwrap()
+            .get_pixel(32, 32)
+            .to_straight();
+        let expect = nge_doc::adjust::srgb_decode(nge_doc::adjust::srgb_encode(0.5) * 0.5);
+        assert!((p[0] - expect).abs() < 1e-3, "burn: {} vs {expect}", p[0]);
+
+        // Jitter scatters but replays identically and stays inside the
+        // padded bounds.
+        let jittered = PaintStroke {
+            layer: id,
+            brush: Brush {
+                radius: 4.0,
+                jitter: 1.0,
+                color: [1.0, 0.0, 0.0, 1.0],
+                ..Brush::default()
+            },
+            points: (0..20)
+                .map(|i| StrokePoint::new(10.0 + i as f32, 32.0, 1.0))
+                .collect(),
+        };
+        let bounds = stroke_bounds(&jittered.brush, &jittered.points, doc.canvas());
+        let (mut a, mut c) = (doc.clone(), doc.clone());
+        jittered.apply(&mut a).unwrap();
+        jittered.apply(&mut c).unwrap();
+        let (pa, pc) = (
+            a.layer(id).unwrap().pixels().unwrap(),
+            c.layer(id).unwrap().pixels().unwrap(),
+        );
+        let mut scattered = false;
+        for y in 0..64 {
+            for x in 0..64 {
+                assert_eq!(pa.get_pixel(x, y), pc.get_pixel(x, y), "deterministic at {x},{y}");
+                if pa.get_pixel(x, y).to_straight()[0] > 0.6 {
+                    assert!(bounds.contains(x, y), "stays inside stroke_bounds");
+                    if (y - 32).abs() > 2 {
+                        scattered = true;
+                    }
+                }
+            }
+        }
+        assert!(scattered, "jitter actually scattered dabs");
     }
 
     #[test]

@@ -523,10 +523,11 @@ impl App {
     fn make_brush(&self) -> Brush {
         let mut b = self.brush;
         b.color = linear_rgba(self.brush_rgb, self.brush.color[3].max(0.0));
-        b.mode = if self.tool == Tool::Eraser {
-            BrushMode::Erase
-        } else {
-            BrushMode::Paint
+        b.mode = match self.tool {
+            Tool::Eraser => BrushMode::Erase,
+            // The Brush tool keeps its chosen mode (Paint / Dodge / Burn).
+            Tool::Brush => self.brush.mode,
+            _ => BrushMode::Paint,
         };
         b
     }

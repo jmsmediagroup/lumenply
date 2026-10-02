@@ -57,6 +57,7 @@ pub fn build(width: u32, height: u32) -> EditResult<Editor> {
             hardness: 0.6,
             color: [0.05, 0.1, 0.4, 1.0],
             spacing: 0.15,
+            jitter: 0.0,
             mode: BrushMode::Paint,
         },
         points,

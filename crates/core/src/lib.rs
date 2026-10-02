@@ -334,6 +334,7 @@ mod tests {
                 hardness: 1.0,
                 color: [1.0, 0.0, 0.0, 1.0],
                 spacing: 0.25,
+                jitter: 0.0,
                 mode: BrushMode::Paint,
             },
             points: vec![StrokePoint::new(10.0, 10.0, 1.0)],
