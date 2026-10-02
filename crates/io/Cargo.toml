@@ -18,5 +18,6 @@ serde_json.workspace = true
 zip.workspace = true
 quick-xml.workspace = true
 exr.workspace = true
+qcms.workspace = true
 
 lumenply-render.workspace = true

@@ -107,7 +107,9 @@ None of these could be tested in the container.
 
 ## 4. Colour and formats
 
-- [ ] ICC colour management (lcms2): embedded profiles on import/export, display profile
+- [~] ICC colour management (qcms, pure Rust): embedded PNG/JPEG profiles are
+      converted to sRGB on import (neutral-preserving, no-op on bad profiles);
+      still open: profiles on deep imports, tagging exports, display profile
 - [x] 16-bit PNG/TIFF import/export (full precision in, 16-bit sRGB out)
 - [ ] Float/HDR document mode (skip compaction; ADR 0004)
 - [x] WebP import; OpenEXR import/export (linear f32 both ways — lossless for

@@ -53,7 +53,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Raster, IoError> {
     if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("exr")) {
         return load_exr(path);
     }
-    let img = image::open(path)?;
+    let (img, icc) = decode_with_icc(path)?;
     // Keep the full precision of 16-bit sources (PNG, TIFF) instead of
     // truncating them to 8 bits on the way in.
     if img.color().bits_per_pixel() > 32 {
@@ -66,7 +66,12 @@ pub fn load(path: impl AsRef<Path>) -> Result<Raster, IoError> {
         }
         return Ok(out);
     }
-    let img = img.to_rgba8();
+    let mut img = img.to_rgba8();
+    // Colour management v1: an embedded ICC profile converts to sRGB
+    // before linearisation (8-bit path; deeper imports assume sRGB).
+    if let Some(icc) = icc {
+        apply_icc_to_srgb(&mut img, &icc);
+    }
     let (w, h) = img.dimensions();
     let mut lut = [0f32; 256];
     for (i, v) in lut.iter_mut().enumerate() {
@@ -78,6 +83,47 @@ pub fn load(path: impl AsRef<Path>) -> Result<Raster, IoError> {
         out.pixels[i] = Rgba::from_straight(lut[px[0] as usize], lut[px[1] as usize], lut[px[2] as usize], a);
     }
     Ok(out)
+}
+
+/// Decode an image, also fishing out its embedded ICC profile when the
+/// container carries one (PNG iCCP, JPEG APP2).
+fn decode_with_icc(path: &Path) -> Result<(image::DynamicImage, Option<Vec<u8>>), IoError> {
+    use image::ImageDecoder;
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let file = std::fs::File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+    match ext.as_str() {
+        "png" => {
+            let mut dec = image::codecs::png::PngDecoder::new(reader)?;
+            let icc = dec.icc_profile();
+            Ok((image::DynamicImage::from_decoder(dec)?, icc))
+        }
+        "jpg" | "jpeg" => {
+            let mut dec = image::codecs::jpeg::JpegDecoder::new(reader)?;
+            let icc = dec.icc_profile();
+            Ok((image::DynamicImage::from_decoder(dec)?, icc))
+        }
+        _ => Ok((image::open(path)?, None)),
+    }
+}
+
+/// Convert straight-alpha RGBA8 pixels from `icc`'s colour space to sRGB
+/// in place. An unparseable or non-RGB profile is a no-op — never worse
+/// than the old behaviour of ignoring it.
+pub fn apply_icc_to_srgb(img: &mut image::RgbaImage, icc: &[u8]) {
+    let Some(src) = qcms::Profile::new_from_slice(icc, false) else {
+        return;
+    };
+    let dst = qcms::Profile::new_sRGB();
+    let Some(transform) = qcms::Transform::new(&src, &dst, qcms::DataType::RGBA8, qcms::Intent::Perceptual)
+    else {
+        return;
+    };
+    transform.apply(img.as_mut());
 }
 
 /// The sRGB transfer function on a normalised value (no 8-bit rounding).
@@ -218,6 +264,45 @@ mod tests {
             transparent_side[0] > 0.9,
             "transparent pixels land on white: {transparent_side:?}"
         );
+    }
+
+    #[test]
+    fn icc_conversion_is_safe_and_actually_transforms() {
+        // Garbage profiles must be a harmless no-op.
+        let mut img = image::RgbaImage::from_pixel(2, 2, image::Rgba([120, 200, 40, 255]));
+        let before = img.clone();
+        apply_icc_to_srgb(&mut img, b"not an icc profile at all");
+        assert_eq!(img, before, "bad profile leaves pixels untouched");
+
+        // With a real wide-gamut profile (the system's Display P3, when
+        // present), neutrals stay neutral and saturated colours move.
+        let p3 = std::path::Path::new("/System/Library/ColorSync/Profiles/Display P3.icc");
+        let Ok(icc) = std::fs::read(p3) else {
+            eprintln!("no Display P3 profile on this system; skipping transform check");
+            return;
+        };
+        let mut img = image::RgbaImage::new(3, 1);
+        img.put_pixel(0, 0, image::Rgba([128, 128, 128, 255])); // neutral
+        img.put_pixel(1, 0, image::Rgba([255, 255, 255, 255])); // white
+        img.put_pixel(2, 0, image::Rgba([30, 220, 60, 200])); // P3-ish green
+        let before = img.clone();
+        apply_icc_to_srgb(&mut img, &icc);
+        let g = img.get_pixel(0, 0).0;
+        assert!(
+            g[0].abs_diff(g[1]) <= 2 && g[1].abs_diff(g[2]) <= 2,
+            "grey stays neutral: {g:?}"
+        );
+        let w = img.get_pixel(1, 0).0;
+        assert!(
+            w[0] >= 253 && w[1] >= 253 && w[2] >= 253,
+            "white stays white: {w:?}"
+        );
+        assert_ne!(
+            img.get_pixel(2, 0),
+            before.get_pixel(2, 0),
+            "saturated P3 colour is remapped"
+        );
+        assert_eq!(img.get_pixel(2, 0).0[3], 200, "alpha untouched");
     }
 
     #[test]
