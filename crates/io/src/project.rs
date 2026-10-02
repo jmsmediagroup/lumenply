@@ -61,6 +61,8 @@ struct Manifest {
     work_path: Option<lumenply_doc::VectorPath>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     saved_paths: Vec<lumenply_doc::NamedPath>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    float_mode: bool,
     layers: Vec<LayerRecord>,
 }
 
@@ -137,6 +139,7 @@ fn write_archive(path: &Path, doc: &Document) -> Result<(), ProjectError> {
         next_id: doc.next_id(),
         work_path: doc.work_path.clone(),
         saved_paths: doc.saved_paths.clone(),
+        float_mode: doc.float_mode,
         layers,
     };
     zip.start_file("manifest.json", stored)?;
@@ -268,6 +271,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Document, ProjectError> {
         .filter(|n| !n.path.subpaths.is_empty())
         .cloned()
         .collect();
+    doc.float_mode = manifest.float_mode;
     doc.for_each_layer(|l| {
         max_id = max_id.max(l.id);
         if !seen.insert(l.id) {
@@ -560,6 +564,14 @@ mod tests {
             name: "Outline".into(),
             path: doc.work_path.clone().unwrap(),
         }];
+        // Float mode plus an HDR value: tiles serialize as raw f32, so a
+        // value above 1 must come back exactly.
+        doc.float_mode = true;
+        doc.layer_mut(bg).unwrap().pixels_mut().unwrap().set_pixel(
+            3,
+            3,
+            lumenply_tiles::Rgba::from_straight(2.5, 0.5, 0.1, 1.0),
+        );
         let path = temp("rt.nge");
         save(&path, &doc).unwrap();
         let back = load(&path).unwrap();
@@ -567,6 +579,9 @@ mod tests {
         assert_eq!((back.width, back.height), (700, 300));
         assert_eq!(back.work_path, doc.work_path, "work path survives");
         assert_eq!(back.saved_paths, doc.saved_paths, "named paths survive");
+        assert!(back.float_mode, "float mode survives");
+        let p = back.layers()[0].pixels().unwrap().get_pixel(3, 3).to_straight();
+        assert!((p[0] - 2.5).abs() < 1e-6, "HDR value survives the file: {p:?}");
         assert_eq!(
             back.layers()[0].effects,
             doc.layers()[0].effects,

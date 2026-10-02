@@ -92,7 +92,8 @@ None of these could be tested in the container.
       layer reuse the composited backdrop below it; live filters above the edit
       fall back to the reference path
 - [x] Faster thumbnails (group composites only rebuild when the change touches them)
-- [ ] Multithreaded filters inside a tile; SIMD for blend loops
+- [~] Filters are row-parallel via rayon (box blur, noise, motion blur,
+      median, high pass). Still open: SIMD for blend loops
 - [x] Memory: cap undo history by bytes (Editor::history_memory_limit, default 1 GiB)
 - [ ] Optional 8-bit storage mode
 - [x] Incremental brush rendering (only the smoothing window repaints per frame)
@@ -114,7 +115,9 @@ None of these could be tested in the container.
       profiles on deep (16-bit) imports (qcms transforms 8-bit only),
       display profile
 - [x] 16-bit PNG/TIFF import/export (full precision in, 16-bit sRGB out)
-- [ ] Float/HDR document mode (skip compaction; ADR 0004)
+- [x] Float/HDR document mode (SetFloatMode command + Image-menu toggle;
+      compaction skipped while on, lazy 16-bit return when off; EXR opens
+      in float mode; flag + raw-f32 HDR values survive .lumen)
 - [x] WebP import; OpenEXR import/export (linear f32 both ways — lossless for
       this engine's native pixels; bit-exact round-trip tested)
 - [ ] AVIF/HEIF; camera RAW via rawler or LibRaw

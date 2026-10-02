@@ -1619,6 +1619,36 @@ impl Command for SetWorkPath {
     }
 }
 
+/// Switch the document's 32-bit float (HDR) mode. On, tiles stop
+/// compacting so values outside [0, 1] survive edits; off, tiles return
+/// to 16-bit (clamping anything outside the range) lazily, as each one
+/// is next edited — tiles shared with history cannot be touched eagerly
+/// (ADR 0004).
+pub struct SetFloatMode {
+    pub on: bool,
+}
+
+impl Command for SetFloatMode {
+    fn label(&self) -> String {
+        if self.on {
+            "32-bit float mode on".into()
+        } else {
+            "32-bit float mode off".into()
+        }
+    }
+
+    fn affected(&self, _doc: &Document) -> Option<Rect> {
+        // The toggle changes storage, not what the composite shows (HDR
+        // values already display clamped).
+        Some(Rect::default())
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        doc.float_mode = self.on;
+        Ok(())
+    }
+}
+
 /// Store a copy of the work path in the document's Paths list.
 pub struct SaveWorkPath {
     pub name: String,
@@ -3616,6 +3646,66 @@ mod tests {
         }
         .apply(&mut doc)
         .is_err());
+    }
+
+    #[test]
+    fn float_mode_keeps_hdr_values_until_switched_off() {
+        use crate::Editor;
+        let mut doc = Document::new(16, 16);
+        let id = doc.add_pixel_layer("L");
+        doc.float_mode = true;
+        doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+            2,
+            2,
+            Rgba::from_straight(3.5, 0.5, 0.25, 1.0),
+        );
+        let mut ed = Editor::new(doc);
+
+        // An unrelated edit would normally compact (and clamp) the tile;
+        // float mode must leave the 3.5 alone.
+        ed.execute(&PaintStroke {
+            layer: id,
+            brush: Brush {
+                radius: 2.0,
+                color: [0.0, 0.0, 0.0, 1.0],
+                ..Brush::default()
+            },
+            points: vec![StrokePoint::new(12.0, 12.0, 1.0)],
+        })
+        .unwrap();
+        let p = ed.doc().layer(id).unwrap().pixels().unwrap().get_pixel(2, 2);
+        assert!((p.to_straight()[0] - 3.5).abs() < 1e-5, "HDR red survives: {p:?}");
+
+        // Switching float mode off clamps lazily: the shared tile keeps
+        // its value until an edit touches it, then compaction clamps.
+        ed.execute(&SetFloatMode { on: false }).unwrap();
+        assert!(!ed.doc().float_mode);
+        ed.execute(&PaintStroke {
+            layer: id,
+            brush: Brush {
+                radius: 1.0,
+                color: [0.0, 0.0, 0.0, 1.0],
+                ..Brush::default()
+            },
+            points: vec![StrokePoint::new(6.0, 2.0, 1.0)], // same tile, away from (2,2)
+        })
+        .unwrap();
+        let p = ed.doc().layer(id).unwrap().pixels().unwrap().get_pixel(2, 2);
+        assert!(
+            p.to_straight()[0] <= 1.0 + 1e-4,
+            "clamped once the tile is edited: {p:?}"
+        );
+
+        // Undo restores both the flag and the HDR value (snapshots were
+        // never compacted while the flag was on).
+        ed.undo().unwrap();
+        ed.undo().unwrap();
+        assert!(ed.doc().float_mode);
+        let p = ed.doc().layer(id).unwrap().pixels().unwrap().get_pixel(2, 2);
+        assert!(
+            (p.to_straight()[0] - 3.5).abs() < 1e-5,
+            "undo brings the HDR value back: {p:?}"
+        );
     }
 
     #[test]

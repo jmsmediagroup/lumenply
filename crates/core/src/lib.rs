@@ -99,8 +99,12 @@ fn union_opt(
 
 /// Put every tile the document owns outright into compact 16-bit storage.
 /// Tiles shared with history snapshots are left as they are, so this costs
-/// only the tiles a command actually changed.
+/// only the tiles a command actually changed. Float-mode documents skip
+/// compaction entirely, so HDR values survive every edit (ADR 0004).
 pub fn compact_storage(doc: &mut Document) {
+    if doc.float_mode {
+        return;
+    }
     doc.for_each_layer_mut(|l| {
         match &mut l.content {
             lumenply_doc::LayerContent::Pixel(store) => store.compact(),

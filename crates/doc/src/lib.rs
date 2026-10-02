@@ -615,6 +615,9 @@ pub struct Document {
     /// Named paths kept alongside the work path (the Paths list); covered
     /// by undo and saved with projects.
     pub saved_paths: Vec<NamedPath>,
+    /// 32-bit float mode: tiles never compact to 16-bit, so values outside
+    /// [0, 1] survive (HDR; see ADR 0004). Saved with projects.
+    pub float_mode: bool,
     /// Bottom-to-top.
     layers: Vec<Layer>,
     next_id: LayerId,
@@ -711,6 +714,7 @@ impl Document {
             selection: None,
             work_path: None,
             saved_paths: Vec::new(),
+            float_mode: false,
             layers: Vec::new(),
             next_id: 1,
         }
@@ -724,6 +728,7 @@ impl Document {
             selection: None,
             work_path: None,
             saved_paths: Vec::new(),
+            float_mode: false,
             layers,
             next_id,
         }

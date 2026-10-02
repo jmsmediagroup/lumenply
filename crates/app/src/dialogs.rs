@@ -255,7 +255,11 @@ impl App {
         match lumenply_io::load(path) {
             Ok(raster) => {
                 let (w, h) = (raster.width, raster.height);
-                let mut ed = Editor::new(Document::new(w, h));
+                let mut doc = Document::new(w, h);
+                // EXR is linear float: open in float mode so HDR values
+                // survive the import (and every edit after it).
+                doc.float_mode = path.to_ascii_lowercase().ends_with(".exr");
+                let mut ed = Editor::new(doc);
                 let _ = ed.execute(&AddPixelLayer::from_raster(file_name(path), raster, 0, 0));
                 self.open_in_new_tab(ed, None);
                 self.recent = session::push_recent(path);

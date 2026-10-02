@@ -346,6 +346,18 @@ impl App {
                             self.auto_color();
                             ui.close_menu();
                         }
+                        let mut float_mode = self.editor.doc().float_mode;
+                        if ui
+                            .checkbox(&mut float_mode, "32-bit float (HDR)")
+                            .on_hover_text(
+                                "Keep values outside 0–1 through every edit (HDR). Off, tiles \
+                                 return to 16-bit as they are next edited, clamping the range",
+                            )
+                            .changed()
+                        {
+                            self.run(&SetFloatMode { on: float_mode });
+                            ui.close_menu();
+                        }
                         if ui.button("Canvas size...").clicked() {
                             self.dialog = Some(Dialog::CanvasSize(w, h, (0.5, 0.5)));
                             ui.close_menu();
