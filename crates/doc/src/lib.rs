@@ -79,6 +79,7 @@ impl FromStr for BlendMode {
 pub mod adjust;
 pub mod locks;
 pub mod selection;
+pub mod selection_ops;
 
 pub use adjust::{Adjustment, CompiledAdjustment, LevelsChannel};
 pub use locks::LayerLocks;
@@ -119,6 +120,40 @@ pub enum Filter {
     HighPass {
         radius: f32,
     },
+    /// Pixelate > Mosaic: square cells `size` px wide, anchored to the
+    /// canvas origin, each the mean of its pixels.
+    Mosaic {
+        size: f32,
+    },
+    /// Stylize > Emboss: grey relief lit from `angle` degrees, comparing
+    /// pixels `height` px either side; `amount` 1 = 100 %.
+    Emboss {
+        angle: f32,
+        height: f32,
+        amount: f32,
+    },
+    /// Stylize > Find Edges: each channel's edges, dark on white.
+    FindEdges,
+    /// Blur > Surface Blur: averages the neighbours within `radius` whose
+    /// level differs by less than about `threshold` (0–255 levels), so
+    /// edges stay sharp.
+    SurfaceBlur {
+        radius: f32,
+        threshold: f32,
+    },
+    /// Blur > Lens Blur: a disc (bokeh) kernel of `radius` px;
+    /// `highlights` (0–1) brightens bright spots into bokeh balls.
+    LensBlur {
+        radius: f32,
+        highlights: f32,
+    },
+    /// Noise > Dust & Scratches: pixels differing from their median (in a
+    /// window of `radius`, capped at 8 px) by more than `threshold` levels
+    /// (0–255) take the median.
+    DustScratches {
+        radius: f32,
+        threshold: f32,
+    },
 }
 
 impl Filter {
@@ -131,7 +166,33 @@ impl Filter {
             Filter::MotionBlur { .. } => "Motion Blur",
             Filter::Median { .. } => "Median",
             Filter::HighPass { .. } => "High Pass",
+            Filter::Mosaic { .. } => "Mosaic",
+            Filter::Emboss { .. } => "Emboss",
+            Filter::FindEdges => "Find Edges",
+            Filter::SurfaceBlur { .. } => "Surface Blur",
+            Filter::LensBlur { .. } => "Lens Blur",
+            Filter::DustScratches { .. } => "Dust & Scratches",
         }
+    }
+
+    /// Mosaic cell size in whole pixels, 1..=500.
+    pub fn mosaic_cell(size: f32) -> i32 {
+        (sane_radius(size).round() as i32).clamp(1, 500)
+    }
+
+    /// Emboss sampling distance in pixels, 0..=100.
+    pub fn emboss_height(height: f32) -> f32 {
+        sane_radius(height).min(100.0)
+    }
+
+    /// Surface blur window radius in whole pixels, 1..=100.
+    pub fn surface_radius(radius: f32) -> i32 {
+        (sane_radius(radius).round() as i32).clamp(1, 100)
+    }
+
+    /// Lens blur disc radius in whole pixels, 0..=200.
+    pub fn lens_radius(radius: f32) -> i32 {
+        (sane_radius(radius).round() as i32).min(200)
     }
 
     /// Median windows are gathered per pixel, so keep them small.
@@ -149,6 +210,13 @@ impl Filter {
             Filter::MotionBlur { distance, .. } => (sane_radius(*distance) / 2.0).ceil() as i32 + 1,
             Filter::Median { radius } => Filter::median_radius(*radius),
             Filter::HighPass { radius } => box_radius(*radius) * 3,
+            // A cell reaching into the tile can start size − 1 px outside it.
+            Filter::Mosaic { size } => Filter::mosaic_cell(*size) - 1,
+            Filter::Emboss { height, .. } => Filter::emboss_height(*height).ceil() as i32 + 1,
+            Filter::FindEdges => 1,
+            Filter::SurfaceBlur { radius, .. } => Filter::surface_radius(*radius),
+            Filter::LensBlur { radius, .. } => Filter::lens_radius(*radius),
+            Filter::DustScratches { radius, .. } => Filter::median_radius(*radius),
         }
     }
 }

@@ -588,6 +588,15 @@ impl App {
                             {
                                 act = Some("layer-via-copy");
                             }
+                            if ui
+                                .add_enabled(self.active_is_pixel(), egui::Button::new("Content-Aware"))
+                                .on_hover_text(
+                                    "Rebuild the selected area from its surroundings (Content-Aware Fill)",
+                                )
+                                .clicked()
+                            {
+                                act = Some("content-aware");
+                            }
                         });
                     });
             });

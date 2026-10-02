@@ -8,11 +8,13 @@
 
 pub mod align;
 pub mod commands;
+mod content_aware;
 pub mod demo;
 pub mod layer_ops;
 pub mod liquify;
 pub mod locks;
 pub mod quick_select;
+mod select_ops;
 
 use lumenply_doc::{Document, LayerId};
 

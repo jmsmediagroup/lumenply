@@ -247,6 +247,45 @@ impl App {
                 Filter::HighPass { radius } => {
                     finished |= slider_row(ui, "Radius", radius, 0.5..=60.0, " px");
                 }
+                Filter::Mosaic { size } => {
+                    let o = RowOpts {
+                        int: true,
+                        log: true,
+                        ..RowOpts::default()
+                    };
+                    finished |= slider_row_ex(ui, "Cell size", size, 2.0..=200.0, " px", o);
+                }
+                Filter::Emboss {
+                    angle,
+                    height,
+                    amount,
+                } => {
+                    finished |= slider_row(ui, "Angle", angle, -180.0..=180.0, "°");
+                    finished |= slider_row(ui, "Height", height, 1.0..=10.0, " px");
+                    finished |= slider_row_scaled(ui, "Amount", amount, 0.0..=5.0, 100.0, "%");
+                }
+                Filter::FindEdges => {}
+                Filter::SurfaceBlur { radius, threshold } => {
+                    let int = RowOpts {
+                        int: true,
+                        ..RowOpts::default()
+                    };
+                    let o = RowOpts { log: true, ..int };
+                    finished |= slider_row_ex(ui, "Radius", radius, 1.0..=100.0, " px", o);
+                    finished |= slider_row_ex(ui, "Threshold", threshold, 2.0..=255.0, " levels", int);
+                }
+                Filter::LensBlur { radius, highlights } => {
+                    finished |= slider_row_log(ui, "Radius", radius, 1.0..=100.0, " px");
+                    finished |= slider_row_scaled(ui, "Highlights", highlights, 0.0..=1.0, 100.0, "%");
+                }
+                Filter::DustScratches { radius, threshold } => {
+                    let o = RowOpts {
+                        int: true,
+                        ..RowOpts::default()
+                    };
+                    finished |= slider_row_ex(ui, "Radius", radius, 1.0..=8.0, " px", o);
+                    finished |= slider_row_ex(ui, "Threshold", threshold, 0.0..=255.0, " levels", o);
+                }
             }
             if f != before {
                 self.run_coalescing(&SetFilter { layer: id, filter: f }, &format!("filter-{id}"));

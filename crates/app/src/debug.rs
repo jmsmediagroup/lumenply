@@ -15,6 +15,50 @@ impl App {
             || self.debug_start(ctx, tok)
             || self.debug_liquify(ctx, tok)
             || self.debug_camera_raw(ctx, tok)
+            || self.debug_select(tok)
+    }
+
+    /// Selections and what acts on them (`select:...`):
+    /// `select:rect=X:Y:W:H` and `select:ellipse=X:Y:W:H` replace the
+    /// selection (canvas pixels); `select:layer=Name` makes the layer of
+    /// that name active; `select:caf` runs Content-Aware Fill on the active
+    /// pixel layer straight away (no dialog), timing it in the status bar.
+    fn debug_select(&mut self, tok: &str) -> bool {
+        let Some(rest) = tok.strip_prefix("select:") else {
+            return false;
+        };
+        let (verb, arg) = rest.split_once('=').unwrap_or((rest, ""));
+        let nums: Vec<i32> = arg.split(':').filter_map(|s| s.trim().parse().ok()).collect();
+        let rect = (nums.len() == 4)
+            .then(|| Rect::new(nums[0], nums[1], nums[2].max(1) as u32, nums[3].max(1) as u32));
+        match (verb, rect) {
+            ("rect", Some(r)) => self.run(&SetSelection {
+                selection: Some(Selection::rect(r)),
+            }),
+            ("ellipse", Some(r)) => self.run(&SetSelection {
+                selection: Some(Selection::ellipse(r)),
+            }),
+            ("layer", _) => {
+                let mut found = None;
+                self.editor.doc().for_each_layer(|l| {
+                    if l.name == arg {
+                        found = Some(l.id);
+                    }
+                });
+                self.set_active(found);
+            }
+            ("caf", _) => {
+                if let Some(layer) = self.active {
+                    let margin = self.content_aware_margin().round() as u32;
+                    let t = std::time::Instant::now();
+                    self.run(&ContentAwareFill { layer, margin });
+                    self.status = format!("Content-Aware Fill took {:.2} s", t.elapsed().as_secs_f32());
+                    eprintln!("{}", self.status);
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// Menus, popups, context menus and combo boxes (`popups:...`).

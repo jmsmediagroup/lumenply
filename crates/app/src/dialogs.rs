@@ -18,6 +18,12 @@ pub(crate) enum Dialog {
     /// Colour-range selection: (tolerance %, whether a preview ran).
     ColorRange(f32, bool),
     About,
+    /// Select > Modify: the reshaping, and whether its preview step is on
+    /// the history (replaced on every change, undone on cancel).
+    SelectEdge(EdgeOp, bool),
+    /// Edit > Fill: (content-aware rather than the brush colour, sampling
+    /// margin in px, busy phase: 0 idle, 1 showing "Filling", 2 running).
+    Fill(bool, f32, u8),
 }
 
 /// Extensions the open dialogs offer, by kind. The first of each list is
@@ -386,7 +392,28 @@ impl App {
 
     pub(crate) fn dialogs(&mut self, ctx: &egui::Context) {
         let Some(mut d) = self.dialog.take() else { return };
+        // The frame after "Filling" was shown: do the (blocking) work.
+        if let Dialog::Fill(true, margin, 2) = d {
+            if let Some(layer) = self.active {
+                let t = std::time::Instant::now();
+                self.run(&ContentAwareFill {
+                    layer,
+                    margin: margin.round() as u32,
+                });
+                if self.editor.history().last().copied() == Some("Content-Aware Fill") {
+                    self.status = format!("Content-Aware Fill took {:.1} s", t.elapsed().as_secs_f32());
+                }
+            }
+            return;
+        }
         let title = match &d {
+            Dialog::SelectEdge(op, _) => match op {
+                EdgeOp::Expand(_) => "Expand selection",
+                EdgeOp::Contract(_) => "Contract selection",
+                EdgeOp::Border(_) => "Border selection",
+                EdgeOp::Smooth(_) => "Smooth selection",
+            },
+            Dialog::Fill(..) => "Fill",
             Dialog::ExportJpeg(..) => "Export JPEG",
             Dialog::New(..) => "New document",
             Dialog::ConfirmClose => "Unsaved changes",
@@ -401,6 +428,9 @@ impl App {
         };
         // The primary action's label: a verb for what OK does.
         let primary = match &d {
+            Dialog::SelectEdge(..) => "OK",
+            Dialog::Fill(_, _, 0) => "Fill",
+            Dialog::Fill(..) => "",
             Dialog::ExportJpeg(..) => "Export",
             Dialog::New(..) => "Create",
             Dialog::Preferences(..) => "Save",
@@ -420,7 +450,10 @@ impl App {
         };
         // Modal: block the panels and canvas behind the dialog. Preview
         // dialogs keep the canvas undimmed so the preview can be judged.
-        let previews = matches!(&d, Dialog::Filter(_) | Dialog::ColorRange(..));
+        let previews = matches!(
+            &d,
+            Dialog::Filter(_) | Dialog::ColorRange(..) | Dialog::SelectEdge(..)
+        );
         modal_backdrop(ctx, !previews);
 
         let mut keep = true;
@@ -446,6 +479,83 @@ impl App {
                     ui.set_max_width(max_w);
                     ui.spacing_mut().item_spacing.y = 8.0;
                     match &mut d {
+                        Dialog::SelectEdge(op, previewed) => {
+                            let (label, max, what) = match op {
+                                EdgeOp::Expand(_) => ("Expand by", 100.0, "Grows the selection outward; corners round."),
+                                EdgeOp::Contract(_) => ("Contract by", 100.0, "Shrinks the selection inward."),
+                                EdgeOp::Border(_) => ("Width", 200.0, "Selects a band centred on the selection's edge."),
+                                EdgeOp::Smooth(_) => ("Sample radius", 100.0, "Rounds corners and drops specks and pinholes."),
+                            };
+                            let mut v = op.amount();
+                            let before = v;
+                            let o = RowOpts {
+                                int: true,
+                                log: true,
+                                ..RowOpts::default()
+                            };
+                            slider_row_ex(ui, label, &mut v, 1.0..=max, " px", o);
+                            *op = match op {
+                                EdgeOp::Expand(_) => EdgeOp::Expand(v),
+                                EdgeOp::Contract(_) => EdgeOp::Contract(v),
+                                EdgeOp::Border(_) => EdgeOp::Border(v),
+                                EdgeOp::Smooth(_) => EdgeOp::Smooth(v),
+                            };
+                            note(ui, what);
+                            if v != before || !*previewed {
+                                // Replace the previous preview step rather than
+                                // reshaping its result again.
+                                if *previewed {
+                                    self.undo_quietly();
+                                }
+                                let cmd = ModifySelectionEdge { op: *op };
+                                self.run(&cmd);
+                                *previewed = self.editor.history().last().copied() == Some(cmd.label().as_str());
+                            }
+                        }
+                        Dialog::Fill(aware, margin, phase) => {
+                            if *phase >= 1 {
+                                ui.horizontal(|ui| {
+                                    ui.add(egui::Spinner::new().size(18.0).color(ACCENT));
+                                    ui.label(RichText::new("Filling the selection from its surroundings…").color(TEXT));
+                                });
+                                *phase = 2;
+                                ui.ctx().request_repaint();
+                            } else {
+                                let can_aware = self.editor.doc().selection.is_some();
+                                ui.horizontal(|ui| {
+                                    row_label(ui, "Contents", LABEL_W);
+                                    ui.vertical(|ui| {
+                                        let pick = |ui: &mut egui::Ui, on: bool, text: &str| {
+                                            ui.radio(on, text).clicked()
+                                        };
+                                        if pick(ui, !*aware, "Brush colour") {
+                                            *aware = false;
+                                        }
+                                        let r = ui.add_enabled_ui(can_aware, |ui| pick(ui, *aware, "Content-Aware"));
+                                        if r.inner {
+                                            *aware = true;
+                                        }
+                                    });
+                                });
+                                if *aware {
+                                    let o = RowOpts {
+                                        int: true,
+                                        log: true,
+                                        ..RowOpts::default()
+                                    };
+                                    slider_row_ex(ui, "Sample area", margin, 16.0..=1000.0, " px", o);
+                                    note(
+                                        ui,
+                                        "Rebuilds the selected area from texture found up to this \
+                                         far around it, on the active layer.",
+                                    );
+                                } else if can_aware {
+                                    note(ui, "Fills the selection with the brush colour.");
+                                } else {
+                                    note(ui, "Fills the layer with the brush colour. Select an area to use Content-Aware.");
+                                }
+                            }
+                        }
                         Dialog::About => {
                             ui.vertical_centered(|ui| {
                                 let (r, _) = ui.allocate_exact_size(Vec2::splat(96.0), Sense::hover());
@@ -777,6 +887,39 @@ impl App {
                                 Filter::HighPass { radius } => {
                                     filter_changed |= row(ui, "Radius", radius, 0.5..=60.0, " px", log);
                                 }
+                                Filter::Mosaic { size } => {
+                                    let o = RowOpts { int: true, ..log };
+                                    filter_changed |= row(ui, "Cell size", size, 2.0..=200.0, " px", o);
+                                }
+                                Filter::Emboss {
+                                    angle,
+                                    height,
+                                    amount,
+                                } => {
+                                    filter_changed |= row(ui, "Angle", angle, -180.0..=180.0, "°", lin);
+                                    filter_changed |= row(ui, "Height", height, 1.0..=10.0, " px", lin);
+                                    filter_changed |= pct(ui, amount, 0.0..=5.0);
+                                }
+                                Filter::FindEdges => {
+                                    note(ui, "No settings: every channel's edges, dark on white.");
+                                }
+                                Filter::SurfaceBlur { radius, threshold } => {
+                                    let o = RowOpts { int: true, ..log };
+                                    filter_changed |= row(ui, "Radius", radius, 1.0..=100.0, " px", o);
+                                    let o = RowOpts { int: true, ..lin };
+                                    filter_changed |= row(ui, "Threshold", threshold, 2.0..=255.0, " levels", o);
+                                }
+                                Filter::LensBlur { radius, highlights } => {
+                                    filter_changed |= row(ui, "Radius", radius, 1.0..=100.0, " px", log);
+                                    let before = *highlights;
+                                    slider_row_scaled(ui, "Highlights", highlights, 0.0..=1.0, 100.0, "%");
+                                    filter_changed |= *highlights != before;
+                                }
+                                Filter::DustScratches { radius, threshold } => {
+                                    let o = RowOpts { int: true, ..lin };
+                                    filter_changed |= row(ui, "Radius", radius, 1.0..=8.0, " px", o);
+                                    filter_changed |= row(ui, "Threshold", threshold, 0.0..=255.0, " levels", o);
+                                }
                             }
                             note(ui, "Previewed on the canvas; applies to the active layer.");
                         }
@@ -861,9 +1004,21 @@ impl App {
             }
         }
 
+        // Content-aware fill can take a moment: show "Filling" for a frame
+        // first, and run it on the next (see the top of this function).
+        if confirmed {
+            if let Dialog::Fill(true, _, phase @ 0) = &mut d {
+                *phase = 1;
+                confirmed = false;
+                ctx.request_repaint();
+            }
+        }
         if confirmed {
             match &d {
                 Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) | Dialog::Recover | Dialog::About => {}
+                // The previewed step already is the result.
+                Dialog::SelectEdge(..) => {}
+                Dialog::Fill(..) => self.fill_active(),
                 Dialog::ColorRange(..) => {}
                 Dialog::Preferences(p, _) => {
                     // The history strip's fold state lives in the prefs but
@@ -917,8 +1072,36 @@ impl App {
                 // Drop the preview whether confirmed or cancelled.
                 self.mark(None);
             }
+            if let Dialog::SelectEdge(_, true) = d {
+                if !confirmed {
+                    self.undo_quietly();
+                }
+            }
             self.filter_previewed = false;
         }
+    }
+}
+
+impl App {
+    /// Step back once without reporting it: a dialog withdrawing its own
+    /// preview step.
+    fn undo_quietly(&mut self) {
+        if self.editor.undo().is_some() {
+            self.below.note_change(self.editor.doc(), None);
+            let r = self.editor.last_affected();
+            self.mark(r);
+        }
+    }
+
+    /// Content-aware fill's default sampling margin for the selection:
+    /// the hole's larger side, at least 64 px.
+    pub(crate) fn content_aware_margin(&self) -> f32 {
+        let doc = self.editor.doc();
+        let b = doc
+            .selection
+            .as_ref()
+            .map_or(Rect::default(), |s| s.tight_bounds(doc.canvas()));
+        (b.w.max(b.h) as f32).clamp(64.0, 1000.0)
     }
 }
 

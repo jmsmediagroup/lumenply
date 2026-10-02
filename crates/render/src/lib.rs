@@ -16,13 +16,15 @@
 pub mod cache;
 pub mod develop;
 pub mod filters;
+mod filters_more;
 pub mod gpu;
+pub mod inpaint;
 pub mod liquify;
 pub mod text;
 pub mod transform;
 
 pub use cache::BelowCache;
-pub use filters::{apply_filter, filter_raster, Filter};
+pub use filters::{apply_filter, apply_filter_in_canvas, filter_raster, Filter};
 pub use gpu::GpuCompositor;
 pub use liquify::{liquify_preview, liquify_store, Displacement, LiquifyTool};
 pub use transform::{
