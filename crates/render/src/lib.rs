@@ -15,11 +15,13 @@
 
 pub mod cache;
 pub mod filters;
+pub mod gpu;
 pub mod text;
 pub mod transform;
 
 pub use cache::BelowCache;
 pub use filters::{apply_filter, filter_raster, Filter};
+pub use gpu::GpuCompositor;
 pub use transform::{sample_bilinear, transform_mask, transform_store};
 
 use nge_doc::{Adjustment, BlendMode, Document, Layer, LayerContent, Mask};

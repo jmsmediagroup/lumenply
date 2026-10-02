@@ -12,4 +12,6 @@ authors.workspace = true
 nge-tiles.workspace = true
 nge-doc.workspace = true
 rayon.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
 fontdue.workspace = true
