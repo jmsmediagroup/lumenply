@@ -379,6 +379,11 @@ None of these could be tested in the container.
 
 ## 7. Ecosystem and release
 
+- [x] `lumenply batch` (Photoshop's Image Processor): images, camera RAW
+      (camera tone curve, `--auto` exposure/whites/blacks), PSD and projects
+      to PNG / JPEG / WebP with `--resize 50%|2048|1920x1080` (Lanczos, never
+      enlarging a fit), per-file report, non-zero exit when any file fails
+
 - [ ] Scripting: Python via PyO3 on the command API; macro recording from history
 - [ ] Sandboxed WASM plugins (wasmtime)
 - [ ] Browser build (WebAssembly + WebGPU) — engine crates are UI-free by design
