@@ -249,7 +249,7 @@ impl App {
                             hint_label(ui, tier, self.tool);
                         }
                         Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal => {
-                            if self.retouch_options_bar(ui, tier == Tier::Wide) {
+                            if self.retouch_options_bar(ui, tier) {
                                 return;
                             }
                             if self.tool == Tool::Brush {

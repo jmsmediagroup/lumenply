@@ -296,7 +296,18 @@ impl App {
     /// whole bar for modes that are not brushes (Patch, Red Eye, Magic
     /// eraser). Returns true when the bar is complete, so the brush
     /// sliders that follow are skipped.
-    pub(crate) fn retouch_options_bar(&mut self, ui: &mut egui::Ui, wide: bool) -> bool {
+    pub(crate) fn retouch_options_bar(&mut self, ui: &mut egui::Ui, tier: crate::options_bar::Tier) -> bool {
+        let wide = tier == crate::options_bar::Tier::Wide;
+        // Tight bars drop the sliders and keep the scrubbable numbers.
+        let tight = tier == crate::options_bar::Tier::Tight;
+        let slider =
+            |ui: &mut egui::Ui, label: &str, v: &mut f32, r: RangeInclusive<f32>, suffix: &str, log: bool| {
+                if tight {
+                    crate::options_bar::bar_value(ui, label, v, r, suffix)
+                } else {
+                    crate::options_bar::bar_slider(ui, label, v, r, suffix, log)
+                }
+            };
         match self.tool {
             Tool::Heal => {
                 mode_control(
@@ -343,24 +354,10 @@ impl App {
                         true
                     }
                     HealMode::RedEye => {
-                        crate::options_bar::bar_slider(
-                            ui,
-                            "Pupil size",
-                            &mut self.retouch.pupil,
-                            0.0..=100.0,
-                            "%",
-                            false,
-                        );
-                        crate::options_bar::bar_slider(
-                            ui,
-                            "Darken",
-                            &mut self.retouch.darken,
-                            0.0..=100.0,
-                            "%",
-                            false,
-                        );
+                        slider(ui, "Pupil size", &mut self.retouch.pupil, 0.0..=100.0, "%", false);
+                        slider(ui, "Darken", &mut self.retouch.darken, 0.0..=100.0, "%", false);
                         let mut size = self.brush.radius * 2.0;
-                        if crate::options_bar::bar_slider(ui, "Box", &mut size, 8.0..=400.0, " px", true) {
+                        if slider(ui, "Box", &mut size, 8.0..=400.0, " px", true) {
                             self.brush.radius = size / 2.0;
                         }
                         if wide {
@@ -393,7 +390,7 @@ impl App {
                 match self.retouch.eraser_mode {
                     EraserMode::Eraser => false,
                     EraserMode::Background => {
-                        crate::options_bar::bar_slider(
+                        slider(
                             ui,
                             "Tolerance",
                             &mut self.retouch.bg_tolerance,
@@ -421,8 +418,7 @@ impl App {
                     }
                     EraserMode::Magic => {
                         let mut tol = self.tolerance * 100.0;
-                        if crate::options_bar::bar_slider(ui, "Tolerance", &mut tol, 0.0..=100.0, "%", false)
-                        {
+                        if slider(ui, "Tolerance", &mut tol, 0.0..=100.0, "%", false) {
                             self.tolerance = tol / 100.0;
                         }
                         check(ui, &mut self.contiguous, "Contiguous")
@@ -430,7 +426,7 @@ impl App {
                         check(ui, &mut self.sample_merged, "All layers")
                             .on_hover_text("Judge colours on the merged image instead of the active layer");
                         let mut op = self.brush.color[3] * 100.0;
-                        if crate::options_bar::bar_slider(ui, "Opacity", &mut op, 1.0..=100.0, "%", false) {
+                        if slider(ui, "Opacity", &mut op, 1.0..=100.0, "%", false) {
                             self.brush.color[3] = op / 100.0;
                         }
                         if wide {
