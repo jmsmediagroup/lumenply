@@ -52,8 +52,8 @@ pub(crate) fn read_guides(res: &[u8]) -> Vec<Guide> {
         *pos += n;
         Some(s)
     };
-    loop {
-        let Some(_sig) = take(&mut pos, 4) else { break };
+    // Each block: signature, id, Pascal name, size, data.
+    while take(&mut pos, 4).is_some() {
         let Some(id) = take(&mut pos, 2).map(|b| u16::from_be_bytes([b[0], b[1]])) else {
             break;
         };
