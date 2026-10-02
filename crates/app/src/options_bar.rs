@@ -11,8 +11,22 @@ impl App {
                 // Narrower windows get shorter sliders, a mode menu instead
                 // of a row of mode buttons, and hints moved into tooltips;
                 // whatever still doesn't fit scrolls sideways.
-                let tier = Tier::for_width(ui.available_width());
-                bar_scroll(ui, |ui| {
+                // Start from the width; step down while this bar's content
+                // was measured too wide at that tier (per tool and state,
+                // so each tier's width is remembered and nothing flickers).
+                let w = ui.available_width();
+                let key = egui::Id::new((
+                    "options-fit",
+                    self.tool.name(),
+                    self.editing_mask,
+                    self.quick_mask,
+                    self.xform.is_some(),
+                    self.active_is_text(),
+                    self.lasso.is_empty(),
+                ));
+                let tier = Tier::fit(w, |t| ui.data(|d| d.get_temp::<f32>(key.with(t))));
+                let measured_before = ui.data(|d| d.get_temp::<f32>(key.with(tier))).is_some();
+                let used = bar_scroll(ui, |ui| {
                     ui.spacing_mut().slider_width = tier.slider_w();
                     if let Some(mut x) = self.xform.clone() {
                         ui.label(
@@ -90,7 +104,10 @@ impl App {
                         }
                         ui.separator();
                         if ui
-                            .add(primary_button("Apply").shortcut_text("Enter"))
+                            .add(
+                                primary_button("Apply")
+                                    .shortcut_text(RichText::new("Enter").color(ACCENT_INK.gamma_multiply(0.7))),
+                            )
                             .on_hover_text("Commit the transform (Enter)")
                             .clicked()
                         {
@@ -440,6 +457,12 @@ impl App {
                         }
                     }
                 });
+                ui.data_mut(|d| d.insert_temp(key.with(tier), used));
+                if !measured_before && used > w && tier.narrower().is_some() {
+                    // First sight of this bar at this tier and it overflows:
+                    // lay out again right away at the narrower tier.
+                    ui.ctx().request_repaint();
+                }
             });
     }
 
@@ -512,7 +535,7 @@ impl App {
 }
 
 /// How much horizontal room the options bar has.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Tier {
     /// Everything at full size.
     Wide,
@@ -533,6 +556,28 @@ impl Tier {
         }
     }
 
+    /// The tier for a bar `w` wide: by width, then stepped down while the
+    /// content was measured (`needed`) wider than the bar at that tier.
+    fn fit(w: f32, needed: impl Fn(Tier) -> Option<f32>) -> Tier {
+        let mut tier = Tier::for_width(w);
+        while let Some(narrower) = tier.narrower() {
+            match needed(tier) {
+                Some(need) if need > w => tier = narrower,
+                _ => break,
+            }
+        }
+        tier
+    }
+
+    /// The next more compact tier, if any.
+    fn narrower(self) -> Option<Tier> {
+        match self {
+            Tier::Wide => Some(Tier::Compact),
+            Tier::Compact => Some(Tier::Tight),
+            Tier::Tight => None,
+        }
+    }
+
     fn slider_w(self) -> f32 {
         match self {
             Tier::Wide => 110.0,
@@ -544,7 +589,8 @@ impl Tier {
 
 /// The bar's content in a sideways scroll area (wheel scrolls it too), so
 /// no control is ever cut off; a fade marks an edge with more beyond it.
-fn bar_scroll(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+/// Returns the content's width.
+fn bar_scroll(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> f32 {
     raise_controls(ui);
     ui.style_mut().always_scroll_the_only_direction = true;
     let out = egui::ScrollArea::horizontal()
@@ -581,6 +627,7 @@ fn bar_scroll(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
             Color32::TRANSPARENT,
         );
     }
+    out.content_size.x
 }
 
 /// A slider cluster in the bar: muted label, slider, typeable mono value.
@@ -671,6 +718,23 @@ mod tests {
         assert_eq!(Tier::Wide.slider_w(), 110.0);
         assert_eq!(Tier::Compact.slider_w(), 84.0);
         assert_eq!(Tier::Tight.slider_w(), 56.0);
+    }
+
+    #[test]
+    fn an_overflowing_bar_steps_down_a_tier() {
+        // Brush on a mask at 1600 px: 1700 px wide at Wide, 1290 at Compact.
+        let need = |t: Tier| match t {
+            Tier::Wide => Some(1700.0),
+            Tier::Compact => Some(1290.0),
+            Tier::Tight => Some(1100.0),
+        };
+        assert!(Tier::fit(1600.0, need) == Tier::Compact);
+        assert!(Tier::fit(1800.0, need) == Tier::Wide);
+        assert!(Tier::fit(1250.0, need) == Tier::Tight);
+        // Nothing measured yet: the width alone decides.
+        assert!(Tier::fit(1600.0, |_| None) == Tier::Wide);
+        // Tight is the floor even when it still overflows.
+        assert!(Tier::fit(900.0, need) == Tier::Tight);
     }
 
     #[test]

@@ -26,8 +26,8 @@ impl App {
     /// `layout:layer=<name>` activates a layer, `layout:mask` targets its
     /// mask, `layout:rename` opens the rename field, `layout:name=<text>`
     /// renames the active layer, `layout:empty` deletes every layer,
-    /// `layout:about` / `recover` / `confirm-close` / `confirm-tab` open
-    /// those dialogs, `layout:history` folds or opens the history strip,
+    /// `layout:about` / `recover` / `confirm-close` / `confirm-tab` /
+    /// `export-jpeg` open those dialogs, `layout:history` folds or opens the history strip,
     /// `layout:focus-tool=<name>` gives a rail button keyboard focus,
     /// `layout:live-blur` adds a live blur layer above the active one.
     fn debug_layout(&mut self, ctx: &egui::Context, tok: &str) -> bool {
@@ -79,6 +79,8 @@ impl App {
             "recover" => self.dialog = Some(Dialog::Recover),
             "confirm-close" => self.dialog = Some(Dialog::ConfirmClose),
             "confirm-tab" => self.dialog = Some(Dialog::ConfirmCloseTab(0)),
+            // The JPEG options normally open after the native save panel.
+            "export-jpeg" => self.dialog = Some(Dialog::ExportJpeg("/tmp/untitled.jpg".into(), 90)),
             // Flip without saving: a screenshot run must not rewrite the
             // user's preferences.
             "history" => self.prefs.history_collapsed = !self.prefs.history_collapsed,

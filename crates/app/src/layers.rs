@@ -234,6 +234,17 @@ impl App {
                                 egui::pos2(tri_rect.center().x, tri_rect.max.y),
                             ]
                         };
+                        if hover.is_some_and(|q| tri_rect.expand(4.0).contains(q)) {
+                            p.rect_filled(tri_rect.expand(3.0), 4.0, HOVER);
+                            tip = Some(
+                                if row.collapsed {
+                                    "Expand group"
+                                } else {
+                                    "Collapse group"
+                                }
+                                .into(),
+                            );
+                        }
                         p.add(Shape::convex_polygon(pts, c, Stroke::NONE));
                         if resp.clicked()
                             && resp
