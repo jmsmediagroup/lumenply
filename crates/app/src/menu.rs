@@ -256,15 +256,21 @@ impl App {
                         note_target(ui.ctx(), "export-button", export.rect);
                         // The same list as File ▸ Export.
                         button_menu(&export, |ui| self.export_items(ui));
+                        // Shrink (shorter label) rather than overlap the
+                        // document tabs on a narrow window.
                         let keys = self.action_keys(ui.ctx(), "palette");
+                        let room = ui.available_width() - 8.0;
+                        let (search, search_w) = if room >= 230.0 {
+                            (format!("Search tools, filters...   {keys}"), 230.0)
+                        } else {
+                            (format!("Search...   {keys}"), room.max(110.0))
+                        };
                         if ui
                             .add(
-                                egui::Button::new(
-                                    RichText::new(format!("Search tools, filters...   {keys}")).color(MUTED),
-                                )
-                                .fill(GROUND)
-                                .stroke(Stroke::new(1.0, LINE))
-                                .min_size(egui::vec2(230.0, 26.0)),
+                                egui::Button::new(RichText::new(search).color(MUTED))
+                                    .fill(GROUND)
+                                    .stroke(Stroke::new(1.0, LINE))
+                                    .min_size(egui::vec2(search_w, 26.0)),
                             )
                             .clicked()
                         {

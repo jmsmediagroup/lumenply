@@ -83,6 +83,8 @@ pub(crate) struct Prefs {
     pub shortcuts: std::collections::BTreeMap<String, Chord>,
     /// Saved brush configurations, selectable from the brush options bar.
     pub brush_presets: Vec<BrushPreset>,
+    /// The history strip is folded down to its one-line header.
+    pub history_collapsed: bool,
 }
 
 /// One saved brush setup (the shape parameters; colour stays with the
@@ -120,6 +122,7 @@ impl Default for Prefs {
             autosave_secs: 120,
             shortcuts: std::collections::BTreeMap::new(),
             brush_presets: Vec::new(),
+            history_collapsed: false,
         }
     }
 }
@@ -353,5 +356,16 @@ mod tests {
         let legacy: Prefs = serde_json::from_str("{\"undo_steps\": 42}").unwrap();
         assert_eq!(legacy.undo_steps, 42);
         assert!(legacy.brush_presets.is_empty());
+        assert!(!legacy.history_collapsed, "the history strip starts open");
+    }
+
+    #[test]
+    fn prefs_round_trip_keeps_the_history_fold() {
+        let p = Prefs {
+            history_collapsed: true,
+            ..Prefs::default()
+        };
+        let back: Prefs = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert!(back.history_collapsed);
     }
 }

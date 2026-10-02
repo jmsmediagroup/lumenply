@@ -1,5 +1,30 @@
 use super::*;
 
+/// Layer row height and the gap below it.
+const ROW_H: f32 = 38.0;
+const ROW_GAP: f32 = 2.0;
+/// Vertical pitch of the layer list, for the dock's height budget.
+pub(crate) const ROW_PITCH: f32 = ROW_H + ROW_GAP;
+/// Height of the LAYERS title and of the icon footer.
+pub(crate) const HEADER_H: f32 = 30.0;
+pub(crate) const FOOTER_H: f32 = 40.0;
+/// Ink for disabled icons: dimmed, but still legible.
+const DISABLED_INK: Color32 = Color32::from_rgb(0x5A, 0x61, 0x6B);
+
+/// A shorter kind label for a narrow row ("Hue/Saturation" → "Hue/Sat").
+fn short_chip(label: &str) -> &str {
+    match label {
+        "Hue/Saturation" => "Hue/Sat",
+        "Brightness/Contrast" => "Bri/Con",
+        "Black & White" => "B & W",
+        "Color Balance" => "Balance",
+        "Live high pass" => "Live HP",
+        "Live sharpen" => "Live sharp",
+        "Live motion" => "Live blur",
+        other => other,
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
     Pixel,
@@ -24,6 +49,16 @@ pub(crate) struct LayerRow {
     mask_enabled: bool,
     depth: usize,
     collapsed: bool,
+}
+
+impl LayerRow {
+    pub(crate) fn id(&self) -> LayerId {
+        self.id
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 impl App {
@@ -89,31 +124,62 @@ impl App {
         let mut row_rects: Vec<egui::Rect> = Vec::new();
         let mut renaming = self.renaming.take();
 
+        if rows.is_empty() {
+            // Empty document: say what to do instead of showing a void.
+            let h = (ui.available_height() - FOOTER_H).clamp(48.0, 120.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), h),
+                egui::Layout::top_down(egui::Align::Center),
+                |ui| {
+                    ui.add_space(12.0);
+                    ui.label(RichText::new("No layers yet").color(TEXT));
+                    ui.label(
+                        RichText::new("Add one with + below, or drop an image onto the window.")
+                            .small()
+                            .color(MUTED),
+                    );
+                },
+            );
+        }
         egui::ScrollArea::vertical()
             .id_salt("layers")
-            .max_height((ui.available_height() - 46.0).max(160.0))
+            .max_height((ui.available_height() - FOOTER_H).max(ROW_H))
             .auto_shrink([false, true])
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = ROW_GAP;
                 for row in &rows {
                     let selected = self.selected.contains(&row.id);
                     let is_active = Some(row.id) == self.active;
                     let w = ui.available_width();
-                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 38.0), Sense::click_and_drag());
+                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, ROW_H), Sense::click_and_drag());
                     row_rects.push(rect);
                     if resp.drag_started() {
                         self.layer_drag = Some(row.id);
                         self.set_active(Some(row.id));
                     }
+                    resp.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::SelectableLabel,
+                            true,
+                            is_active,
+                            format!("Layer {}", row.name),
+                        )
+                    });
                     let p = ui.painter();
                     if is_active {
-                        p.rect_filled(rect, 6.0, ACCENT_TINT);
-                        p.rect_stroke(rect.shrink(1.0), 6.0, Stroke::new(1.5, ACCENT));
+                        p.rect_filled(rect, RADIUS, ACCENT_TINT);
+                        p.rect_stroke(rect.shrink(1.0), RADIUS, Stroke::new(1.5, ACCENT));
                     } else if selected {
-                        p.rect_filled(rect, 6.0, RAISED);
-                        p.rect_stroke(rect.shrink(1.0), 6.0, Stroke::new(1.0, MUTED));
+                        p.rect_filled(rect, RADIUS, RAISED);
+                        p.rect_stroke(rect.shrink(1.0), RADIUS, Stroke::new(1.0, MUTED));
                     } else if resp.hovered() {
-                        p.rect_filled(rect, 6.0, RAISED);
+                        p.rect_filled(rect, RADIUS, RAISED);
                     }
+                    if resp.has_focus() {
+                        p.rect_stroke(rect, RADIUS, Stroke::new(1.5, ACCENT));
+                    }
+                    let hover = resp.hover_pos();
+                    let mut tip: Option<String> = None;
                     let mut x = rect.min.x + 6.0 + row.depth as f32 * 16.0;
                     let cy = rect.center().y;
                     if row.clip {
@@ -136,6 +202,10 @@ impl App {
 
                     // visibility checkbox
                     let vis_rect = egui::Rect::from_center_size(egui::pos2(x + 8.0, cy), Vec2::splat(16.0));
+                    if hover.is_some_and(|q| vis_rect.expand(3.0).contains(q)) {
+                        p.rect_filled(vis_rect.expand(3.0), 4.0, HOVER);
+                        tip = Some(if row.visible { "Hide layer" } else { "Show layer" }.into());
+                    }
                     paint_eye(p, vis_rect, row.visible);
                     if resp.clicked()
                         && resp
@@ -164,6 +234,17 @@ impl App {
                                 egui::pos2(tri_rect.center().x, tri_rect.max.y),
                             ]
                         };
+                        if hover.is_some_and(|q| tri_rect.expand(4.0).contains(q)) {
+                            p.rect_filled(tri_rect.expand(3.0), 4.0, HOVER);
+                            tip = Some(
+                                if row.collapsed {
+                                    "Expand group"
+                                } else {
+                                    "Collapse group"
+                                }
+                                .into(),
+                            );
+                        }
                         p.add(Shape::convex_polygon(pts, c, Stroke::NONE));
                         if resp.clicked()
                             && resp
@@ -209,18 +290,33 @@ impl App {
                             );
                         }
                         let editing = is_active && self.editing_mask;
+                        let on_mask = hover.is_some_and(|q| m_rect.contains(q));
                         let col = if editing {
                             ACCENT
-                        } else if row.mask_enabled {
-                            LINE
+                        } else if !row.mask_enabled {
+                            DANGER
+                        } else if on_mask {
+                            MUTED
                         } else {
-                            Color32::from_rgb(200, 70, 70)
+                            LINE
                         };
                         p.rect_stroke(m_rect, 2.0, Stroke::new(if editing { 2.0 } else { 1.0 }, col));
                         if !row.mask_enabled {
                             p.line_segment(
                                 [m_rect.left_top(), m_rect.right_bottom()],
-                                Stroke::new(1.5, Color32::from_rgb(200, 70, 70)),
+                                Stroke::new(1.5, DANGER),
+                            );
+                        }
+                        if on_mask {
+                            tip = Some(
+                                if editing {
+                                    "Painting on the mask — click to edit the layer again"
+                                } else if row.mask_enabled {
+                                    "Layer mask — click to paint on it"
+                                } else {
+                                    "Layer mask (disabled) — click to paint on it"
+                                }
+                                .into(),
                             );
                         }
                         if resp.clicked() && resp.interact_pointer_pos().is_some_and(|q| m_rect.contains(q)) {
@@ -250,18 +346,26 @@ impl App {
                             } else if enter || click_away || r.lost_focus() {
                                 rename_commit = Some((row.id, text.clone()));
                             }
+                            // `put` leaves the cursor under the (shorter) field;
+                            // keep the next row at its usual place.
+                            let short = rect.max.y + ROW_GAP - ui.cursor().top();
+                            if short > 0.0 {
+                                ui.add_space(short);
+                            }
                             continue;
                         }
                     }
+                    // Right edge: opacity (when not 100%), then the kind
+                    // chip; the name takes the rest and is elided with "…"
+                    // rather than clipped. The chip shortens, then drops,
+                    // before the name gets too short to read.
                     let mut right = rect.max.x - 8.0;
-                    if let Some(label) = row.chip {
-                        let ink = if row.kind == Kind::Filter {
-                            LIVE_FILTER
-                        } else {
-                            MUTED
-                        };
-                        right -= kind_chip(p, egui::pos2(right, cy), label, ink) + 6.0;
-                    }
+                    let name_font = FontId::proportional(14.0);
+                    let name_w = ui.fonts(|f| {
+                        f.layout_no_wrap(row.name.clone(), name_font.clone(), TEXT)
+                            .size()
+                            .x
+                    });
                     if row.opacity < 0.999 {
                         right -= p
                             .text(
@@ -272,20 +376,45 @@ impl App {
                                 MUTED,
                             )
                             .width()
-                            + 6.0;
+                            + 8.0;
                     }
-                    // Name last, clipped so it never runs under the chips.
-                    let name_clip = egui::Rect::from_min_max(
-                        egui::pos2(x, rect.min.y),
-                        egui::pos2(right - 2.0, rect.max.y),
-                    );
-                    p.with_clip_rect(name_clip).text(
-                        egui::pos2(x, cy),
-                        Align2::LEFT_CENTER,
-                        &row.name,
-                        FontId::proportional(14.0),
-                        TEXT,
-                    );
+                    // A chip that only repeats the name ("Curves" named
+                    // Curves) adds nothing; the badge already shows the kind.
+                    let chip = row.chip.filter(|c| !c.eq_ignore_ascii_case(&row.name));
+                    let mut chip_dropped = false;
+                    if let Some(label) = chip {
+                        let ink = if row.kind == Kind::Filter {
+                            LIVE_FILTER
+                        } else {
+                            MUTED
+                        };
+                        let room = right - x;
+                        let full = kind_chip_width(ui, label);
+                        let short = short_chip(label);
+                        let pick = if name_w + 10.0 + full <= room {
+                            Some(label)
+                        } else if room - kind_chip_width(ui, short) - 10.0 >= 56.0_f32.min(name_w) {
+                            Some(short)
+                        } else {
+                            None
+                        };
+                        match pick {
+                            Some(l) => right -= kind_chip(p, egui::pos2(right, cy), l, ink) + 8.0,
+                            None => chip_dropped = true,
+                        }
+                    }
+                    let (galley, cut) = elided(ui, &row.name, name_font, TEXT, right - x);
+                    p.galley(egui::pos2(x, cy - galley.size().y / 2.0), galley, TEXT);
+                    if tip.is_none() && (cut || chip_dropped) {
+                        tip = Some(match row.chip {
+                            Some(c) => format!("{} — {c}", row.name),
+                            None => row.name.clone(),
+                        });
+                    }
+                    let resp = match tip {
+                        Some(t) => resp.on_hover_text(t),
+                        None => resp,
+                    };
                     context_menu(&resp, |ui| {
                         // Where the row sits among its siblings decides
                         // whether it can move or clip.
@@ -495,16 +624,31 @@ impl App {
         let mut add_adj = None;
         let mut add_filter = None;
         let has_mask = self.active_has_mask();
+        // Up/down only where there is room among the layer's siblings, so
+        // the buttons never record a do-nothing history step.
+        let (can_up, can_down) = self
+            .active
+            .and_then(|id| {
+                let doc = self.editor.doc();
+                let list = match doc.parent_of(id) {
+                    None => Some(doc.layers()),
+                    Some(g) => doc.layer(g).and_then(|l| l.children()),
+                }?;
+                let i = list.iter().position(|l| l.id == id)?;
+                Some((i + 1 < list.len(), i > 0))
+            })
+            .unwrap_or((false, false));
         ui.add_space(2.0);
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
             if ui.add(IconButton::new(icon_plus, "New layer")).clicked() {
                 action = Some("add");
             }
             if ui
-                .add(IconButton::new(
-                    icon_folder,
-                    "Group selected layers (Ctrl+click to multi-select)",
-                ))
+                .add_enabled(
+                    self.active.is_some(),
+                    IconButton::new(icon_folder, "Group selected layers (Ctrl+click to multi-select)"),
+                )
                 .clicked()
             {
                 action = Some("group");
@@ -532,10 +676,16 @@ impl App {
             {
                 action = Some("addmask");
             }
-            if ui.add(IconButton::new(icon_up, "Move layer up")).clicked() {
+            if ui
+                .add_enabled(can_up, IconButton::new(icon_up, "Move layer up"))
+                .clicked()
+            {
                 action = Some("up");
             }
-            if ui.add(IconButton::new(icon_down, "Move layer down")).clicked() {
+            if ui
+                .add_enabled(can_down, IconButton::new(icon_down, "Move layer down"))
+                .clicked()
+            {
                 action = Some("down");
             }
             // The active layer's own actions, as on its right-click menu.
@@ -589,27 +739,34 @@ impl App {
     }
 }
 
+/// The thumbnail tile of a layer without pixels: a dark tile carrying the
+/// kind's line glyph, the same family as the footer and tool icons.
 pub(crate) fn badge(p: &egui::Painter, rect: egui::Rect, kind: Kind) {
-    let (col, ink, txt) = match kind {
-        Kind::Pixel => (RAISED, TEXT, "P"),
-        Kind::Adjustment => (ACCENT, ACCENT_INK, "A"),
-        Kind::Group => (RAISED, TEXT, "G"),
-        Kind::Filter => (LIVE_FILTER, ACCENT_INK, "F"),
-        Kind::Text => (RAISED, TEXT, "T"),
-    };
-    p.rect_filled(rect, 2.0, col);
-    p.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        txt,
-        FontId::proportional(13.0),
-        ink,
-    );
+    p.rect_filled(rect, 2.0, RAISED);
+    let glyph = egui::Rect::from_center_size(rect.center(), Vec2::splat(rect.height() * 0.55));
+    match kind {
+        Kind::Adjustment => icon_adjustment(p, glyph, ACCENT),
+        Kind::Filter => icon_filter(p, glyph, LIVE_FILTER),
+        Kind::Group => icon_folder(p, glyph, TEXT),
+        Kind::Text => tools::draw_icon(p, glyph, Tool::Text, TEXT),
+        Kind::Pixel => {}
+    }
+}
+
+const CHIP_FONT: f32 = 10.5;
+
+/// Width of a kind chip for `label`, as [`kind_chip`] paints it.
+fn kind_chip_width(ui: &egui::Ui, label: &str) -> f32 {
+    ui.fonts(|f| {
+        f.layout_no_wrap(label.into(), FontId::proportional(CHIP_FONT), MUTED)
+            .size()
+            .x
+    }) + 12.0
 }
 
 /// Paint a small kind chip whose right edge sits at `right`; returns its width.
 fn kind_chip(p: &egui::Painter, right: egui::Pos2, label: &str, ink: Color32) -> f32 {
-    let galley = p.layout_no_wrap(label.into(), FontId::proportional(10.5), ink);
+    let galley = p.layout_no_wrap(label.into(), FontId::proportional(CHIP_FONT), ink);
     let size = galley.size() + egui::vec2(12.0, 6.0);
     let rect = egui::Rect::from_min_size(right - egui::vec2(size.x, size.y / 2.0), size);
     p.rect_filled(rect, 4.0, GROUND);
@@ -649,12 +806,18 @@ impl egui::Widget for IconButton {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
         let (rect, resp) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
         let enabled = ui.is_enabled();
-        if resp.hovered() && enabled {
-            ui.painter().rect_filled(rect, 5.0, RAISED);
+        if enabled && resp.is_pointer_button_down_on() {
+            ui.painter().rect_filled(rect, RADIUS, CONTROL);
+        } else if enabled && (resp.hovered() || resp.has_focus()) {
+            ui.painter().rect_filled(rect, RADIUS, RAISED);
         }
-        let ink = if enabled { TEXT } else { LINE };
+        focus_ring(ui, &resp, rect, RADIUS);
+        let ink = if enabled { TEXT } else { DISABLED_INK };
         (self.draw)(ui.painter(), rect.shrink(5.0), ink);
-        resp.on_hover_text(self.tip)
+        // Icon-only: the tooltip text doubles as the accessible name.
+        let tip = self.tip;
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, tip));
+        resp.on_hover_text(tip).on_disabled_hover_text(tip)
     }
 }
 
@@ -794,4 +957,18 @@ fn icon_trash(p: &egui::Painter, r: egui::Rect, c: Color32) {
         egui::pos2(r.max.x - r.width() * 0.12, r.max.y),
     );
     p.rect_stroke(body, 1.5, s);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_kind_chips_have_short_forms() {
+        assert_eq!(short_chip("Hue/Saturation"), "Hue/Sat");
+        assert_eq!(short_chip("Brightness/Contrast"), "Bri/Con");
+        assert_eq!(short_chip("Live high pass"), "Live HP");
+        assert_eq!(short_chip("Curves"), "Curves");
+        assert_eq!(ROW_PITCH, 40.0);
+    }
 }
