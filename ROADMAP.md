@@ -165,7 +165,10 @@ None of these could be tested in the container.
       resampling in linear light (render::resample), a preview of the encoded
       result (JPEG decoded back, so artefacts show) and its real file size,
       encoded on a worker thread
-- [ ] AVIF/HEIF
+- [~] HEIC / HEIF / AVIF import on macOS through ImageIO (orientation and
+      colour profile applied, decoded straight into linear-light float;
+      tested against HEICs written by the system's sips). Still open:
+      other platforms (libheif/dav1d would add C dependencies), export
 - [~] PSD: 16-bit import (raw, RLE and ZIP ± prediction channels) and
       export (raw channels; Export menu), full precision both ways and
       psd-tools-cross-checked; Black & White/Exposure/Vibrance round-trip

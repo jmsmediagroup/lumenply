@@ -13,6 +13,7 @@ pub mod psd;
 mod psd_channels;
 mod psd_guides;
 pub mod raw;
+pub mod system_image;
 
 use std::path::Path;
 
@@ -59,6 +60,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Raster, IoError> {
     }
     if raw::is_raw(path) {
         return raw::load_raw(path);
+    }
+    if system_image::is_system_format(path) {
+        return system_image::load_system(path);
     }
     let (img, icc) = decode_with_icc(path)?;
     // Keep the full precision of 16-bit sources (PNG, TIFF) instead of

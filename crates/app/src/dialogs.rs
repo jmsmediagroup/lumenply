@@ -43,6 +43,12 @@ pub(crate) enum Dialog {
 pub(crate) const PROJECT_EXT: &[&str] = &["lumen", "nge"];
 pub(crate) const PSD_EXT: &[&str] = &["psd", "psb"];
 pub(crate) const ORA_EXT: &[&str] = &["ora"];
+/// HEIC/HEIF/AVIF open through the macOS system decoder.
+#[cfg(target_os = "macos")]
+pub(crate) const IMAGE_EXT: &[&str] = &[
+    "png", "jpg", "jpeg", "tif", "tiff", "webp", "exr", "heic", "heif", "hif", "avif",
+];
+#[cfg(not(target_os = "macos"))]
 pub(crate) const IMAGE_EXT: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "webp", "exr"];
 
 /// Where a file dialog starts: the live document's folder, else the folder
