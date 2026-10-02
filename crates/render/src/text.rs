@@ -2,15 +2,14 @@
 //! installed system family (resolved through `fontdb`), or a font file
 //! named by the layer. Italic uses a real italic face when the family has
 //! one and a synthetic oblique shear when it does not; bold likewise uses
-//! a real bold face or a synthetic horizontal emboldening. Lines align
-//! left, centre or right against the layer's anchor.
+//! a real bold face or a synthetic horizontal emboldening. Where each
+//! glyph goes (lines, wrapping, alignment) comes from [`crate::text_layout`].
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use fontdue::layout::{CoordinateSystem, Layout, TextStyle};
 use fontdue::Font;
-use lumenply_doc::{Layer, TextAlign, TextLayer};
+use lumenply_doc::{Layer, TextLayer};
 use lumenply_tiles::{Rgba, TileStore};
 
 static REGULAR: &[u8] = include_bytes!("../fonts/DejaVuSans.ttf");
@@ -20,22 +19,22 @@ static BOLD: &[u8] = include_bytes!("../fonts/DejaVuSans-Bold.ttf");
 pub const BUNDLED_FAMILY: &str = "DejaVu Sans";
 
 /// Shear factor for synthetic oblique (≈ 12°).
-const OBLIQUE: f32 = 0.21;
+pub(crate) const OBLIQUE: f32 = 0.21;
 
 /// Synthetic bold widens every stem by this fraction of the font size
 /// (FreeType's emboldening strength), never by less than one pixel.
-const EMBOLDEN: f32 = 1.0 / 24.0;
+pub(crate) const EMBOLDEN: f32 = 1.0 / 24.0;
 
 /// Faces at or above this weight count as bold; lighter faces asked for
 /// bold are emboldened synthetically.
 const BOLD_WEIGHT: u16 = 600;
 
-struct Resolved {
-    font: Arc<Font>,
+pub(crate) struct Resolved {
+    pub(crate) font: Arc<Font>,
     /// The face itself is not italic, so the blit shears it.
-    synthetic_oblique: bool,
+    pub(crate) synthetic_oblique: bool,
     /// The face itself is not bold, so the blit thickens it.
-    synthetic_bold: bool,
+    pub(crate) synthetic_bold: bool,
 }
 
 fn fonts() -> &'static Mutex<HashMap<String, Arc<Resolved>>> {
@@ -150,7 +149,7 @@ pub fn font_label(t: &TextLayer) -> String {
 
 /// Load (and cache) the face for a text layer. Unknown names fall back to
 /// the bundled default so a document always renders.
-fn resolve(t: &TextLayer) -> Arc<Resolved> {
+pub(crate) fn resolve(t: &TextLayer) -> Arc<Resolved> {
     let key = format!("{}|{}|{}", t.font, t.bold, t.italic);
     if let Some(f) = fonts().lock().expect("font cache").get(&key) {
         return f.clone();
@@ -226,93 +225,99 @@ pub fn font_for(t: &TextLayer) -> Arc<Font> {
     resolve(t).font.clone()
 }
 
-/// Rasterise a text layer into a sparse tile store at its canvas position.
+/// Rasterise a text layer into a sparse tile store at its canvas position,
+/// glyph by glyph from its [`layout`](crate::text_layout::layout).
 pub fn rasterize(t: &TextLayer) -> TileStore {
     let mut store = TileStore::new();
     if t.text.trim().is_empty() || t.size <= 0.5 || !t.size.is_finite() {
         return store;
     }
-    let resolved = resolve(t);
-    let font = resolved.font.as_ref();
-    let fonts_arr = [font];
-    let [cr, cg, cb, ca] = t.color;
-    let ascent = font
-        .horizontal_line_metrics(t.size)
-        .map_or(t.size * 0.8, |m| m.ascent);
-    let line_step = t.line_height.max(0.5) * t.size;
-
-    // Lay each line out on its own so alignment can place it.
-    struct Line {
-        glyphs: Vec<fontdue::layout::GlyphPosition>,
-        width: f32,
-    }
-    let track_px = t.tracking / 1000.0 * t.size;
-    // Synthetic bold smears each glyph rightwards by `bold_px` and widens
-    // every advance by the same amount so neighbours do not collide.
-    let bold_px = if resolved.synthetic_bold {
-        (t.size * EMBOLDEN).max(1.0)
-    } else {
-        0.0
-    };
-    let mut lines = Vec::new();
-    for line in t.text.split('\n') {
-        let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
-        layout.reset(&fontdue::layout::LayoutSettings::default());
-        layout.append(&fonts_arr, &TextStyle::new(line, t.size, 0));
-        let mut glyphs: Vec<_> = layout.glyphs().clone();
-        // Tracking: widen each inter-glyph gap by a fixed fraction of an em.
-        for (n, g) in glyphs.iter_mut().enumerate() {
-            g.x += n as f32 * (track_px + bold_px);
+    let lay = crate::text_layout::layout(t);
+    // Underline and strikethrough: a bar under / through each glyph's
+    // advance (spaces between words included, as Photoshop draws them;
+    // spaces trailing a line are not).
+    let mut line_end = vec![f32::MIN; lay.lines.len()];
+    for g in &lay.glyphs {
+        if !t.text[g.byte..].starts_with(char::is_whitespace) {
+            line_end[g.line] = line_end[g.line].max(g.x + g.advance);
         }
-        let width = glyphs
-            .iter()
-            .map(|g| g.x + g.width as f32 + if g.width > 0 { bold_px } else { 0.0 })
-            .fold(0.0f32, f32::max);
-        lines.push(Line { glyphs, width });
     }
-
-    for (i, line) in lines.iter().enumerate() {
-        let align_dx = match t.align {
-            TextAlign::Left => 0.0,
-            TextAlign::Center => -line.width / 2.0,
-            TextAlign::Right => -line.width,
+    for g in &lay.glyphs {
+        let line = &lay.lines[g.line];
+        let face = &lay.faces[g.face];
+        if line.hidden || !(face.underline || face.strikethrough) || g.x >= line_end[g.line] {
+            continue;
+        }
+        let thick = (face.size / 16.0).max(1.0);
+        let mut bars = Vec::new();
+        if face.underline {
+            bars.push(line.baseline + face.size * 0.12);
+        }
+        if face.strikethrough {
+            bars.push(line.baseline - face.size * 0.3);
+        }
+        for top in bars {
+            fill_bar(&mut store, g.x, g.x + g.advance, top, top + thick, face.color);
+        }
+    }
+    for g in &lay.glyphs {
+        let line = &lay.lines[g.line];
+        if line.hidden {
+            continue;
+        }
+        let face = &lay.faces[g.face];
+        let [cr, cg, cb, ca] = face.color;
+        let (metrics, bitmap) = face.font.rasterize_indexed(g.glyph, face.size);
+        if metrics.width == 0 || metrics.height == 0 {
+            continue;
+        }
+        let (width, bitmap) = if face.bold_px > 0.0 {
+            embolden(&bitmap, metrics.width, metrics.height, face.bold_px)
+        } else {
+            (metrics.width, bitmap)
         };
-        let baseline_y = t.y + i as f32 * line_step;
-        let oy = (baseline_y - ascent).round() as i32;
-        for g in &line.glyphs {
-            if g.width == 0 || g.height == 0 {
-                continue;
-            }
-            let (metrics, bitmap) = font.rasterize_config(g.key);
-            let (width, bitmap) = if bold_px > 0.0 {
-                embolden(&bitmap, metrics.width, metrics.height, bold_px)
+        let baseline_y = line.baseline;
+        let gx = g.x.round() as i32 + metrics.xmin;
+        let gy = baseline_y.round() as i32 - metrics.ymin - metrics.height as i32;
+        for row in 0..metrics.height {
+            let py = gy + row as i32;
+            // Synthetic oblique: shear rows around the baseline.
+            let shear = if face.oblique {
+                ((baseline_y - py as f32) * OBLIQUE).round() as i32
             } else {
-                (metrics.width, bitmap)
+                0
             };
-            let gx = (t.x + align_dx + g.x).round() as i32;
-            let gy = oy + g.y.round() as i32;
-            for row in 0..metrics.height {
-                let py = gy + row as i32;
-                // Synthetic oblique: shear rows around the baseline.
-                let shear = if resolved.synthetic_oblique {
-                    ((baseline_y - py as f32) * OBLIQUE).round() as i32
-                } else {
-                    0
-                };
-                for col in 0..width {
-                    let cov = bitmap[row * width + col] as f32 / 255.0;
-                    if cov <= 0.0 {
-                        continue;
-                    }
-                    let px = gx + col as i32 + shear;
-                    let dst = store.get_pixel(px, py);
-                    store.set_pixel(px, py, Rgba::from_straight(cr, cg, cb, ca * cov).over(dst));
+            for col in 0..width {
+                let cov = bitmap[row * width + col] as f32 / 255.0;
+                if cov <= 0.0 {
+                    continue;
                 }
+                let px = gx + col as i32 + shear;
+                let dst = store.get_pixel(px, py);
+                store.set_pixel(px, py, Rgba::from_straight(cr, cg, cb, ca * cov).over(dst));
             }
         }
     }
     store.prune_blank();
     store
+}
+
+/// Paint `color` over the rectangle [x0, x1) × [y0, y1) (canvas px), with
+/// partial coverage on its fractional edges.
+fn fill_bar(store: &mut TileStore, x0: f32, x1: f32, y0: f32, y1: f32, color: [f32; 4]) {
+    let [r, g, b, a] = color;
+    let cover = |lo: f32, hi: f32, p: i32| (hi.min(p as f32 + 1.0) - lo.max(p as f32)).clamp(0.0, 1.0);
+    for py in y0.floor() as i32..y1.ceil() as i32 {
+        let cy = cover(y0, y1, py);
+        for px in x0.floor() as i32..x1.ceil() as i32 {
+            let c = cy * cover(x0, x1, px);
+            if c <= 0.0 {
+                continue;
+            }
+            let dst = store.get_pixel(px, py);
+            store.set_pixel(px, py, Rgba::from_straight(r, g, b, a * c).over(dst));
+        }
+    }
 }
 
 /// Thicken a coverage bitmap horizontally by `strength` pixels: each output
@@ -347,6 +352,7 @@ pub fn refresh_cache(t: &mut TextLayer) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumenply_doc::TextAlign;
 
     #[test]
     fn text_renders_glyphs_at_the_baseline_origin() {
@@ -503,6 +509,41 @@ mod tests {
             }
         }
         total
+    }
+
+    #[test]
+    fn underline_and_strikethrough_draw_bars_under_and_through_the_glyphs() {
+        // "ll" at 32 px from x 10, baseline 100: the underline bar is
+        // 2 px thick (32 / 16) starting 3.84 px below the baseline, the
+        // strike bar 9.6 px above it; both span the advances.
+        let plain = TextLayer::new("ll", 10.0, 100.0, 32.0, BLACK);
+        let lay = crate::text_layout::layout(&plain);
+        let end = lay.glyphs[1].x + lay.glyphs[1].advance;
+        let under = rasterize(&TextLayer {
+            underline: true,
+            ..plain.clone()
+        });
+        let row = |s: &TileStore, y: i32| (0..200).filter(|&x| s.get_pixel(x, y).a > 0.99).count();
+        // Below the baseline (rows 104, 105) only the bar has ink: it runs
+        // from x 10 to the end of the last advance.
+        assert_eq!(row(&under, 104), (end - 10.0) as usize);
+        assert_eq!(row(&rasterize(&plain), 104), 0);
+        assert!(under.get_pixel(10, 104).a > 0.99 && under.get_pixel(9, 104).a < 0.01);
+        // Row 103 is partly covered (the bar starts at 103.84).
+        let partial = under.get_pixel(20, 103).a;
+        assert!((partial - 0.16).abs() < 0.02, "{partial}");
+        // Strikethrough: the band from 90.4 to 92.4, across the gap
+        // between the two l's too.
+        let strike = rasterize(&TextLayer {
+            strikethrough: true,
+            ..plain.clone()
+        });
+        let gap_x = (lay.glyphs[0].x + lay.glyphs[0].advance - 1.0) as i32;
+        assert!(
+            rasterize(&plain).get_pixel(gap_x, 91).a < 0.01,
+            "no ink in the gap"
+        );
+        assert!(strike.get_pixel(gap_x, 91).a > 0.99, "the bar crosses it");
     }
 
     #[test]

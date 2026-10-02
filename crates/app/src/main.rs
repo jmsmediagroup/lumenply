@@ -57,6 +57,7 @@ mod smart_contents;
 mod smart_filters_ui;
 mod start;
 mod status;
+mod text_edit;
 mod text_ui;
 mod theme;
 mod tools;
@@ -421,6 +422,8 @@ struct App {
     gradient: gradient_ui::GradientTool,
     /// Brush tips for the picker: built-in and imported (brush_panel.rs).
     brushes: brush_panel::BrushLibrary,
+    /// On-canvas text editing with the Text tool (text_edit.rs).
+    typer: text_edit::TypeTool,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -587,6 +590,7 @@ impl App {
             shape: Default::default(),
             gradient: Default::default(),
             brushes: brush_panel::BrushLibrary::load(),
+            typer: text_edit::TypeTool::default(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -1377,6 +1381,7 @@ impl App {
             self.dialog = Some(Dialog::ConfirmClose);
         }
         self.shortcuts(ctx);
+        self.text_edit_guard(ctx);
         self.menu_bar(ctx);
         if self.no_doc {
             self.welcome(ctx);

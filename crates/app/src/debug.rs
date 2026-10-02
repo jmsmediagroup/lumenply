@@ -366,7 +366,7 @@ impl App {
         } else if let Some((x, y)) = rest.strip_prefix("shift-click:").and_then(xy) {
             self.text_click(ctx, x, y, true);
         } else {
-            return false;
+            return self.debug_text_edit(ctx, rest);
         }
         true
     }

@@ -2396,9 +2396,7 @@ impl Command for RotateImage {
                 LayerContent::Smart(sm) => smart_compose(sm, &t),
                 LayerContent::Shape(sh) => sh.transform_by(&t),
                 LayerContent::Text(tl) => {
-                    let (nx, ny) = t.apply(tl.x, tl.y);
-                    tl.x = nx;
-                    tl.y = ny;
+                    tl.map_position(|x, y| t.apply(x, y));
                     lumenply_render::text::refresh_cache(tl);
                 }
                 _ => {}
@@ -2447,9 +2445,7 @@ impl Command for FlipImage {
                 LayerContent::Smart(sm) => smart_compose(sm, &t),
                 LayerContent::Shape(sh) => sh.transform_by(&t),
                 LayerContent::Text(tl) => {
-                    let (nx, ny) = t.apply(tl.x, tl.y);
-                    tl.x = nx;
-                    tl.y = ny;
+                    tl.map_position(|x, y| t.apply(x, y));
                     lumenply_render::text::refresh_cache(tl);
                 }
                 _ => {}
@@ -4950,5 +4946,37 @@ mod tests {
         };
         stroke.apply(&mut doc).unwrap();
         assert!(doc.layer(id).unwrap().pixels().unwrap().is_empty());
+    }
+
+    #[test]
+    fn image_flips_and_rotations_keep_paragraph_boxes_over_the_same_spot() {
+        let mut doc = Document::new(400, 200);
+        AddTextLayer {
+            text: TextLayer {
+                box_size: Some([100.0, 40.0]),
+                ..TextLayer::new("box", 20.0, 30.0, 12.0, [0.0, 0.0, 0.0, 1.0])
+            },
+            above: None,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let id = doc.layers()[0].id;
+        let pos = |doc: &Document| {
+            let t = doc.layer(id).unwrap().text_layer().unwrap();
+            (t.x, t.y, t.box_size)
+        };
+        // Centre (70, 50) mirrors to (330, 50): the box spans 280..380.
+        FlipImage { horizontal: true }.apply(&mut doc).unwrap();
+        assert_eq!(pos(&doc), (280.0, 30.0, Some([100.0, 40.0])));
+        // A quarter turn clockwise on 400×200: (x, y) → (200 − y, x), so
+        // the centre (330, 50) lands on (150, 330); the box keeps its size.
+        RotateImage { quarter_turns: 1 }.apply(&mut doc).unwrap();
+        let (x, y, size) = pos(&doc);
+        assert!((x - 100.0).abs() < 1e-3 && (y - 310.0).abs() < 1e-3, "({x}, {y})");
+        assert_eq!(size, Some([100.0, 40.0]));
+        // Point text still maps its anchor.
+        let mut p = TextLayer::new("pt", 5.0, 7.0, 12.0, [0.0; 4]);
+        p.map_position(|x, y| (x + 1.0, y * 2.0));
+        assert_eq!((p.x, p.y), (6.0, 14.0));
     }
 }

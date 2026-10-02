@@ -86,6 +86,7 @@ pub mod selection;
 pub mod selection_ops;
 pub mod shape;
 pub mod smart_filter;
+pub mod text_runs;
 
 pub use adjust::{Adjustment, CompiledAdjustment, LevelsChannel};
 pub use channels::SavedSelection;
@@ -504,6 +505,31 @@ pub struct TextLayer {
     /// Extra space between glyphs, in thousandths of an em (Photoshop units).
     #[serde(default)]
     pub tracking: f32,
+    /// Paragraph (area) text: the text box's width and height in canvas
+    /// pixels. With a box, (x, y) is the box's top-left corner and lines
+    /// wrap at its width; without one (point text), (x, y) anchors the
+    /// first baseline.
+    #[serde(default)]
+    pub box_size: Option<[f32; 2]>,
+    /// Raises (positive) or lowers every glyph from its baseline, in pixels.
+    #[serde(default)]
+    pub baseline_shift: f32,
+    /// Show every letter as a capital (the stored text keeps its case).
+    #[serde(default)]
+    pub all_caps: bool,
+    /// Photoshop's "Metrics" kerning: the font's kerning pairs and its
+    /// exact fractional advances. Off (older documents) keeps whole-pixel
+    /// advances without pairs.
+    #[serde(default)]
+    pub kerning: bool,
+    /// A line under, or through, every character (runs may override).
+    #[serde(default)]
+    pub underline: bool,
+    #[serde(default)]
+    pub strikethrough: bool,
+    /// Per-character colour, size, bold and italic (see [`text_runs`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<text_runs::TextRun>,
     #[serde(skip)]
     pub cache: Option<TileStore>,
 }
@@ -516,6 +542,9 @@ pub enum TextAlign {
     Left,
     Center,
     Right,
+    /// Box text only: wrapped lines stretch to the box width (the last line
+    /// of each paragraph stays left-aligned); point text treats it as Left.
+    Justify,
 }
 
 impl PartialEq for TextLayer {
@@ -532,6 +561,13 @@ impl PartialEq for TextLayer {
             && self.italic == o.italic
             && self.align == o.align
             && self.tracking == o.tracking
+            && self.box_size == o.box_size
+            && self.baseline_shift == o.baseline_shift
+            && self.all_caps == o.all_caps
+            && self.kerning == o.kerning
+            && self.underline == o.underline
+            && self.strikethrough == o.strikethrough
+            && self.runs == o.runs
     }
 }
 
@@ -549,7 +585,29 @@ impl TextLayer {
             italic: false,
             align: TextAlign::Left,
             tracking: 0.0,
+            box_size: None,
+            baseline_shift: 0.0,
+            all_caps: false,
+            kerning: false,
+            underline: false,
+            strikethrough: false,
+            runs: Vec::new(),
             cache: None,
+        }
+    }
+
+    /// Move the text through a point mapping (an image rotation, flip or
+    /// crop). Point text maps its anchor; paragraph text maps its box's
+    /// centre and keeps the box's size, so the box stays over the same
+    /// part of the image whichever corner ends up where.
+    pub fn map_position(&mut self, f: impl Fn(f32, f32) -> (f32, f32)) {
+        match self.box_size {
+            Some([w, h]) => {
+                let (cx, cy) = f(self.x + w / 2.0, self.y + h / 2.0);
+                self.x = cx - w / 2.0;
+                self.y = cy - h / 2.0;
+            }
+            None => (self.x, self.y) = f(self.x, self.y),
         }
     }
 }
