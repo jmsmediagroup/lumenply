@@ -20,6 +20,8 @@ pub enum IoError {
     Image(#[from] image::ImageError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("codec error: {0}")]
+    Codec(String),
 }
 
 /// sRGB transfer function, 8-bit in, linear `[0, 1]` out.
@@ -47,6 +49,10 @@ pub fn linear_to_srgb(v: f32) -> u8 {
 
 /// Load a PNG or JPEG as a linear, premultiplied raster.
 pub fn load(path: impl AsRef<Path>) -> Result<Raster, IoError> {
+    let path = path.as_ref();
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("exr")) {
+        return load_exr(path);
+    }
     let img = image::open(path)?;
     // Keep the full precision of 16-bit sources (PNG, TIFF) instead of
     // truncating them to 8 bits on the way in.
@@ -91,6 +97,40 @@ pub fn linear_to_srgb_f(v: f32) -> f32 {
     } else {
         1.055 * v.powf(1.0 / 2.4) - 0.055
     }
+}
+
+/// Read an OpenEXR image. EXR stores linear-light floats, which is this
+/// engine's native space, so pixels come through untouched (alpha is taken
+/// as straight and premultiplied on the way in).
+pub fn load_exr(path: impl AsRef<Path>) -> Result<Raster, IoError> {
+    use exr::prelude::*;
+    let img = read_first_rgba_layer_from_file(
+        path,
+        |resolution: Vec2<usize>, _| Raster::new(resolution.width() as u32, resolution.height() as u32),
+        |raster: &mut Raster, pos: Vec2<usize>, (r, g, b, a): (f32, f32, f32, f32)| {
+            let a = a.clamp(0.0, 1.0);
+            raster.set(
+                pos.x() as u32,
+                pos.y() as u32,
+                Rgba::new(r.max(0.0) * a, g.max(0.0) * a, b.max(0.0) * a, a),
+            );
+        },
+    )
+    .map_err(|e| IoError::Codec(e.to_string()))?;
+    Ok(img.layer_data.channel_data.pixels)
+}
+
+/// Save a raster as OpenEXR (linear-light f32, straight alpha) — the
+/// lossless interchange for this engine's native pixel format.
+pub fn save_exr(path: impl AsRef<Path>, raster: &Raster) -> Result<(), IoError> {
+    use exr::prelude::*;
+    write_rgba_file(path, raster.width as usize, raster.height as usize, |x, y| {
+        let p = raster.get(x as u32, y as u32);
+        let [r, g, b, a] = p.to_straight();
+        (r, g, b, a)
+    })
+    .map_err(|e| IoError::Codec(e.to_string()))?;
+    Ok(())
 }
 
 /// Save a raster as a 16-bit sRGB PNG or TIFF (by extension) with straight
@@ -178,6 +218,31 @@ mod tests {
             transparent_side[0] > 0.9,
             "transparent pixels land on white: {transparent_side:?}"
         );
+    }
+
+    #[test]
+    fn exr_round_trips_linear_floats_exactly_enough() {
+        let dir = std::env::temp_dir().join("nge-io16-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut r = Raster::new(3, 1);
+        // Values an 8- or 16-bit sRGB file could not keep: tiny, >8-bit
+        // precision, and HDR-ish handled by clamping alpha only.
+        r.set(0, 0, Rgba::from_straight(0.001234, 0.5, 0.25, 1.0));
+        r.set(1, 0, Rgba::from_straight(0.333333, 0.123456, 0.9, 0.5));
+        r.set(2, 0, Rgba::TRANSPARENT);
+        let path = dir.join("rt.exr");
+        save_exr(&path, &r).unwrap();
+        let back = load_exr(&path).unwrap();
+        for i in 0..3u32 {
+            let (a, b) = (r.get(i, 0), back.get(i, 0));
+            assert!(
+                (a.r - b.r).abs() < 1e-6
+                    && (a.g - b.g).abs() < 1e-6
+                    && (a.b - b.b).abs() < 1e-6
+                    && (a.a - b.a).abs() < 1e-6,
+                "pixel {i}: {a:?} vs {b:?}"
+            );
+        }
     }
 
     #[test]

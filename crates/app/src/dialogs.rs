@@ -29,7 +29,9 @@ impl App {
             .file_dialog()
             .add_filter(
                 "Projects & images",
-                &["nge", "psd", "ora", "png", "jpg", "jpeg", "tif", "tiff"],
+                &[
+                    "nge", "psd", "ora", "png", "jpg", "jpeg", "tif", "tiff", "webp", "exr",
+                ],
             )
             .pick_file()
         {
@@ -40,7 +42,7 @@ impl App {
     pub(crate) fn pick_open_image(&mut self) {
         if let Some(p) = self
             .file_dialog()
-            .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff"])
+            .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "webp", "exr"])
             .pick_file()
         {
             self.open_image(&p.to_string_lossy());
@@ -93,6 +95,16 @@ impl App {
     pub(crate) fn pick_export_psd(&mut self) {
         if let Some(p) = self.pick_save_path("Photoshop PSD", "psd") {
             self.export_psd(&p);
+        }
+    }
+
+    pub(crate) fn pick_export_exr(&mut self) {
+        if let Some(p) = self.pick_save_path("OpenEXR (linear float)", "exr") {
+            let flat = nge_render::composite_raster(self.editor.doc());
+            match nge_io::save_exr(&p, &flat) {
+                Ok(()) => self.status = format!("Exported {p}"),
+                Err(e) => self.status = format!("Could not export: {e}"),
+            }
         }
     }
 

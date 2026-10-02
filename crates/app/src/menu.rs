@@ -234,6 +234,10 @@ impl App {
                             self.pick_export_jpeg();
                             ui.close_menu();
                         }
+                        if ui.button("Export OpenEXR...").clicked() {
+                            self.pick_export_exr();
+                            ui.close_menu();
+                        }
                         if ui.button("Export 16-bit PNG/TIFF...").clicked() {
                             self.pick_export_16bit();
                             ui.close_menu();
@@ -556,6 +560,10 @@ impl App {
                             }
                             if ui.button("16-bit PNG/TIFF...").clicked() {
                                 self.pick_export_16bit();
+                                ui.close_menu();
+                            }
+                            if ui.button("OpenEXR...").clicked() {
+                                self.pick_export_exr();
                                 ui.close_menu();
                             }
                         });

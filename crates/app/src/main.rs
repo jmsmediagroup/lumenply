@@ -122,7 +122,7 @@ impl App {
 
 fn is_image_path(p: &str) -> bool {
     let lower = p.to_ascii_lowercase();
-    [".png", ".jpg", ".jpeg", ".tif", ".tiff"]
+    [".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".exr"]
         .iter()
         .any(|e| lower.ends_with(e))
 }
