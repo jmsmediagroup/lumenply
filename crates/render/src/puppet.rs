@@ -162,8 +162,9 @@ pub struct PuppetMesh {
     step: i32,
     cols: usize,
     rows: usize,
-    /// First triangle of each grid cell, or `u32::MAX` outside the mesh.
-    cell_tri: Vec<u32>,
+    /// First triangle and triangle count of each grid cell (`u32::MAX`
+    /// outside the mesh).
+    cell_tri: Vec<(u32, u8)>,
 }
 
 /// Where a point sits in a mesh: a triangle and barycentric weights.
@@ -195,6 +196,82 @@ fn barycentric(p: Pt, a: Pt, b: Pt, c: Pt) -> Option<[f64; 3]> {
 }
 
 const INSIDE_EPS: f64 = 1e-9;
+
+/// Which pixels of an area are opaque enough to need meshing.
+struct OpaqueMap {
+    area: Rect,
+    bits: Vec<bool>,
+}
+
+impl OpaqueMap {
+    fn new(store: &TileStore, area: Rect) -> OpaqueMap {
+        let mut bits = vec![false; area.w as usize * area.h as usize];
+        for c in area.tiles() {
+            let Some(tile) = store.tile(c) else { continue };
+            let px = tile.pixels(); // once per tile
+            let (ox, oy) = c.origin();
+            let r = c.rect().intersect(&area);
+            for y in r.y..r.bottom() {
+                let row = (y - area.y) as usize * area.w as usize;
+                for x in r.x..r.right() {
+                    bits[row + (x - area.x) as usize] =
+                        px[(y - oy) as usize * TILE_SIZE + (x - ox) as usize].a > COVER_ALPHA;
+                }
+            }
+        }
+        OpaqueMap { area, bits }
+    }
+
+    /// Whether triangle `t` meets the square of some opaque pixel grown by
+    /// `e` on every side (separating-axis test; touching counts).
+    fn touches(&self, t: [Pt; 3], e: f64) -> bool {
+        let lo_x = t.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+        let hi_x = t.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+        let lo_y = t.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+        let hi_y = t.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+        let x0 = ((lo_x - e - 1.0).floor() as i32).max(self.area.x);
+        let x1 = ((hi_x + e).ceil() as i32).min(self.area.right() - 1);
+        let y0 = ((lo_y - e - 1.0).floor() as i32).max(self.area.y);
+        let y1 = ((hi_y + e).ceil() as i32).min(self.area.bottom() - 1);
+        if x0 > x1 || y0 > y1 {
+            return false;
+        }
+        // The triangle's edge normals and its extent along each.
+        let axes: [(Pt, f64, f64); 3] = std::array::from_fn(|k| {
+            let (p, q, r) = (t[k], t[(k + 1) % 3], t[(k + 2) % 3]);
+            let n = [q[1] - p[1], p[0] - q[0]];
+            let (a, b) = (n[0] * p[0] + n[1] * p[1], n[0] * r[0] + n[1] * r[1]);
+            (n, a.min(b), a.max(b))
+        });
+        for y in y0..=y1 {
+            let row = (y - self.area.y) as usize * self.area.w as usize;
+            let (by0, by1) = (y as f64 - e, y as f64 + 1.0 + e);
+            if by1 < lo_y || by0 > hi_y {
+                continue;
+            }
+            for x in x0..=x1 {
+                if !self.bits[row + (x - self.area.x) as usize] {
+                    continue;
+                }
+                let (bx0, bx1) = (x as f64 - e, x as f64 + 1.0 + e);
+                if bx1 < lo_x || bx0 > hi_x {
+                    continue;
+                }
+                let separated = axes.iter().any(|&(n, lo, hi)| {
+                    let proj =
+                        [[bx0, by0], [bx1, by0], [bx0, by1], [bx1, by1]].map(|c| n[0] * c[0] + n[1] * c[1]);
+                    let cmin = proj.iter().copied().fold(f64::INFINITY, f64::min);
+                    let cmax = proj.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                    cmax < lo || cmin > hi
+                });
+                if !separated {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
 
 impl PuppetMesh {
     /// The mesh over `store`'s opaque pixels, or `None` for an empty layer.
@@ -260,52 +337,99 @@ impl PuppetMesh {
                 *k |= *v;
             }
         }
-        Some(Self::from_cells(origin, step, cols, rows, &kept))
+        // Where the outline crosses a cell, the triangle that holds no
+        // opaque pixel (grown by `e`) is left out, so the mesh follows the
+        // shape in 45° steps instead of whole-cell stairs.
+        let opaque = OpaqueMap::new(store, b);
+        let needed = |t: [Pt; 3]| opaque.touches(t, e as f64);
+        Some(Self::from_cells(origin, step, cols, rows, &kept, needed))
     }
 
     /// The mesh of the kept cells of a grid (row-major `cols × rows`).
-    fn from_cells(origin: (i32, i32), step: i32, cols: usize, rows: usize, kept: &[bool]) -> PuppetMesh {
+    /// Cells on the mesh's edge keep only the triangles `needed` says
+    /// hold something, choosing the diagonal that lets one go.
+    fn from_cells(
+        origin: (i32, i32),
+        step: i32,
+        cols: usize,
+        rows: usize,
+        kept: &[bool],
+        needed: impl Fn([Pt; 3]) -> bool,
+    ) -> PuppetMesh {
         let vcols = cols + 1;
-        let mut used = vec![false; vcols * (rows + 1)];
-        for j in 0..rows {
-            for i in 0..cols {
-                if kept[j * cols + i] {
-                    for (di, dj) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                        used[(j + dj) * vcols + i + di] = true;
-                    }
-                }
-            }
-        }
-        // Row-major numbering keeps every triangle within about one grid
-        // row of indices, which bounds the solver's bandwidth.
-        let mut id = vec![u32::MAX; used.len()];
-        let mut rest = Vec::new();
-        for (k, u) in used.iter().enumerate() {
-            if *u {
-                id[k] = rest.len() as u32;
-                let (i, j) = ((k % vcols) as i32, (k / vcols) as i32);
-                rest.push([(origin.0 + i * step) as f64, (origin.1 + j * step) as f64]);
-            }
-        }
-        let mut tris = Vec::new();
-        let mut cell_tri = vec![u32::MAX; cols * rows];
+        let gpos = |g: usize| {
+            let (i, j) = ((g % vcols) as i32, (g / vcols) as i32);
+            [(origin.0 + i * step) as f64, (origin.1 + j * step) as f64]
+        };
+        let is_kept = |i: isize, j: isize| {
+            i >= 0
+                && j >= 0
+                && (i as usize) < cols
+                && (j as usize) < rows
+                && kept[j as usize * cols + i as usize]
+        };
+        // Triangles over grid vertex ids, cell by cell.
+        let mut gtris: Vec<[usize; 3]> = Vec::new();
+        let mut cell_tri = vec![(u32::MAX, 0u8); cols * rows];
         for j in 0..rows {
             for i in 0..cols {
                 if !kept[j * cols + i] {
                     continue;
                 }
-                let v = |di: usize, dj: usize| id[(j + dj) * vcols + i + di];
-                let (a, b, c, d) = (v(0, 0), v(1, 0), v(1, 1), v(0, 1));
-                cell_tri[j * cols + i] = tris.len() as u32;
-                if (i + j) % 2 == 0 {
-                    tris.push([a, b, c]);
-                    tris.push([a, c, d]);
+                let g = |di: usize, dj: usize| (j + dj) * vcols + i + di;
+                let (a, b, c, d) = (g(0, 0), g(1, 0), g(1, 1), g(0, 1));
+                let diag_ac = [[a, b, c], [a, c, d]];
+                let diag_bd = [[a, b, d], [b, c, d]];
+                let even = (i + j) % 2 == 0;
+                let (si, sj) = (i as isize, j as isize);
+                let inner =
+                    is_kept(si - 1, sj) && is_kept(si + 1, sj) && is_kept(si, sj - 1) && is_kept(si, sj + 1);
+                let pick: Vec<[usize; 3]> = if inner {
+                    (if even { diag_ac } else { diag_bd }).to_vec()
                 } else {
-                    tris.push([a, b, d]);
-                    tris.push([b, c, d]);
-                }
+                    let need = |tt: [[usize; 3]; 2]| tt.map(|t| needed(t.map(gpos)));
+                    let (n_ac, n_bd) = (need(diag_ac), need(diag_bd));
+                    let (drop_ac, drop_bd) = (!(n_ac[0] && n_ac[1]), !(n_bd[0] && n_bd[1]));
+                    let use_ac = match (drop_ac, drop_bd) {
+                        (true, false) => true,
+                        (false, true) => false,
+                        _ => even,
+                    };
+                    let (tt, nn) = if use_ac { (diag_ac, n_ac) } else { (diag_bd, n_bd) };
+                    let keep: Vec<[usize; 3]> = tt
+                        .into_iter()
+                        .zip(nn)
+                        .filter(|(_, n)| *n)
+                        .map(|(t, _)| t)
+                        .collect();
+                    // A kept cell always holds something; never empty it.
+                    if keep.is_empty() {
+                        tt.to_vec()
+                    } else {
+                        keep
+                    }
+                };
+                cell_tri[j * cols + i] = (gtris.len() as u32, pick.len() as u8);
+                gtris.extend(pick);
             }
         }
+        // Row-major numbering of the vertices in use keeps every triangle
+        // within about one grid row of indices, which bounds the solver's
+        // bandwidth.
+        let mut id = vec![u32::MAX; vcols * (rows + 1)];
+        for t in &gtris {
+            for &g in t {
+                id[g] = 0;
+            }
+        }
+        let mut rest = Vec::new();
+        for (g, slot) in id.iter_mut().enumerate() {
+            if *slot == 0 {
+                *slot = rest.len() as u32;
+                rest.push(gpos(g));
+            }
+        }
+        let tris = gtris.iter().map(|t| t.map(|g| id[g])).collect();
         PuppetMesh {
             rest,
             tris,
@@ -349,12 +473,12 @@ impl PuppetMesh {
         };
         let i = cell(p[0], self.origin.0, self.cols)?;
         let j = cell(p[1], self.origin.1, self.rows)?;
-        let first = self.cell_tri[j * self.cols + i];
+        let (first, n) = self.cell_tri[j * self.cols + i];
         if first == u32::MAX {
             return None;
         }
         let mut best: Option<MeshPoint> = None;
-        for t in [first, first + 1] {
+        for t in first..first + n as u32 {
             let [a, b, c] = self.tris[t as usize].map(|v| self.rest[v as usize]);
             let Some(w) = barycentric(p, a, b, c) else {
                 continue;
@@ -1270,16 +1394,41 @@ mod tests {
             // Far corners of the bounds (outside the disc) are not meshed.
             assert!(mesh.locate([b.x as f64 + 0.5, b.y as f64 + 0.5]).is_none() || e > 5.0);
         }
-        // The triangles tile the kept cells: 2 per cell, positive area.
+        // Every triangle has positive area.
         let mesh = PuppetMesh::build(&store, MeshParams::default()).unwrap();
         for t in &mesh.tris {
             let [a, b, c] = t.map(|v| mesh.rest[v as usize]);
             assert!(cross(sub(b, a), sub(c, a)) > 0.0);
         }
-        // Normal density on a 66 px wide disc + 2·2 px margin: 70/24 → 3 px,
+        // Normal density on a 62 px disc + 2·2 px margin: 66/24 → 3 px,
         // raised to the 4 px minimum.
         assert_eq!(mesh.step(), 4);
         assert!(PuppetMesh::build(&TileStore::new(), MeshParams::default()).is_none());
+    }
+
+    #[test]
+    fn edge_cells_drop_their_empty_triangle() {
+        // A 200 px disc on a 24-cell grid (9 px cells): the round outline
+        // cuts many edge cells, which keep one triangle where the other
+        // holds nothing, so the mesh follows the outline in 45° steps.
+        let store = disc(110.0, 110.0, 100.0);
+        let mesh = PuppetMesh::build(&store, MeshParams::default()).unwrap();
+        let cells = mesh.cell_tri.iter().filter(|c| c.0 != u32::MAX).count();
+        let halves = mesh.cell_tri.iter().filter(|c| c.1 == 1).count();
+        assert_eq!(mesh.step(), 9);
+        assert_eq!((cells, halves), (449, 20));
+        assert_eq!(mesh.tris.len(), 2 * cells - halves);
+        // A lone square of pixels has no slanted edge to follow.
+        let square = TileStore::from_raster(&Raster::filled(40, 40, Rgba::WHITE), 0, 0);
+        let m = PuppetMesh::build(
+            &square,
+            MeshParams {
+                density: PuppetDensity::Normal,
+                expansion: 0.0,
+            },
+        )
+        .unwrap();
+        assert_eq!((m.step(), m.tris.len(), m.rest.len()), (4, 200, 121));
     }
 
     #[test]
