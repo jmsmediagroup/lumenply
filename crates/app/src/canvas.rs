@@ -1247,7 +1247,7 @@ impl App {
                         self.stroke_drawn = 0;
                         if let Some(p) = ctx.input(|i| i.pointer.press_origin()) {
                             let (x, y) = to_doc(p);
-                            self.stroke.push(StrokePoint::new(x, y, 1.0));
+                            self.stroke.push(self.pen_point(ctx, x, y));
                         }
                     } else {
                         self.status = if self.editing_mask {
@@ -1260,7 +1260,7 @@ impl App {
                 if self.drag == Some(DragKind::Stroke) && resp.dragged_by(primary) {
                     if let Some(p) = resp.interact_pointer_pos() {
                         let (x, y) = to_doc(p);
-                        self.stroke.push(StrokePoint::new(x, y, 1.0));
+                        self.stroke.push(self.pen_point(ctx, x, y));
                     }
                     if let (Some(layer), false) = (self.active, self.stroke.is_empty()) {
                         let cmd = self.stroke_command(layer, self.stroke.clone());
@@ -1311,7 +1311,7 @@ impl App {
                                 self.clone_offset = ((sx - x).round() as i32, (sy - y).round() as i32);
                             }
                         }
-                        let cmd = self.stroke_command(layer, vec![StrokePoint::new(x, y, 1.0)]);
+                        let cmd = self.stroke_command(layer, vec![self.pen_point(ctx, x, y)]);
                         self.run(cmd.as_ref());
                     }
                 }

@@ -2071,6 +2071,7 @@ fn heal_dab(
     offset: (i32, i32),
     strength: f32,
 ) {
+    let strength = strength * p.opacity.clamp(0.0, 1.0);
     let r = brush.radius * p.pressure.clamp(0.0, 1.0);
     if r <= 0.0 {
         return;
@@ -2581,12 +2582,25 @@ impl Default for Brush {
 pub struct StrokePoint {
     pub x: f32,
     pub y: f32,
+    /// Scales the dab radius (0..=1).
     pub pressure: f32,
+    /// Scales the dab's coverage (0..=1): pen pressure mapped to opacity.
+    pub opacity: f32,
 }
 
 impl StrokePoint {
     pub fn new(x: f32, y: f32, pressure: f32) -> Self {
-        StrokePoint { x, y, pressure }
+        StrokePoint {
+            x,
+            y,
+            pressure,
+            opacity: 1.0,
+        }
+    }
+
+    pub fn with_opacity(mut self, opacity: f32) -> Self {
+        self.opacity = opacity;
+        self
     }
 }
 
@@ -2813,11 +2827,14 @@ pub fn smooth_stroke(points: &[StrokePoint]) -> Vec<StrokePoint> {
                     + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2
                     + (-a + 3.0 * b - 3.0 * c + d) * t3)
             };
-            out.push(StrokePoint::new(
-                cr(p0.x, p1.x, p2.x, p3.x),
-                cr(p0.y, p1.y, p2.y, p3.y),
-                p1.pressure + (p2.pressure - p1.pressure) * t,
-            ));
+            out.push(
+                StrokePoint::new(
+                    cr(p0.x, p1.x, p2.x, p3.x),
+                    cr(p0.y, p1.y, p2.y, p3.y),
+                    p1.pressure + (p2.pressure - p1.pressure) * t,
+                )
+                .with_opacity(p1.opacity + (p2.opacity - p1.opacity) * t),
+            );
         }
     }
     out.push(*points.last().expect("non-empty"));
@@ -2843,11 +2860,14 @@ fn interpolate_dabs(brush: &Brush, points: &[StrokePoint]) -> Vec<StrokePoint> {
         let mut t = step - carry;
         while t <= len {
             let f = t / len;
-            dabs.push(StrokePoint::new(
-                a.x + (b.x - a.x) * f,
-                a.y + (b.y - a.y) * f,
-                a.pressure + (b.pressure - a.pressure) * f,
-            ));
+            dabs.push(
+                StrokePoint::new(
+                    a.x + (b.x - a.x) * f,
+                    a.y + (b.y - a.y) * f,
+                    a.pressure + (b.pressure - a.pressure) * f,
+                )
+                .with_opacity(a.opacity + (b.opacity - a.opacity) * f),
+            );
             t += step;
         }
         carry = len - (t - step);
@@ -2904,7 +2924,10 @@ fn dab_coverage(
             } else {
                 1.0 - (d - hard) / (1.0 - hard)
             };
-            let cover = edge * soft.clamp(0.0, 1.0) * sel.map_or(1.0, |s| s.value(px, py));
+            let cover = edge
+                * soft.clamp(0.0, 1.0)
+                * sel.map_or(1.0, |s| s.value(px, py))
+                * p.opacity.clamp(0.0, 1.0);
             if cover > 0.0 {
                 f(px, py, cover);
             }
@@ -4674,6 +4697,50 @@ mod tests {
             doc.layer(id).unwrap().pixels().unwrap().get_pixel(0, 0),
             Rgba::WHITE
         );
+    }
+
+    #[test]
+    fn point_opacity_scales_coverage_and_interpolates_along_the_stroke() {
+        let mut doc = Document::new(64, 16);
+        let id = doc.add_pixel_layer("ink");
+        let brush = Brush {
+            radius: 3.0,
+            hardness: 0.999,
+            color: [1.0, 0.0, 0.0, 1.0],
+            spacing: 0.1,
+            ..Brush::default()
+        };
+        // One dab at half opacity: a solid core at exactly half alpha.
+        let mut ed = crate::Editor::new(doc);
+        let dot = PaintStroke {
+            layer: id,
+            brush,
+            points: vec![StrokePoint::new(8.5, 8.5, 1.0).with_opacity(0.5)],
+        };
+        ed.execute(&dot).unwrap();
+        let a = |ed: &crate::Editor, x, y| ed.doc().layer(id).unwrap().pixels().unwrap().get_pixel(x, y).a;
+        assert!((a(&ed, 8, 8) - 0.5).abs() < 1e-3, "{}", a(&ed, 8, 8));
+        // A stroke fading from full to none, dabs spaced wider than the
+        // brush (7.5 px apart from x = 20.5) so none overlap: each dab's
+        // core alpha is the opacity interpolated at its centre.
+        let fade = PaintStroke {
+            layer: id,
+            brush: Brush {
+                spacing: 2.5,
+                ..brush
+            },
+            points: vec![
+                StrokePoint::new(20.5, 8.5, 1.0),
+                StrokePoint::new(60.5, 8.5, 1.0).with_opacity(0.0),
+            ],
+        };
+        ed.execute(&fade).unwrap();
+        for (x, want) in [(28, 0.8125), (43, 0.4375), (58, 0.0625)] {
+            let got = a(&ed, x, 8);
+            assert!((got - want).abs() < 1e-3, "dab at x={x}: {got} != {want}");
+        }
+        // Points made with `new` keep full opacity: old callers unchanged.
+        assert_eq!(StrokePoint::new(0.0, 0.0, 1.0).opacity, 1.0);
     }
 
     #[test]

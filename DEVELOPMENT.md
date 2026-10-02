@@ -94,7 +94,10 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
   in main.rs render the whole UI (`App::frame`) and fail on any unnamed control.
 - Tests that run app frames must not autosave (see the `launch` helper in `a11y_tests`):
   a backup left in the test data folder opens the Recover dialog in every later test.
-- Pen pressure is not wired: the app passes pressure 1.0 to every stroke point.
+- Pen pressure (`crates/app/src/pen.rs`): Windows pens arrive as egui touches with `force`;
+  macOS reads `NSEvent.pressure` through an AppKit local event monitor (installed in
+  `App::new`); Linux has no source yet. `App::pen_point` routes it to `StrokePoint`
+  pressure (dab size) and opacity per the Brush bar's two pen toggles (prefs).
 - The bundled font is DejaVu Sans in `crates/render/fonts/` (Bitstream Vera licence).
 - The `--demo` document is built in `crates/app/src/demo.rs` from a CC0 photo
   (`crates/app/assets/NOTICE.md`); the CLI keeps the synthetic `lumenply_core::demo`.

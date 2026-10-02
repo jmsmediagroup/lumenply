@@ -79,6 +79,10 @@ pub(crate) struct Prefs {
     pub brush_presets: Vec<BrushPreset>,
     /// The history strip is folded down to its one-line header.
     pub history_collapsed: bool,
+    /// Pen pressure scales the brush size (Photoshop's default).
+    pub pen_size: bool,
+    /// Pen pressure scales each dab's opacity.
+    pub pen_opacity: bool,
 }
 
 /// One saved brush setup (the shape parameters; colour stays with the
@@ -117,6 +121,8 @@ impl Default for Prefs {
             shortcuts: std::collections::BTreeMap::new(),
             brush_presets: Vec::new(),
             history_collapsed: false,
+            pen_size: true,
+            pen_opacity: false,
         }
     }
 }

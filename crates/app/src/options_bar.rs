@@ -293,6 +293,9 @@ impl App {
                             if bar_slider(ui, "Size", &mut size, 2.0..=400.0, " px", true) {
                                 self.brush.radius = size / 2.0;
                             }
+                            if pen::toggle(ui, &mut self.prefs.pen_size, "Pen pressure controls size") {
+                                self.prefs.save();
+                            }
                             let mut hard = self.brush.hardness * 100.0;
                             if bar_slider(ui, "Hardness", &mut hard, 0.0..=100.0, "%", false) {
                                 self.brush.hardness = hard / 100.0;
@@ -300,6 +303,9 @@ impl App {
                             let mut op = self.brush.color[3] * 100.0;
                             if bar_slider(ui, "Opacity", &mut op, 1.0..=100.0, "%", false) {
                                 self.brush.color[3] = op / 100.0;
+                            }
+                            if pen::toggle(ui, &mut self.prefs.pen_opacity, "Pen pressure controls opacity") {
+                                self.prefs.save();
                             }
                             let mut sc = self.brush.jitter * 100.0;
                             if bar_slider(ui, "Scatter", &mut sc, 0.0..=100.0, "%", false) {

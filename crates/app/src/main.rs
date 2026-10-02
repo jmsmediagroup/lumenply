@@ -35,6 +35,7 @@ mod liquify;
 mod menu;
 mod options_bar;
 mod palette;
+mod pen;
 mod properties;
 mod session;
 mod start;
@@ -385,6 +386,7 @@ impl App {
     /// With nothing to open, the app starts on the welcome screen.
     fn new(cc: &eframe::CreationContext<'_>, args: &[String]) -> Self {
         theme::install(&cc.egui_ctx);
+        pen::install();
         Self::launch(args)
     }
 

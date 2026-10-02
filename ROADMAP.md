@@ -107,8 +107,11 @@ None of these could be tested in the container.
 
 ## 3. Input
 
-- [ ] Pen pressure and tilt (egui doesn't expose them; evaluate `octotablet`), mapping
-      curves for size/opacity
+- [~] Pen pressure: Windows (pen touches' `force`) and macOS (AppKit event
+      monitor on tablet mouse events) feed `StrokePoint` size and a new per-dab
+      opacity, routed by Photoshop-style pen toggles beside Size and Opacity in
+      the brush bar (saved in prefs). Still open: verify on real tablets, Linux
+      (X11/Wayland tablet protocols, e.g. `octotablet`), tilt, response curves
 - [x] Customisable shortcuts (the command chords rebind in Preferences with
       click-to-capture; stored in prefs.json; Ctrl+Y stays a redo alias)
 - [ ] Touch/trackpad gestures (pinch zoom works through egui, untested)
