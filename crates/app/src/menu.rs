@@ -481,12 +481,17 @@ impl App {
                             ui.close_menu();
                         }
                     });
-                    ui.add_enabled(
-                        false,
-                        egui::Button::new(RichText::new("Search tools, filters...   Ctrl K").color(MUTED))
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("Search tools, filters...   Ctrl K").color(MUTED),
+                            )
                             .min_size(egui::vec2(220.0, 0.0)),
-                    )
-                    .on_disabled_hover_text("Command palette — not built yet");
+                        )
+                        .clicked()
+                    {
+                        self.toggle_palette();
+                    }
                 });
             });
         });
@@ -516,7 +521,7 @@ impl App {
     }
 
     /// A sensible default path for an export dialog, next to the project.
-    fn suggest_path(&self, ext: &str) -> String {
+    pub(crate) fn suggest_path(&self, ext: &str) -> String {
         match &self.path {
             Some(p) => p.with_extension(ext).to_string_lossy().into_owned(),
             None => format!("untitled.{ext}"),

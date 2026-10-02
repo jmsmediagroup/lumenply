@@ -124,7 +124,9 @@ None of these could be tested in the container.
 ## 6. Usability
 
 - [ ] Multiple open documents (the top bar shows a single document tab for now)
-- [ ] Search field / command palette (field present but disabled; palette planned)
+- [x] Command palette (Ctrl+K) searching every menu action
+- [ ] New layer from selection (the selection action bar shows it disabled;
+      needs a new engine command in crates/core)
 
 
 - [ ] Native file dialogs (`rfd`) instead of typed paths

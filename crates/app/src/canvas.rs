@@ -288,7 +288,70 @@ impl App {
                 } else {
                     self.paint_tool_overlay(ctx, &painter, &resp);
                 }
+                self.selection_action_bar(ctx, rect, origin, zoom);
             });
+    }
+
+    /// A floating bar of selection actions just below the active selection.
+    fn selection_action_bar(&mut self, ctx: &egui::Context, clip: egui::Rect, origin: Pos2, zoom: f32) {
+        if self.xform.is_some() || self.drag.is_some() {
+            return;
+        }
+        let doc = self.editor.doc();
+        let Some(sel) = &doc.selection else { return };
+        let b = sel.bounds_within(doc.canvas());
+        if b.is_empty() {
+            return;
+        }
+        let cx = origin.x + (b.x as f32 + b.w as f32 / 2.0) * zoom;
+        let cy = origin.y + (b.y as f32 + b.h as f32) * zoom + 12.0;
+        let pos = egui::pos2(
+            (cx - 140.0).clamp(clip.min.x + 8.0, (clip.max.x - 288.0).max(clip.min.x + 8.0)),
+            cy.clamp(clip.min.y + 8.0, clip.max.y - 44.0),
+        );
+        let can_mask = self.active.is_some() && !self.active_has_mask();
+        let mut act: Option<&'static str> = None;
+        egui::Area::new("sel-actions".into())
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(ctx, |ui| {
+                egui::Frame::none()
+                    .fill(RAISED)
+                    .rounding(8.0)
+                    .stroke(Stroke::new(1.0, LINE))
+                    .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(can_mask, egui::Button::new("Mask"))
+                                .on_hover_text("Mask the active layer with this selection")
+                                .clicked()
+                            {
+                                act = Some("add-mask");
+                            }
+                            if ui
+                                .add_enabled(self.active_is_pixel(), egui::Button::new("Fill"))
+                                .on_hover_text("Fill the selection with the brush colour")
+                                .clicked()
+                            {
+                                act = Some("fill");
+                            }
+                            if ui
+                                .add_enabled(self.active_is_pixel(), egui::Button::new("Clear"))
+                                .clicked()
+                            {
+                                act = Some("clear");
+                            }
+                            ui.add_enabled(false, egui::Button::new("New layer"))
+                                .on_disabled_hover_text(
+                                    "New layer from selection needs a new engine command (planned)",
+                                );
+                        });
+                    });
+            });
+        if let Some(a) = act {
+            self.run_menu_action(a);
+        }
     }
 
     pub(crate) fn handle_xform(

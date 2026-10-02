@@ -27,6 +27,7 @@ mod history;
 mod layers;
 mod menu;
 mod options_bar;
+mod palette;
 mod properties;
 mod status;
 mod theme;
@@ -34,6 +35,7 @@ mod tools;
 
 pub(crate) use canvas::*;
 pub(crate) use dialogs::Dialog;
+pub(crate) use palette::Palette;
 pub(crate) use theme::*;
 pub(crate) use tools::Tool;
 
@@ -127,6 +129,8 @@ struct App {
     saved_rev: usize,
     /// One thumbnail per history step (step 0 is the opened state).
     hist_thumbs: Vec<egui::TextureHandle>,
+    /// Open command palette (Ctrl+K).
+    palette: Option<Palette>,
 }
 
 impl App {
@@ -223,6 +227,7 @@ impl App {
             dialog: None,
             saved_rev: 0,
             hist_thumbs: Vec::new(),
+            palette: None,
             filter_previewed: false,
             status,
         };
@@ -478,7 +483,11 @@ impl App {
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::Modifiers as M;
-        if ctx.wants_keyboard_input() {
+        // The palette toggle works even while a text field has focus.
+        if ctx.input_mut(|i| i.consume_key(M::COMMAND, Key::K)) {
+            self.toggle_palette();
+        }
+        if self.palette.is_some() || ctx.wants_keyboard_input() {
             return;
         }
         // A modal dialog owns the keyboard even when no text field has
@@ -651,6 +660,7 @@ impl eframe::App for App {
         self.side_panel(ctx);
         self.canvas(ctx);
         self.dialogs(ctx);
+        self.palette_ui(ctx);
         if self.dirty {
             self.refresh(ctx);
             ctx.request_repaint();
