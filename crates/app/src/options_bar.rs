@@ -317,8 +317,12 @@ impl App {
                             if pen::toggle(ui, &mut self.prefs.pen_opacity, "Pen pressure controls opacity") {
                                 self.prefs.save();
                             }
+                            // On a tight bar Scatter lives in Brush settings
+                            // only, so the bar still fits.
                             let mut sc = self.brush.jitter * 100.0;
-                            if bar_slider(ui, "Scatter", &mut sc, 0.0..=400.0, "%", false) {
+                            if tier != Tier::Tight
+                                && bar_slider(ui, "Scatter", &mut sc, 0.0..=400.0, "%", false)
+                            {
                                 self.brush.jitter = sc / 100.0;
                             }
                             if self.tool == Tool::Brush && self.editing_mask {
