@@ -436,6 +436,35 @@ impl App {
         }
 
         ui.horizontal(|ui| {
+            let mut on = fx.bevel.is_some();
+            if ui.checkbox(&mut on, "Bevel").changed() {
+                fx.bevel = on.then(lumenply_doc::BevelFx::default);
+                changed = true;
+                finished = true;
+            }
+            if let Some(b) = &mut fx.bevel {
+                let c1 = color_btn(ui, &mut b.highlight);
+                let c2 = color_btn(ui, &mut b.shadow);
+                changed |= c1 || c2;
+                finished |= c1 || c2;
+            }
+        });
+        if let Some(mut b) = fx.bevel {
+            let f = slider_row(ui, "Size", &mut b.size, 0.5..=40.0, " px");
+            finished |= f;
+            let f2 = slider_row(ui, "Depth", &mut b.depth, 0.1..=3.0, "");
+            finished |= f2;
+            let f3 = slider_row(ui, "Angle", &mut b.angle, 0.0..=360.0, "°");
+            finished |= f3;
+            let f4 = slider_row(ui, "Opacity", &mut b.opacity, 0.0..=1.0, "");
+            finished |= f4;
+            if b != fx.bevel.unwrap() {
+                changed = true;
+            }
+            fx.bevel = Some(b);
+        }
+
+        ui.horizontal(|ui| {
             let mut on = fx.color_overlay.is_some();
             if ui.checkbox(&mut on, "Color overlay").changed() {
                 fx.color_overlay = on.then(lumenply_doc::ColorOverlayFx::default);

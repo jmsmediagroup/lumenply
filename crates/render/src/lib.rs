@@ -278,6 +278,7 @@ pub fn render_tile_over(
             render_effects_under(d, layer, coord, canvas);
             blend_tile(d, &masked, layer.blend, layer.opacity);
             render_overlays_over(d, layer, coord, canvas);
+            render_bevel_over(d, layer, coord, canvas);
             render_inner_over(d, layer, coord, canvas);
             render_stroke_over(d, layer, coord, canvas);
             continue;
@@ -482,6 +483,64 @@ fn render_overlays_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas:
             go.opacity,
         );
     }
+}
+
+/// Inner bevel: emboss lighting from the gradient of the blurred coverage.
+/// The slope normal faces the light on one flank (highlight) and away on
+/// the other (shadow); flat interiors get neither.
+fn render_bevel_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: Rect) {
+    let Some(b) = &layer.effects.bevel else {
+        return;
+    };
+    let size = lumenply_doc::sane_radius(b.size).max(0.5);
+    let pad = layer.effects.pad();
+    let (ox, oy) = coord.origin();
+    let area = Rect::new(
+        ox - pad,
+        oy - pad,
+        TILE_SIZE as u32 + 2 * pad as u32,
+        TILE_SIZE as u32 + 2 * pad as u32,
+    );
+    let cov = coverage_raster(layer, area, canvas);
+    let (w, h) = (area.w as usize, area.h as usize);
+    let field = blur_field(&cov, w, h, size);
+    let at = |x: i32, y: i32| -> f32 {
+        if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+            0.0
+        } else {
+            field[y as usize * w + x as usize]
+        }
+    };
+    let rad = b.angle.to_radians();
+    let (lx, ly) = (rad.cos(), -rad.sin()); // y grows downward
+                                            // The slope of a blurred step is ~1/(2·size) per pixel; scale so a
+                                            // full edge at depth 1 reaches full-strength lighting.
+    let gain = 2.0 * size * b.depth;
+    let mut tile = Tile::new();
+    let px = tile.pixels_mut();
+    for row in 0..TILE_SIZE {
+        for col in 0..TILE_SIZE {
+            let clip = cov[(row + pad as usize) * w + col + pad as usize];
+            if clip <= 0.0 {
+                continue;
+            }
+            let (gx, gy) = (col as i32 + pad, row as i32 + pad);
+            // Central-difference gradient of the blurred coverage.
+            let dx = (at(gx + 1, gy) - at(gx - 1, gy)) / 2.0;
+            let dy = (at(gx, gy + 1) - at(gx, gy - 1)) / 2.0;
+            // The surface rises where coverage falls off, so the outward
+            // normal points along -grad; light from `angle` hits it when
+            // the two align.
+            let s = -(dx * lx + dy * ly) * gain;
+            let a = (s.abs().min(1.0) * b.opacity * clip).clamp(0.0, 1.0);
+            if a <= 0.0 {
+                continue;
+            }
+            let c = if s > 0.0 { b.highlight } else { b.shadow };
+            px[row * TILE_SIZE + col] = Rgba::from_straight(c[0], c[1], c[2], a);
+        }
+    }
+    blend_tile(dst, &tile, BlendMode::Normal, layer.opacity);
 }
 
 /// Inner shadow and inner glow, blended over the layer and clipped to its
@@ -998,6 +1057,49 @@ mod tests {
                 assert!((a - b).abs() < 2e-3, "seam mismatch at {dx},{dy}: {a} vs {b}");
             }
         }
+    }
+
+    #[test]
+    fn bevel_lights_the_edge_facing_the_light() {
+        use lumenply_doc::{BevelFx, LayerEffects};
+        let mut doc = Document::new(80, 80);
+        let id = doc.add_pixel_layer("box");
+        for y in 20..60 {
+            for x in 20..60 {
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(0.5, 0.5, 0.5, 1.0),
+                );
+            }
+        }
+        doc.layer_mut(id).unwrap().effects = LayerEffects {
+            bevel: Some(BevelFx {
+                size: 4.0,
+                depth: 1.0,
+                angle: 90.0, // light straight from above
+                highlight: [1.0, 1.0, 1.0],
+                shadow: [0.0, 0.0, 0.0],
+                opacity: 1.0,
+            }),
+            ..LayerEffects::default()
+        };
+        let out = composite_raster(&doc);
+        let top = straight(out.get(40, 22));
+        let bottom = straight(out.get(40, 57));
+        let centre = straight(out.get(40, 40));
+        let left = straight(out.get(22, 40));
+        assert!(top[0] > 0.75, "top edge lit: {top:?}");
+        assert!(bottom[0] < 0.25, "bottom edge shaded: {bottom:?}");
+        assert!(
+            (centre[0] - 0.5).abs() < 0.03,
+            "flat interior untouched: {centre:?}"
+        );
+        assert!(
+            (left[0] - 0.5).abs() < 0.1,
+            "side edges face across the light: {left:?}"
+        );
+        assert!(out.get(40, 15).a < 1e-4, "nothing paints outside");
     }
 
     #[test]

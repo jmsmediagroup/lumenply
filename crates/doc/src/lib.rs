@@ -183,7 +183,36 @@ pub struct LayerEffects {
     pub inner_shadow: Option<ShadowFx>,
     /// Glow creeping inward from the coverage edge.
     pub inner_glow: Option<GlowFx>,
+    /// Emboss lighting along the coverage edge (inner bevel).
+    pub bevel: Option<BevelFx>,
     pub stroke: Option<StrokeFx>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BevelFx {
+    /// Slope width in pixels (the coverage blur radius).
+    pub size: f32,
+    /// Lighting strength; 1.0 is a full-contrast edge.
+    pub depth: f32,
+    /// Light azimuth in degrees: 0 from the right, 90 from above.
+    pub angle: f32,
+    /// Straight linear RGB of the lit and shaded flanks.
+    pub highlight: [f32; 3],
+    pub shadow: [f32; 3],
+    pub opacity: f32,
+}
+
+impl Default for BevelFx {
+    fn default() -> Self {
+        BevelFx {
+            size: 5.0,
+            depth: 1.0,
+            angle: 120.0,
+            highlight: [1.0, 1.0, 1.0],
+            shadow: [0.0, 0.0, 0.0],
+            opacity: 0.75,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -288,6 +317,7 @@ impl LayerEffects {
             && self.gradient_overlay.is_none()
             && self.inner_shadow.is_none()
             && self.inner_glow.is_none()
+            && self.bevel.is_none()
             && self.stroke.is_none()
     }
 
@@ -304,6 +334,9 @@ impl LayerEffects {
         }
         if let Some(st) = &self.stroke {
             p = p.max(sane_radius(st.size) + 2.0);
+        }
+        if let Some(b) = &self.bevel {
+            p = p.max(sane_radius(b.size) * 2.0 + 1.0);
         }
         p.ceil() as i32 + 2
     }

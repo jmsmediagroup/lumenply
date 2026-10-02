@@ -152,7 +152,8 @@ None of these could be tested in the container.
       saved in .nge; PSD/ORA warn instead of silently dropping)
 - [~] More styles: inner shadow and inner glow (blurred inverse coverage,
       clipped to the layer, rendered over it); colour and gradient overlays
-      (gradient spans the content bounds at any angle). Still to do: bevel,
+      (gradient spans the content bounds at any angle); bevel (emboss from
+      the blurred-coverage gradient, light angle/depth/size). Still to do:
       pattern overlay; effects on clip-chain members and pass-through
       groups
 - [ ] Smart objects (embedded documents with transforms)
