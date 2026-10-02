@@ -290,6 +290,14 @@ None of these could be tested in the container.
       preview dialogs; Select > Grow and Similar (wand tolerance)
 - [x] Content-Aware Fill (multi-scale PatchMatch + EM voting, seeded; Edit menu,
       Shift+Backspace Fill dialog, selection bar): 500×400 hole in 2400×1600 in ~0.2 s
+- [x] Puppet Warp (Edit menu, palette): full-window workspace; a mesh over
+      the layer's opaque area that hugs the outline (Density, Expansion);
+      click to pin, drag to warp live with as-rigid-as-possible deformation
+      (Igarashi 2005 two-step, banded Cholesky per pin set; Rigid/Normal/
+      Distort); Alt-click/Delete removes; pin depth for folds; OK bakes one
+      PuppetWarp step (masks follow; smart objects refused); 1800×1205
+      bake ~8 ms (ADR 0018). Still open: pin rotation, multi-select, as a
+      smart filter
 - [x] Liquify (Filter menu, Shift+Cmd+X): modal workspace with Forward warp,
       Reconstruct, Smooth, Twirl, Pucker, Bloat; advected displacement field,
       per-stroke undo, mesh view; bakes 12 MP in ~20 ms as one undo step
@@ -347,7 +355,18 @@ None of these could be tested in the container.
       Load selection (New/Add/Subtract/Intersect, Invert, Delete), undoable,
       saved in .lumen (channels/ tiles) and PSD (named alpha channels after
       RGB + transparency, resources 1006/1045; psd-tools-verified both
-      depths). Still open: a Channels panel
+      depths)
+- [x] Dock tabs Layers | Channels | Paths (persisted) and a Window menu.
+      Channels panel: RGB/R/G/B with thumbnails, view one channel as
+      grayscale (Cmd+2..5), alpha channels (view, red overlay, Cmd-click
+      load with Shift/Alt, rename, save, delete), load a colour channel or
+      luminosity as a selection (luminosity masks). Paths panel: work path
+      and saved paths with thumbnails, show on canvas, fill/stroke/select
+      any path in one undo step, make work path from selection (traced,
+      straight segments), save/duplicate/rename/delete. Navigator (drag to
+      pan, zoom slider and field) and Info (RGB/HSB, X/Y, exact selection
+      and document size) float over the canvas. Still open: Pen editing of
+      saved paths, curve fitting when tracing, painting into one channel
 - [x] Edit ▸ Cut / Copy / Copy merged / Paste / Paste in place (Cmd+X/C/
       Shift+Cmd+C/V/Shift+Cmd+V): the selection's pixels (soft edges kept) or
       the layer, pasted as a new layer above the active one in place; copies

@@ -73,7 +73,8 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
   `shape:kind=star`, `shape:draw=X0:Y0:X1:Y1`, `gradient:open|style=…|draw=…`,
   `brush:panel|tip=Name|set=key:value|stroke=X0:Y0:X1:Y1|import=PATH`,
   `text:box=X:Y:W:H|edit|select=A:B|caret=I|commit`, `refine:…` (Select and
-  Mask), `retouch:…`, `export-as:…`; drags as
+  Mask), `retouch:…`, `export-as:…`, `panels:tab=channels|view=red|navigator|info`,
+  `puppet:open|pin=X:Y|drag=I:X:Y|ok`; drags as
   `popups:press=X:Y,popups:move=X:Y,popups:release=X:Y`, typing as
   `popups:type=…`/`popups:key=Shift+W`; tokens that toggle
   view prefs such as `rulers`/`grid` save prefs — another reason for a scratch

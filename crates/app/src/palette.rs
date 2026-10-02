@@ -194,6 +194,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Show or hide the Navigator", "navigator"),
     ("Show or hide the Info panel", "info-panel"),
     ("Make work path from selection", "make-work-path"),
+    ("Puppet Warp", "puppet-warp"),
 ];
 
 impl App {
@@ -581,6 +582,7 @@ impl App {
                 Some("Rasterize the layer first")
             }
             "liquify" if !pixel => need_pixel,
+            "puppet-warp" => self.puppet_block(),
             "smart-edit" | "smart-replace" if !smart => Some("Select a smart object first"),
             "save-selection" if !selection => need_selection,
             "cut" if !pixel => need_pixel,
@@ -851,6 +853,7 @@ impl App {
             "paste" => self.paste_pixels(false),
             "paste-in-place" => self.paste_pixels(true),
             "liquify" => self.open_liquify(),
+            "puppet-warp" => self.open_puppet(),
             "export-as" => self.open_export_as(),
             "smart-edit" => self.edit_smart_contents(),
             "save-selection" => {
@@ -932,7 +935,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 141); // + panels: tabs, channel views, navigator, info, make work path
+        assert_eq!(n, 142); // + puppet warp
     }
 
     #[test]

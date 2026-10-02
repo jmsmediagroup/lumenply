@@ -53,6 +53,7 @@ mod panels;
 mod paths_panel;
 mod pen;
 mod properties;
+mod puppet_ui;
 mod quick_select_tool;
 mod retouch_ui;
 #[cfg(test)]
@@ -318,6 +319,8 @@ struct App {
     export_as: Option<Box<export_as::ExportAsState>>,
     /// Filter > Liquify's workspace, while open (it replaces the editor UI).
     liquify: Option<Box<liquify::LiquifyState>>,
+    /// Edit ▸ Puppet Warp's workspace, while open (it replaces the editor UI).
+    puppet: Option<Box<puppet_ui::PuppetState>>,
     /// The Camera Raw develop workspace, while a RAW file is being opened.
     camera_raw: Option<Box<camera_raw::CameraRawState>>,
     /// Select ▸ Select and Mask's workspace, while open (it replaces the
@@ -508,6 +511,7 @@ impl App {
             text_align: TextAlign::Left,
             text_new_armed: false,
             liquify: None,
+            puppet: None,
             doc_key: 0,
             next_doc_key: 0,
             smart_link: None,
@@ -1394,6 +1398,11 @@ impl App {
     fn frame(&mut self, ctx: &egui::Context) {
         if self.liquify.is_some() {
             self.liquify_ui(ctx);
+            self.debug_screenshot(ctx);
+            return;
+        }
+        if self.puppet.is_some() {
+            self.puppet_ui(ctx);
             self.debug_screenshot(ctx);
             return;
         }
