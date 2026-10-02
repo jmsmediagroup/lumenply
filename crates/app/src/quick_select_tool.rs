@@ -124,13 +124,17 @@ impl App {
     }
 
     /// Magic Wand ⇄ Quick Selection, as the first control of the Wand bar.
-    pub(crate) fn wand_mode_switch(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn wand_mode_switch(&mut self, ui: &mut egui::Ui, short: bool) {
         let mut quick = self.quick.on;
-        segmented(
-            ui,
-            &mut quick,
-            &[(false, "Magic wand"), (true, "Quick selection")],
-        );
+        if short {
+            segmented(ui, &mut quick, &[(false, "Wand"), (true, "Quick")]);
+        } else {
+            segmented(
+                ui,
+                &mut quick,
+                &[(false, "Magic wand"), (true, "Quick selection")],
+            );
+        }
         if quick != self.quick.on {
             self.quick.on = quick;
             self.quick.points.clear();

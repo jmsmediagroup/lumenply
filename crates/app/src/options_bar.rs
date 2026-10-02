@@ -196,14 +196,14 @@ impl App {
                             hint_label(ui, tier, self.tool);
                         }
                         Tool::Wand if self.quick.on => {
-                            self.wand_mode_switch(ui);
+                            self.wand_mode_switch(ui, tier == Tier::Tight);
                             self.quick_select_bar(ui);
                         }
                         Tool::Bucket | Tool::Wand => {
                             // Selection tools lead with how the selection
                             // combines, as the marquees and lassos do.
                             if self.tool == Tool::Wand {
-                                self.wand_mode_switch(ui);
+                                self.wand_mode_switch(ui, tier == Tier::Tight);
                                 select_ops(ui, &mut self.select_op);
                                 ui.separator();
                             }
@@ -316,19 +316,30 @@ impl App {
                             if pen::toggle(ui, &mut self.prefs.pen_size, "Pen pressure controls size") {
                                 self.prefs.save();
                             }
+                            // On a tight bar the secondary settings keep
+                            // their (scrubbable) number fields and drop the
+                            // sliders, so the row fits.
+                            let tight = tier == Tier::Tight;
+                            let row = |ui: &mut egui::Ui, label: &str, v: &mut f32, r: RangeInclusive<f32>| {
+                                if tight {
+                                    bar_value(ui, label, v, r, "%")
+                                } else {
+                                    bar_slider(ui, label, v, r, "%", false)
+                                }
+                            };
                             let mut hard = self.brush.hardness * 100.0;
-                            if bar_slider(ui, "Hardness", &mut hard, 0.0..=100.0, "%", false) {
+                            if row(ui, "Hardness", &mut hard, 0.0..=100.0) {
                                 self.brush.hardness = hard / 100.0;
                             }
                             let mut op = self.brush.color[3] * 100.0;
-                            if bar_slider(ui, "Opacity", &mut op, 1.0..=100.0, "%", false) {
+                            if row(ui, "Opacity", &mut op, 1.0..=100.0) {
                                 self.brush.color[3] = op / 100.0;
                             }
                             if pen::toggle(ui, &mut self.prefs.pen_opacity, "Pen pressure controls opacity") {
                                 self.prefs.save();
                             }
                             let mut sc = self.brush.jitter * 100.0;
-                            if bar_slider(ui, "Scatter", &mut sc, 0.0..=100.0, "%", false) {
+                            if row(ui, "Scatter", &mut sc, 0.0..=100.0) {
                                 self.brush.jitter = sc / 100.0;
                             }
                             if self.tool == Tool::Brush && self.editing_mask {
@@ -660,6 +671,34 @@ fn bar_scroll(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> f32 {
         );
     }
     out.content_size.x
+}
+
+/// A label and a typeable, scrubbable value without a slider (tight bars).
+pub(crate) fn bar_value(
+    ui: &mut egui::Ui,
+    label: &str,
+    v: &mut f32,
+    range: RangeInclusive<f32>,
+    suffix: &str,
+) -> bool {
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.label(RichText::new(label).color(MUTED));
+        let span = range.end() - range.start();
+        let b = num_field(
+            ui,
+            egui::DragValue::new(v)
+                .range(range)
+                .speed(span / 300.0)
+                .fixed_decimals(0)
+                .suffix(suffix),
+            58.0,
+        );
+        a11y_name(&b, label);
+        b.on_hover_text(format!("{label}: drag to change, click to type"))
+            .changed()
+    })
+    .inner
 }
 
 /// A slider cluster in the bar: muted label, slider, typeable mono value.
