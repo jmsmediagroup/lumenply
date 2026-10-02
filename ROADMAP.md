@@ -133,7 +133,8 @@ None of these could be tested in the container.
 
 
 - [x] Native file dialogs (`rfd`) instead of typed paths
-- [ ] Autosave and crash recovery; recent files
+- [x] Autosave every 2 min to ~/.nge (atomic, off-thread), crash-recovery prompt
+      at startup, recent-files menu
 - [x] Unsaved-changes prompt on close
 - [ ] Docking panels (egui_dock); drag-to-reorder layers; layer context menu
 - [ ] Preferences: theme, canvas colour, undo limit, memory limit

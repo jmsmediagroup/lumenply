@@ -178,6 +178,21 @@ impl App {
                         self.pick_open();
                         ui.close_menu();
                     }
+                    ui.menu_button("Open recent", |ui| {
+                        if self.recent.is_empty() {
+                            ui.label(RichText::new("Nothing yet").weak());
+                        }
+                        let mut open: Option<String> = None;
+                        for p in &self.recent {
+                            if ui.button(file_name(p)).on_hover_text(p).clicked() {
+                                open = Some(p.clone());
+                                ui.close_menu();
+                            }
+                        }
+                        if let Some(p) = open {
+                            self.open_path(&p);
+                        }
+                    });
                     if ui.button("Open image (PNG/JPEG)...").clicked() {
                         self.pick_open_image();
                         ui.close_menu();

@@ -29,6 +29,7 @@ mod menu;
 mod options_bar;
 mod palette;
 mod properties;
+mod session;
 mod status;
 mod theme;
 mod tools;
@@ -137,6 +138,10 @@ struct App {
     allow_close: bool,
     /// Composite cache for everything below the layer being edited.
     below: nge_render::BelowCache,
+    /// When the last autosave backup was written (or the session began).
+    last_autosave: std::time::Instant,
+    /// Recently opened or saved files, newest first.
+    recent: Vec<String>,
 }
 
 impl App {
@@ -237,10 +242,15 @@ impl App {
             palette: None,
             allow_close: false,
             below: nge_render::BelowCache::new(),
+            last_autosave: std::time::Instant::now(),
+            recent: session::load_recent(),
             filter_previewed: false,
             status,
         };
         app.select_top();
+        if session::autosave_file().is_some_and(|p| p.exists()) {
+            app.dialog = Some(Dialog::Recover);
+        }
         let mut i = 0;
         while i < args.len() {
             if args[i] == "--place" {
@@ -683,10 +693,22 @@ impl eframe::App for App {
         self.canvas(ctx);
         self.dialogs(ctx);
         self.palette_ui(ctx);
+        let unsaved = self.editor.history().len() != self.saved_rev;
+        if unsaved && self.drag.is_none() && self.last_autosave.elapsed() > session::AUTOSAVE_EVERY {
+            self.last_autosave = std::time::Instant::now();
+            session::autosave(self.editor.doc().clone(), self.path.clone());
+            self.status = "Autosaved a backup".into();
+        }
         if self.dirty {
             self.refresh(ctx);
             ctx.request_repaint();
         }
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // An intentional exit needs no crash recovery; a stale backup would
+        // only raise a misleading prompt next launch.
+        session::remove_autosave();
     }
 }
 

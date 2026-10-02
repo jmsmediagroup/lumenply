@@ -8,6 +8,8 @@ pub(crate) enum Dialog {
     ImageSize(u32, u32, bool),
     /// The window close was intercepted because of unsaved changes.
     ConfirmClose,
+    /// An autosave backup from a previous session was found at startup.
+    Recover,
 }
 
 impl App {
@@ -104,6 +106,7 @@ impl App {
                 Ok(rep) => {
                     let n = rep.warnings.len();
                     self.set_doc(Editor::new(rep.value), None);
+                    self.recent = session::push_recent(path);
                     self.status = if n == 0 {
                         format!("Imported {path}")
                     } else {
@@ -121,6 +124,7 @@ impl App {
         match project::load(path) {
             Ok(doc) => {
                 self.set_doc(Editor::new(doc), Some(PathBuf::from(path)));
+                self.recent = session::push_recent(path);
                 self.status = format!("Opened {path}");
             }
             Err(e) => self.status = format!("Could not open {path}: {e}"),
@@ -147,6 +151,7 @@ impl App {
                 let mut ed = Editor::new(Document::new(w, h));
                 let _ = ed.execute(&AddPixelLayer::from_raster(file_name(path), raster, 0, 0));
                 self.set_doc(ed, None);
+                self.recent = session::push_recent(path);
                 self.status = format!("Opened {path} ({w}×{h})");
             }
             Err(e) => self.status = format!("Could not open {path}: {e}"),
@@ -172,6 +177,8 @@ impl App {
             Ok(()) => {
                 self.path = Some(PathBuf::from(path));
                 self.saved_rev = self.editor.history().len();
+                self.recent = session::push_recent(path);
+                session::remove_autosave();
                 self.status = format!("Saved {path}");
             }
             Err(e) => self.status = format!("Could not save: {e}"),
@@ -202,6 +209,7 @@ impl App {
             Dialog::ExportJpeg(..) => "Export JPEG",
             Dialog::New(..) => "New document",
             Dialog::ConfirmClose => "Unsaved changes",
+            Dialog::Recover => "Recover autosaved document",
             Dialog::Filter(f) => f.name(),
             Dialog::CanvasSize(..) => "Canvas size",
             Dialog::ImageSize(..) => "Image size",
@@ -215,6 +223,32 @@ impl App {
             .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 match &mut d {
+                    Dialog::Recover => {
+                        ui.label("The previous session left an autosaved backup,");
+                        ui.label("probably after a crash.");
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Recover").clicked() {
+                                if let Some(file) = session::autosave_file() {
+                                    let source = session::autosave_source();
+                                    match project::load(&file) {
+                                        Ok(doc) => {
+                                            self.set_doc(Editor::new(doc), source);
+                                            // Recovered work is unsaved by definition.
+                                            self.saved_rev = usize::MAX;
+                                            self.status = "Recovered the autosaved document".into();
+                                        }
+                                        Err(e) => self.status = format!("Could not recover: {e}"),
+                                    }
+                                }
+                                keep = false;
+                            }
+                            if ui.button("Discard backup").clicked() {
+                                session::remove_autosave();
+                                keep = false;
+                            }
+                        });
+                    }
                     Dialog::ConfirmClose => {
                         ui.label("The document has unsaved changes.");
                         ui.add_space(4.0);
@@ -320,7 +354,7 @@ impl App {
                         ui.label(RichText::new("Resamples every layer bilinearly.").weak());
                     }
                 }
-                if !matches!(d, Dialog::ConfirmClose) {
+                if !matches!(d, Dialog::ConfirmClose | Dialog::Recover) {
                     ui.horizontal(|ui| {
                         if ui.button("OK").clicked() {
                             confirmed = true;
@@ -352,7 +386,7 @@ impl App {
 
         if confirmed {
             match &d {
-                Dialog::ConfirmClose => {}
+                Dialog::ConfirmClose | Dialog::Recover => {}
                 Dialog::ExportJpeg(p, q) => self.export_jpeg(p, *q),
                 Dialog::New(w, h) => self.set_doc(blank(*w, *h), None),
                 Dialog::Filter(f) => {
