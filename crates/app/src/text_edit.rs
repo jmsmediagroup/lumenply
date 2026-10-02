@@ -440,7 +440,15 @@ impl App {
 
     /// Start editing text layer `id` with the caret placed by `start`.
     pub(crate) fn begin_text_edit(&mut self, ctx: &egui::Context, id: LayerId, start: EditStart) {
-        if self.typer.session.as_ref().is_some_and(|s| s.layer == id) {
+        // Already editing it: just place the caret.
+        if let Some(s) = self.typer.session.as_mut().filter(|s| s.layer == id) {
+            match start {
+                EditStart::At(x, y) => s.buf.move_to(s.lay.hit(x, y), false),
+                EditStart::All => s.buf.select(0, s.buf.text.len()),
+                EditStart::End => s.buf.move_to(s.buf.text.len(), false),
+            }
+            s.moved_at = ctx.input(|i| i.time);
+            self.focus_canvas(ctx);
             return;
         }
         self.commit_text_edit();
@@ -1043,9 +1051,25 @@ impl App {
                     origin: s.buf.range(),
                 });
             } else {
-                // A press outside the text commits; it starts nothing new.
+                // A press outside the text commits. On another text layer
+                // it edits that one straight away; elsewhere it starts
+                // nothing new.
+                let editing = s.layer;
                 self.commit_text_edit();
-                return false;
+                return match text_click_action(self.editor.doc(), p.0, p.1, false) {
+                    TextClick::Edit(id) if id != editing => {
+                        self.begin_text_edit(ctx, id, EditStart::At(p.0, p.1));
+                        if let Some(s) = self.typer.session.as_mut() {
+                            s.last_press = (now, p, 1);
+                            s.grab = Some(Grab::Select {
+                                unit: Unit::Char,
+                                origin: s.buf.range(),
+                            });
+                        }
+                        self.typer.session.is_some()
+                    }
+                    _ => false,
+                };
             }
             return true;
         }
@@ -2061,6 +2085,29 @@ mod tests {
         app.cancel_text_edit();
         assert_eq!(text_of(&app, id).as_deref(), Some("Hello"));
         assert_eq!(app.editor.history().len(), steps + 2, "typing, then the restore");
+    }
+
+    #[test]
+    fn a_press_on_other_text_while_editing_switches_to_it() {
+        let (mut app, ctx, hello) = app();
+        let other = app.editor.doc().next_id();
+        app.run(&AddTextLayer {
+            text: TextLayer::new("World", 20.0, 140.0, 24.0, BLACK),
+            above: None,
+        });
+        app.begin_text_edit(&ctx, hello, EditStart::End);
+        app.text_change(1.0, true, |b| b.insert("!"));
+        // Press on "World": "Hello!" is committed and "World" is edited.
+        let lay = layout(app.editor.doc().layer(other).unwrap().text_layer().unwrap());
+        let p = (lay.caret(2).x + 1.0, lay.lines[0].baseline - 6.0);
+        assert!(app.text_press(&ctx, p, egui::Modifiers::NONE, 5.0, 4.0));
+        let s = app.typer.session.as_ref().unwrap();
+        assert_eq!((s.layer, s.buf.caret), (other, 2));
+        assert_eq!(app.active, Some(other));
+        assert_eq!(text_of(&app, hello).as_deref(), Some("Hello!"));
+        // Double-clicking the thumbnail of the text being edited selects all.
+        app.begin_text_edit(&ctx, other, EditStart::All);
+        assert_eq!(app.typer.session.as_ref().unwrap().buf.range(), (0, 5));
     }
 
     #[test]
