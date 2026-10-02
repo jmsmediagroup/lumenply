@@ -526,7 +526,13 @@ impl App {
                 "Vertical ruler: drag right to add a guide",
             ),
         ] {
-            let resp = ui.interact(r, egui::Id::new(salt), Sense::drag());
+            // Pointer-only (no Tab stop): View ▸ New guide is the keyboard way.
+            let sense = Sense {
+                click: false,
+                drag: true,
+                focusable: false,
+            };
+            let resp = ui.interact(r, egui::Id::new(salt), sense);
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, name));
             if resp.hovered() || resp.dragged() {
                 ui.ctx().set_cursor_icon(if vertical {
@@ -726,6 +732,52 @@ mod input_tests {
         }
         frame(app, ctx, vec![button(*pts.last().unwrap(), false)]);
         frame(app, ctx, vec![]);
+    }
+
+    #[test]
+    fn a_marquee_corner_snaps_to_a_guide() {
+        let (mut app, ctx) = launch();
+        app.prefs.snap = true;
+        app.run(&AddGuide {
+            guide: Guide::vertical(700.0),
+        });
+        app.run(&AddGuide {
+            guide: Guide::horizontal(500.0),
+        });
+        app.tool = Tool::RectSelect;
+        frame(&mut app, &ctx, vec![]);
+        // From (300, 200) to 3 screen px short of both guides.
+        let a = screen(&app, 300.0, 200.0);
+        let b = screen(&app, 700.0, 500.0) - egui::vec2(3.0, 3.0);
+        drag_path(&mut app, &ctx, &[a, b]);
+        let doc = app.editor.doc();
+        let r = doc.selection.as_ref().unwrap().tight_bounds(doc.canvas());
+        assert_eq!((r.right(), r.bottom()), (700, 500), "{r:?}");
+    }
+
+    #[test]
+    fn free_transform_moves_snap_to_the_canvas_centre() {
+        let (mut app, ctx) = launch();
+        app.prefs.snap = true;
+        let bg = app.editor.doc().layers()[0].id;
+        app.set_active(Some(bg));
+        app.run_menu_action("xform");
+        assert!(app.xform.is_some());
+        frame(&mut app, &ctx, vec![]);
+        // Move the whole layer 3 screen px: its centre and edges sit 3 px
+        // from the canvas centre and edges, so it snaps back to dx = 0;
+        // the drag goes out 40 px first so it counts as a drag.
+        let a = screen(&app, 900.0, 600.0);
+        drag_path(
+            &mut app,
+            &ctx,
+            &[a, a + egui::vec2(40.0, 0.0), a + egui::vec2(3.0, 0.0)],
+        );
+        let x = app.xform.as_ref().unwrap();
+        assert_eq!(x.dx, 0.0, "snapped home");
+        drag_path(&mut app, &ctx, &[a, a + egui::vec2(60.0, 0.0)]);
+        let x = app.xform.as_ref().unwrap();
+        assert!(x.dx > 50.0 / app.zoom, "a real move: {}", x.dx);
     }
 
     #[test]

@@ -1547,6 +1547,9 @@ mod a11y_tests {
     fn the_editor_names_every_control_for_every_tool() {
         let mut app = launch(&["--demo".to_string()]);
         let ctx = ctx();
+        // Rulers (drag-out targets) and the grid on, so they are covered.
+        app.prefs.show_rulers = true;
+        app.prefs.show_grid = true;
         for tool in Tool::ALL {
             app.tool = tool;
             let missing = nameless(&mut app, &ctx);
