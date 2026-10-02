@@ -573,6 +573,56 @@ mod tests {
         assert!(close(m.get_pixel(63, 63).a, 1.0, 1e-5));
     }
 
+    #[test]
+    #[ignore = "timing; cargo test --release -p lumenply-render new_filter_timing -- --ignored --nocapture"]
+    fn new_filter_timing() {
+        let (w, h) = (2400u32, 1600u32);
+        let mut src = Raster::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let v = (((x / 7) ^ (y / 5)) % 13) as f32 / 13.0;
+                src.set(x, y, Rgba::from_straight(v, 0.5 * v + 0.2, 1.0 - v, 1.0));
+            }
+        }
+        for f in [
+            Filter::Mosaic { size: 16.0 },
+            Filter::Emboss {
+                angle: 135.0,
+                height: 3.0,
+                amount: 1.0,
+            },
+            Filter::FindEdges,
+            Filter::SurfaceBlur {
+                radius: 5.0,
+                threshold: 15.0,
+            },
+            Filter::SurfaceBlur {
+                radius: 40.0,
+                threshold: 15.0,
+            },
+            Filter::LensBlur {
+                radius: 10.0,
+                highlights: 0.5,
+            },
+            Filter::LensBlur {
+                radius: 60.0,
+                highlights: 0.5,
+            },
+            Filter::DustScratches {
+                radius: 2.0,
+                threshold: 10.0,
+            },
+            Filter::DustScratches {
+                radius: 8.0,
+                threshold: 10.0,
+            },
+        ] {
+            let t = std::time::Instant::now();
+            let _ = filter_raster(&src, &f, (0, 0));
+            println!("{:?} on {w}×{h}: {:?}", f, t.elapsed());
+        }
+    }
+
     /// The live path renders a filter layer tile by tile from padded
     /// pieces; a reach (`pad`) that is too small shows as seams. Compare
     /// the tiled composite with one pass over the whole edge-clamped canvas.

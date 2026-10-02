@@ -171,8 +171,7 @@ fn demo_lake_fill_crops() {
         }
     });
     let bg = bg.expect("demo has a Background");
-    let crop = Rect::new(380, 760, 460, 340);
-    let save = |app: &App, name: &str| {
+    let save = |app: &App, name: &str, crop: Rect| {
         let r = app
             .editor
             .doc()
@@ -183,12 +182,27 @@ fn demo_lake_fill_crops() {
             .to_raster(crop);
         lumenply_io::save_png(format!("{dir}/{name}.png"), &r).unwrap();
     };
-    save(&app, "lake-before");
-    app.run(&SetSelection {
-        selection: Some(Selection::ellipse(Rect::new(455, 850, 290, 170))),
-    });
-    let t = std::time::Instant::now();
-    app.run(&ContentAwareFill { layer: bg, margin: 0 });
-    println!("demo lake fill: {:?}", t.elapsed());
-    save(&app, "lake-after");
+    // The lake (smooth slopes around it) and a patch of the snowy ridge
+    // (busy texture).
+    for (name, hole, crop) in [
+        (
+            "lake",
+            Rect::new(455, 850, 290, 170),
+            Rect::new(380, 760, 460, 340),
+        ),
+        (
+            "ridge",
+            Rect::new(760, 590, 180, 110),
+            Rect::new(640, 500, 420, 300),
+        ),
+    ] {
+        save(&app, &format!("{name}-before"), crop);
+        app.run(&SetSelection {
+            selection: Some(Selection::ellipse(hole)),
+        });
+        let t = std::time::Instant::now();
+        app.run(&ContentAwareFill { layer: bg, margin: 0 });
+        println!("demo {name} fill: {:?}", t.elapsed());
+        save(&app, &format!("{name}-after"), crop);
+    }
 }
