@@ -309,7 +309,7 @@ impl App {
         let mut finished = false;
         let color_btn = |ui: &mut egui::Ui, c: &mut [f32; 3]| -> bool {
             let mut srgb = c.map(lumenply_io::linear_to_srgb_f);
-            let r = egui::color_picker::color_edit_button_rgb(ui, &mut srgb);
+            let r = crate::color_picker::color_edit_button_rgb(ui, &mut srgb);
             if r.changed() {
                 *c = srgb.map(lumenply_io::srgb_to_linear_f);
             }
@@ -541,7 +541,7 @@ impl App {
                 &format!("fx-{id}"),
             );
         }
-        if finished {
+        if finished && !crate::color_picker::is_dragging(ui.ctx()) {
             self.editor.end_coalescing();
         }
     }

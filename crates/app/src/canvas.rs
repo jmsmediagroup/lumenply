@@ -418,8 +418,16 @@ impl App {
                     (x >= 0.0 && y >= 0.0 && x < dw && y < dh).then_some((x as i32, y as i32))
                 });
 
+                // ---- colour picker hook (color_picker.rs) ------------------
+                // An armed picker eyedropper, or the press that dismissed a
+                // picker, owns the pointer: no tool may act on it.
+                let picker_owns = self.picker_canvas_input(ctx, &resp, to_doc);
+                // ---- end colour picker hook ----------------------------------
+
                 // While Space pans, the active tool must not also fire.
-                if self.xform.is_some() {
+                if picker_owns {
+                    // Handled by the colour picker above.
+                } else if self.xform.is_some() {
                     self.handle_xform(ctx, &resp, to_doc, to_screen);
                 } else if !space {
                     self.handle_tool(ctx, &resp, to_doc);
@@ -458,7 +466,7 @@ impl App {
 
                 if let Some(x) = &self.xform {
                     paint_xform_box(&painter, x, to_screen);
-                } else {
+                } else if !picker_owns {
                     self.paint_tool_overlay(ctx, &painter, &resp);
                 }
                 self.selection_action_bar(ctx, rect, origin, zoom);
@@ -995,11 +1003,11 @@ impl App {
                 if resp.clicked_by(primary) {
                     if let (Some(p), Some(flat)) = (resp.interact_pointer_pos(), &self.last_flat) {
                         let (x, y) = to_doc(p);
-                        if x >= 0.0 && y >= 0.0 && (x as u32) < flat.width && (y as u32) < flat.height {
-                            let [r, g, b, _] = flat.get(x as u32, y as u32).to_straight();
-                            let enc = |v: f32| lumenply_io::linear_to_srgb(v) as f32 / 255.0;
-                            self.brush_rgb = [enc(r), enc(g), enc(b)];
-                            self.status = format!("Picked colour at {}, {}", x as i32, y as i32);
+                        if let Some(c) = color_picker::sample_srgb(flat, x, y) {
+                            self.brush_rgb = c;
+                            color_picker::remember(ctx, c);
+                            let hex = color_picker::format_hex(c);
+                            self.status = format!("Picked {hex} at {}, {}", x as i32, y as i32);
                         }
                     }
                 }

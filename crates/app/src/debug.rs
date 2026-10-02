@@ -77,8 +77,8 @@ impl App {
     }
 
     /// Colour picker and eyedropper (`color:...`).
-    fn debug_color(&mut self, _ctx: &egui::Context, _tok: &str) -> bool {
-        false
+    fn debug_color(&mut self, ctx: &egui::Context, tok: &str) -> bool {
+        self.debug_color_token(ctx, tok)
     }
 
     /// Start screen, empty states and file dialogs (`start:...`).

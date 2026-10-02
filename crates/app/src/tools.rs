@@ -172,7 +172,7 @@ impl App {
         let swap = ui.interact(swap_rect, ui.id().with("swap-colors"), Sense::click());
         {
             let p = ui.painter();
-            let st = Stroke::new(1.3, MUTED);
+            let st = Stroke::new(1.3, if swap.hovered() { TEXT } else { MUTED });
             let c = swap_rect.center();
             p.line_segment([c + egui::vec2(-5.0, 2.0), c + egui::vec2(5.0, 2.0)], st);
             p.line_segment([c + egui::vec2(-5.0, -2.0), c + egui::vec2(5.0, -2.0)], st);
@@ -189,71 +189,56 @@ impl App {
             let p = ui.painter();
             let a = egui::Rect::from_min_size(reset_rect.min, Vec2::splat(7.0));
             let b = egui::Rect::from_min_size(reset_rect.min + egui::vec2(4.0, 4.0), Vec2::splat(7.0));
+            let edge = Stroke::new(1.0, if reset.hovered() { TEXT } else { MUTED });
             p.rect_filled(b, 1.5, Color32::WHITE);
-            p.rect_stroke(b, 1.5, Stroke::new(1.0, MUTED));
+            p.rect_stroke(b, 1.5, edge);
             p.rect_filled(a, 1.5, Color32::BLACK);
-            p.rect_stroke(a, 1.5, Stroke::new(1.0, MUTED));
+            p.rect_stroke(a, 1.5, edge);
         }
         if reset.on_hover_text("Default colours (D)").clicked() {
             self.brush_rgb = [0.0; 3];
             self.bg_rgb = [1.0; 3];
         }
-        let to32 = |c: [f32; 3]| {
-            Color32::from_rgb(
-                (c[0] * 255.0 + 0.5) as u8,
-                (c[1] * 255.0 + 0.5) as u8,
-                (c[2] * 255.0 + 0.5) as u8,
-            )
-        };
         let bg_rect = egui::Rect::from_min_size(rect.min + egui::vec2(14.0, 18.0), Vec2::splat(26.0));
         let fg_rect = egui::Rect::from_min_size(rect.min + egui::vec2(0.0, 2.0), Vec2::splat(26.0));
-        let bg_resp = ui.interact(bg_rect, ui.id().with("bg-well"), Sense::click());
-        let p = ui.painter();
-        p.rect_filled(bg_rect, 4.0, to32(self.bg_rgb));
-        p.rect_stroke(bg_rect, 4.0, Stroke::new(1.0, LINE));
-        let fg_resp = ui.interact(fg_rect, ui.id().with("fg-well"), Sense::click());
-        p.rect_filled(fg_rect, 4.0, to32(self.brush_rgb));
-        p.rect_stroke(fg_rect.expand(1.0), 5.0, Stroke::new(2.0, PANEL));
-        p.rect_stroke(fg_rect, 4.0, Stroke::new(1.0, LINE));
-        color_popup(
-            ui,
-            &fg_resp.on_hover_text("Brush colour"),
-            "fg-pick",
-            &mut self.brush_rgb,
-        );
-        color_popup(
-            ui,
-            &bg_resp.on_hover_text("Background colour"),
-            "bg-pick",
-            &mut self.bg_rgb,
-        );
-    }
-}
-
-/// A colour-picker popup anchored to a painted swatch.
-fn color_popup(ui: &mut egui::Ui, resp: &egui::Response, id: &str, rgb: &mut [f32; 3]) {
-    let popup = ui.make_persistent_id(id);
-    if resp.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(popup));
-    }
-    egui::popup::popup_above_or_below_widget(
-        ui,
-        popup,
-        resp,
-        egui::AboveOrBelow::Above,
-        egui::PopupCloseBehavior::CloseOnClickOutside,
-        |ui| {
-            ui.set_min_width(220.0);
-            let mut c = Color32::from_rgb(
-                (rgb[0] * 255.0 + 0.5) as u8,
-                (rgb[1] * 255.0 + 0.5) as u8,
-                (rgb[2] * 255.0 + 0.5) as u8,
-            );
-            if egui::color_picker::color_picker_color32(ui, &mut c, egui::color_picker::Alpha::Opaque) {
-                *rgb = [c.r() as f32 / 255.0, c.g() as f32 / 255.0, c.b() as f32 / 255.0];
+        let (fg_id, bg_id) = (color_picker::fg_picker(), color_picker::bg_picker());
+        let (fg_open, bg_open) = ui.memory(|m| (m.is_popup_open(fg_id), m.is_popup_open(bg_id)));
+        // The swatch whose picker is open wears the accent; hover lifts the
+        // edge so the two overlapping squares read as separate targets.
+        let edge = |open: bool, hovered: bool| {
+            if open {
+                Stroke::new(1.5, ACCENT)
+            } else if hovered {
+                Stroke::new(1.0, TEXT)
+            } else {
+                Stroke::new(1.0, LINE)
             }
-        },
-    );
+        };
+        let bg_resp = ui.interact(bg_rect, ui.id().with("bg-well"), Sense::click());
+        let fg_resp = ui.interact(fg_rect, ui.id().with("fg-well"), Sense::click());
+        let p = ui.painter();
+        p.rect_filled(bg_rect, 4.0, color_picker::to_color32(self.bg_rgb));
+        p.rect_stroke(bg_rect, 4.0, edge(bg_open, bg_resp.hovered()));
+        p.rect_filled(fg_rect, 4.0, color_picker::to_color32(self.brush_rgb));
+        p.rect_stroke(fg_rect.expand(1.0), 5.0, Stroke::new(2.0, PANEL));
+        p.rect_stroke(fg_rect, 4.0, edge(fg_open, fg_resp.hovered()));
+        // The pickers open beside the rail, bottom-aligned with the well.
+        let at = egui::pos2(ui.max_rect().right() + 17.0, rect.bottom());
+        let tip =
+            |what: &str, rgb: [f32; 3]| format!("{what} {}  ·  click to edit", color_picker::format_hex(rgb));
+        let fg_resp = fg_resp.on_hover_text(tip("Foreground", self.brush_rgb));
+        let bg_resp = bg_resp.on_hover_text(tip("Background", self.bg_rgb));
+        let place = || color_picker::Placement::At(at, Align2::LEFT_BOTTOM);
+        color_picker::picker_popup(
+            ui,
+            &fg_resp,
+            fg_id,
+            Some("Foreground"),
+            &mut self.brush_rgb,
+            place(),
+        );
+        color_picker::picker_popup(ui, &bg_resp, bg_id, Some("Background"), &mut self.bg_rgb, place());
+    }
 }
 
 pub(crate) fn draw_icon(p: &egui::Painter, r: egui::Rect, tool: Tool, c: Color32) {

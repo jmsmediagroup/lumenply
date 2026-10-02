@@ -436,7 +436,14 @@ impl App {
                         let changed = ui
                             .add(egui::Slider::new(tol, 1.0..=100.0).suffix("%").text("Fuzziness"))
                             .changed();
-                        if changed || !*previewed {
+                        // The colour being matched, editable (and sampleable) in place.
+                        let recolored = ui
+                            .horizontal(|ui| {
+                                ui.label("Brush colour");
+                                crate::color_picker::color_edit_button_rgb(ui, &mut self.brush_rgb).changed()
+                            })
+                            .inner;
+                        if changed || recolored || !*previewed {
                             *previewed = true;
                             self.run_coalescing(
                                 &SelectColorRange {
@@ -505,6 +512,11 @@ impl App {
                                 if resp.on_hover_text(name).clicked() {
                                     p.canvas_bg = c;
                                 }
+                            }
+                            // Any other colour, through the shared picker.
+                            let mut custom = p.canvas_bg.map(|b| b as f32 / 255.0);
+                            if crate::color_picker::color_edit_button_rgb(ui, &mut custom).changed() {
+                                p.canvas_bg = crate::color_picker::to_u8(custom);
                             }
                         });
                         ui.add_space(6.0);

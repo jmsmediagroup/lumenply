@@ -516,13 +516,13 @@ fn text_color_button(ui: &mut egui::Ui, color: &mut [f32; 4]) -> bool {
         lumenply_io::linear_to_srgb(color[1]) as f32 / 255.0,
         lumenply_io::linear_to_srgb(color[2]) as f32 / 255.0,
     ];
-    let r = egui::color_picker::color_edit_button_rgb(ui, &mut rgb).on_hover_text("Text colour");
+    let r = crate::color_picker::color_edit_button_rgb(ui, &mut rgb).on_hover_text("Text colour");
     if r.changed() {
         *color = linear_rgba(rgb, color[3]);
     }
-    // The picker reports a change per drag tick; the edit ends when the
-    // popup closes, so treat each change as its own step only on release.
-    r.changed() && !ui.input(|i| i.pointer.any_down())
+    // The shared picker reports drags like a slider, so a drag through
+    // the spectrum is one undo step that ends on release.
+    r.drag_stopped() || (r.changed() && !r.dragged())
 }
 
 /// A Properties slider row like `slider_row`, optionally logarithmic.

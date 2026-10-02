@@ -169,9 +169,9 @@ impl App {
                             ui.selectable_value(&mut self.gradient_kind, GradientKind::Radial, "Radial");
                             ui.separator();
                             ui.label("From");
-                            egui::color_picker::color_edit_button_rgb(ui, &mut self.brush_rgb);
+                            crate::color_picker::color_edit_button_rgb(ui, &mut self.brush_rgb);
                             ui.label("To");
-                            egui::color_picker::color_edit_button_rgb(ui, &mut self.bg_rgb);
+                            crate::color_picker::color_edit_button_rgb(ui, &mut self.bg_rgb);
                             ui.checkbox(&mut self.gradient_to_transparent, "To transparent");
                             ui.label(RichText::new("Drag on the canvas").weak());
                         }

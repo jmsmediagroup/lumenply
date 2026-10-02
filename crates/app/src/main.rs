@@ -24,6 +24,7 @@ use lumenply_tiles::{Affine, Raster, Rect};
 
 mod brand;
 mod canvas;
+mod color_picker;
 mod debug;
 mod demo;
 mod dialogs;
@@ -919,7 +920,10 @@ impl App {
         }
         // Esc is "get me out": drop the selection (the polygonal lasso and
         // free transform consume it first for their own cancel).
-        if self.editor.doc().selection.is_some() && ctx.input_mut(|i| i.consume_key(M::NONE, Key::Escape)) {
+        if self.editor.doc().selection.is_some()
+            && !color_picker::is_open(ctx)
+            && ctx.input_mut(|i| i.consume_key(M::NONE, Key::Escape))
+        {
             self.run(&SetSelection { selection: None });
         }
         // Rebindable command chords (see session::SHORTCUTS for the
