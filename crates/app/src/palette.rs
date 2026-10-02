@@ -184,6 +184,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("History Brush (Brush ▸ History)", "tool-history-brush"),
     ("Background Eraser (Eraser ▸ Background)", "tool-bg-eraser"),
     ("Magic Eraser (Eraser ▸ Magic)", "tool-magic-eraser"),
+    ("Puppet Warp", "puppet-warp"),
 ];
 
 impl App {
@@ -568,6 +569,7 @@ impl App {
                 Some("Rasterize the layer first")
             }
             "liquify" if !pixel => need_pixel,
+            "puppet-warp" => self.puppet_block(),
             "smart-edit" | "smart-replace" if !smart => Some("Select a smart object first"),
             "save-selection" if !selection => need_selection,
             "cut" if !pixel => need_pixel,
@@ -832,6 +834,7 @@ impl App {
             "paste" => self.paste_pixels(false),
             "paste-in-place" => self.paste_pixels(true),
             "liquify" => self.open_liquify(),
+            "puppet-warp" => self.open_puppet(),
             "export-as" => self.open_export_as(),
             "smart-edit" => self.edit_smart_contents(),
             "save-selection" => {
@@ -913,7 +916,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 131); // + convert for smart filters, retouching modes
+        assert_eq!(n, 132); // + convert for smart filters, retouching modes, puppet warp
     }
 
     #[test]

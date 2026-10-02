@@ -89,7 +89,7 @@ impl LiquifyState {
 }
 
 /// The canvas area of `store`, box-filtered down by `scale` (≤ 1).
-fn downscale(store: &TileStore, rect: Rect, scale: f32) -> Raster {
+pub(crate) fn downscale(store: &TileStore, rect: Rect, scale: f32) -> Raster {
     if scale >= 1.0 {
         return store.to_raster(rect);
     }
@@ -124,7 +124,7 @@ fn downscale(store: &TileStore, rect: Rect, scale: f32) -> Raster {
 }
 
 /// Premultiplied linear pixels over a light checkerboard, sRGB-encoded.
-fn to_image(r: &Raster) -> egui::ColorImage {
+pub(crate) fn to_image(r: &Raster) -> egui::ColorImage {
     let (light, dark) = (
         lumenply_io::srgb_to_linear_f(0.80),
         lumenply_io::srgb_to_linear_f(0.66),

@@ -406,6 +406,7 @@ impl App {
         self.act(ui, "Free transform", "xform");
         self.act(ui, "Perspective", "perspective");
         self.act(ui, "Warp", "warp");
+        self.act(ui, "Puppet Warp", "puppet-warp");
         menu_separator(ui);
         self.act(ui, "Fill with brush colour", "fill");
         self.act(ui, "Fill...", "fill-dialog");
