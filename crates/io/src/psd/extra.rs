@@ -314,23 +314,23 @@ pub(super) struct Desc {
 }
 
 impl Desc {
-    fn new(class: &[u8]) -> Self {
+    pub(super) fn new(class: &[u8]) -> Self {
         Desc {
             class: class.to_vec(),
             items: Vec::new(),
         }
     }
 
-    fn with(mut self, key: &[u8], v: Val) -> Self {
+    pub(super) fn with(mut self, key: &[u8], v: Val) -> Self {
         self.items.push((key.to_vec(), v));
         self
     }
 
-    fn get(&self, key: &[u8]) -> Option<&Val> {
+    pub(super) fn get(&self, key: &[u8]) -> Option<&Val> {
         self.items.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
-    fn num(&self, key: &[u8]) -> Option<f64> {
+    pub(super) fn num(&self, key: &[u8]) -> Option<f64> {
         match self.get(key)? {
             Val::Long(v) => Some(*v as f64),
             Val::Doub(v) | Val::Unit(_, v) => Some(*v),
@@ -338,7 +338,7 @@ impl Desc {
         }
     }
 
-    fn obj(&self, key: &[u8]) -> Option<&Desc> {
+    pub(super) fn obj(&self, key: &[u8]) -> Option<&Desc> {
         match self.get(key)? {
             Val::Obj(d) => Some(d),
             _ => None,
@@ -495,7 +495,7 @@ pub(super) fn parse_descriptor(data: &[u8]) -> Option<Desc> {
 }
 
 /// An `RGBC` colour object (0..255 doubles) from straight linear RGB.
-fn rgbc(c: [f32; 3]) -> Val {
+pub(super) fn rgbc(c: [f32; 3]) -> Val {
     let v = |x: f32| Val::Doub((linear_to_srgb_f(x.clamp(0.0, 1.0)) * 255.0) as f64);
     Val::Obj(
         Desc::new(b"RGBC")
@@ -507,7 +507,7 @@ fn rgbc(c: [f32; 3]) -> Val {
 
 /// Straight linear RGB from a colour object (RGB or greyscale; other
 /// models read as mid grey).
-fn color_of(o: &Desc) -> [f32; 3] {
+pub(super) fn color_of(o: &Desc) -> [f32; 3] {
     let lin = |v: f64| srgb_to_linear_f((v / 255.0).clamp(0.0, 1.0) as f32);
     match &o.class[..] {
         b"RGBC" => [
