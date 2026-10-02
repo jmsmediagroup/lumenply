@@ -237,6 +237,21 @@ pub(crate) fn drag_frame(
                 ang += std::f32::consts::TAU;
             }
             f.angle = ang;
+            // A frame that sat inside the canvas shrinks (about its centre)
+            // to stay inside while it turns, so straightening never adds
+            // transparent corners. One reaching past the edges on purpose
+            // keeps its size.
+            let (cw, ch) = (start.canvas.0 as f32, start.canvas.1 as f32);
+            let inside = |fr: &Frame| {
+                fr.corners()
+                    .iter()
+                    .all(|&(x, y)| (-0.01..=cw + 0.01).contains(&x) && (-0.01..=ch + 0.01).contains(&y))
+            };
+            if inside(start) {
+                let s = fit_scale(&f, cw, ch);
+                f.w = (start.w * s).max(1.0);
+                f.h = (start.h * s).max(1.0);
+            }
         }
         Grip::New => {
             let (x0, y0, x1, y1) = span(a, b, ratio);
@@ -274,6 +289,24 @@ pub(crate) fn drag_frame(
         }
     }
     f
+}
+
+/// The largest scale (at most 1) of frame `f`, about its centre, whose
+/// turned corners all lie inside a `cw` × `ch` canvas.
+pub(crate) fn fit_scale(f: &Frame, cw: f32, ch: f32) -> f32 {
+    let mut s: f32 = 1.0;
+    let (sin, cos) = f.angle.sin_cos();
+    for (hx, hy) in [(f.w / 2.0, f.h / 2.0), (f.w / 2.0, -f.h / 2.0)] {
+        // Each corner and its mirror through the centre.
+        let (ux, uy) = (hx * cos - hy * sin, hx * sin + hy * cos);
+        for (u, c, size) in [(ux, f.cx, cw), (uy, f.cy, ch)] {
+            if u.abs() > 1e-6 {
+                // c ± s·|u| must stay within [0, size].
+                s = s.min(c / u.abs()).min((size - c) / u.abs());
+            }
+        }
+    }
+    s.max(0.0)
 }
 
 /// The largest frame of `ratio` (W/H) that fits the canvas, centred as
@@ -520,7 +553,15 @@ impl App {
         if let (Some(d), true) = (self.crop.drag, resp.dragged_by(primary)) {
             if let Some(p) = resp.interact_pointer_pos() {
                 let to = to_doc(p);
-                let ratio = self.crop_ratio();
+                // Shift holds the frame's own proportions when the ratio is
+                // free (a new frame: a square).
+                let shift = ctx.input(|i| i.modifiers.shift);
+                let own = if d.grip == Grip::New {
+                    1.0
+                } else {
+                    d.start.w / d.start.h.max(1.0)
+                };
+                let ratio = self.crop_ratio().or_else(|| shift.then_some(own));
                 let mut f = drag_frame(&d.start, d.grip, d.press, to, ratio);
                 // Snap what moves (axis-aligned frames only): the dragged
                 // corner, the dragged edge, or the whole frame's edges and
@@ -575,6 +616,16 @@ impl App {
                     };
                 }
                 self.crop.frame = Some(f);
+            }
+        }
+        // Double-click inside the frame crops, as in Photoshop.
+        if resp.double_clicked_by(primary) {
+            let inside = resp
+                .interact_pointer_pos()
+                .is_some_and(|p| matches!(grip_at(&frame, to_doc(p), zoom), Grip::Move | Grip::New));
+            if inside {
+                self.commit_crop();
+                return;
             }
         }
         if resp.drag_stopped() && self.crop.drag.is_some() {
@@ -778,7 +829,9 @@ impl App {
             ui.label(RichText::new(text).monospace().color(TEXT))
                 .on_hover_text("Size of the cropped canvas");
             if tier != options_bar::Tier::Tight {
-                ui.label(RichText::new("Drag outside the frame to straighten").weak());
+                ui.label(
+                    RichText::new("Drag outside the frame to straighten · Shift keeps proportions").weak(),
+                );
             }
         }
         ui.separator();
@@ -824,9 +877,14 @@ impl App {
                 f.pristine = false;
             }
         } else if let Some(v) = rest.strip_prefix("angle=") {
-            if let (Ok(deg), Some(f)) = (v.parse::<f32>(), self.crop.frame.as_mut()) {
-                f.angle = deg.to_radians();
-                f.pristine = false;
+            if let (Ok(deg), Some(f)) = (v.parse::<f32>(), self.crop.frame) {
+                // Through a real rotate drag, so the frame fits as it turns.
+                let r = f.w.max(f.h);
+                let a = deg.to_radians();
+                let to = (f.cx + r * a.cos(), f.cy + r * a.sin());
+                let mut g = drag_frame(&f, Grip::Rotate, (f.cx + r, f.cy), to, None);
+                g.angle = a;
+                self.crop.frame = Some(g);
             }
         } else if let Some(v) = rest.strip_prefix("ratio=") {
             if let [a, b] = nums(v)[..] {
@@ -963,6 +1021,48 @@ mod tests {
         let h = drag_frame(&g, Grip::Edge(1), (200.0, 250.0), (200.0, 270.0), None);
         assert!((h.w - 220.0).abs() < 1e-3 && (h.h - 100.0).abs() < 1e-3);
         assert!((h.cx - 200.0).abs() < 1e-3 && (h.cy - 160.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn turning_a_frame_inside_the_canvas_shrinks_it_to_stay_inside() {
+        let mut f = Frame::whole(200, 100);
+        f.pristine = false;
+        // 10° clockwise about (100, 50): the corner (100, 50) from the
+        // centre turns to (89.80, 66.61), so the height limits the scale to
+        // 50 / 66.61 = 0.7507.
+        let a = 10f32.to_radians();
+        let g = drag_frame(
+            &f,
+            Grip::Rotate,
+            (300.0, 50.0),
+            (100.0 + 200.0 * a.cos(), 50.0 + 200.0 * a.sin()),
+            None,
+        );
+        assert!((g.angle - a).abs() < 1e-5);
+        assert!(
+            (g.w - 150.14).abs() < 0.02 && (g.h - 75.07).abs() < 0.02,
+            "{} × {}",
+            g.w,
+            g.h
+        );
+        assert!(g
+            .corners()
+            .iter()
+            .all(|&(x, y)| (-0.01..=200.01).contains(&x) && (-0.01..=100.01).contains(&y)));
+        // Turning back to level restores nothing beyond the start: the
+        // start frame of a new drag is the shrunk one.
+        let h = drag_frame(&g, Grip::Rotate, (300.0, 50.0), (300.0, 50.0), None);
+        assert!((h.w - g.w).abs() < 1e-3);
+        // A frame reaching past the canvas keeps its size when turned.
+        let big = Frame { w: 260.0, ..f };
+        let k = drag_frame(
+            &big,
+            Grip::Rotate,
+            (300.0, 50.0),
+            (100.0 + 200.0 * a.cos(), 50.0 + 200.0 * a.sin()),
+            None,
+        );
+        assert_eq!((k.w, k.h), (260.0, 100.0));
     }
 
     #[test]
