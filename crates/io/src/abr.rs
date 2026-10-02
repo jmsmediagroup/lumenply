@@ -57,8 +57,9 @@ pub enum AbrShape {
     },
 }
 
-/// Largest tip side read (Photoshop's own limit is 5000).
-const MAX_SIDE: i64 = 10_000;
+/// Largest tip side read (Photoshop's own limit is 5000; the engine's
+/// `MAX_TIP_SIDE` is 8192).
+const MAX_SIDE: i64 = 8192;
 
 fn err(msg: impl Into<String>) -> IoError {
     IoError::Codec(format!("ABR: {}", msg.into()))
@@ -366,7 +367,14 @@ fn image(b: &mut Reader) -> R<(u32, u32, u16, Vec<u16>)> {
         1 => {
             let mut lens = Vec::with_capacity(h);
             for _ in 0..h {
-                lens.push(b.u16()? as usize);
+                let len = b.u16()? as usize;
+                // PackBits expands at most 64-fold (2 bytes → 128): a row
+                // claiming more is corrupt, and would let a tiny file
+                // allocate gigabytes.
+                if len * 64 < row {
+                    return Err("a compressed row is too short for the tip's width".into());
+                }
+                lens.push(len);
             }
             let mut out = Vec::with_capacity(row * h);
             for len in lens {
@@ -461,13 +469,26 @@ fn descriptor_presets(d: &[u8]) -> Vec<PresetInfo> {
     let mut out = Vec::new();
     let mut cur = PresetInfo::default();
     let mut i = 0;
+    // Past a preset's `dualBrush` key, tips and values belong to the
+    // second brush, not the preset's own.
+    let mut dual = false;
     while i + 8 <= d.len() {
         let rest = &d[i..];
         if rest.starts_with(b"brushPreset") {
             if cur != PresetInfo::default() {
                 out.push(std::mem::take(&mut cur));
             }
+            dual = false;
             i += 11;
+            continue;
+        }
+        if rest.starts_with(b"dualBrush") {
+            dual = true;
+            i += 9;
+            continue;
+        }
+        if dual {
+            i += 1;
             continue;
         }
         if rest.starts_with(b"computedBrush") {
@@ -695,6 +716,11 @@ mod tests {
         desc.extend(unit_float(b"Angl", b"#Ang", -15.0));
         desc.extend(unit_float(b"Rndn", b"#Prc", 50.0));
         desc.extend(unit_float(b"Spcn", b"#Prc", 25.0));
+        // Its dual brush is sampled: that tip and size are not the preset's.
+        desc.extend(b"\0\0\0\x09dualBrushObjc\0\0\0\x01\0\0\0\0\0\0\0\x09dualBrush\0\0\0\x02");
+        desc.extend(unit_float(b"Dmtr", b"#Pxl", 99.0));
+        desc.extend(b"\0\0\0\x0BsampledDataTEXT");
+        desc.extend(ucs2("uuid-a"));
         let mut file = be16(6).to_vec();
         file.extend(be16(1));
         file.extend(section(b"samp", &samp));
@@ -798,6 +824,31 @@ mod tests {
             f
         };
         assert!(msg(&only_bad).contains("no brushes could be read: tip 1: a tip of 0×5 px is out of range"));
+        // A decompression bomb: an 8000×8000 16-bit tip whose PackBits
+        // rows are all empty is refused before anything is allocated.
+        let bomb = {
+            let mut f = be16(6).to_vec();
+            f.extend(be16(1));
+            let img = image_bytes(8000, 8000, 16, 1, &[0u8; 16_000]);
+            f.extend(section(b"samp", &samp_entry("a", 1, &img)));
+            f
+        };
+        assert!(
+            msg(&bomb).contains("a compressed row is too short"),
+            "{}",
+            msg(&bomb)
+        );
+        // Wider than the engine takes.
+        let wide = {
+            let mut f = be16(6).to_vec();
+            f.extend(be16(1));
+            f.extend(section(
+                b"samp",
+                &samp_entry("a", 1, &image_bytes(9000, 1, 8, 0, &[])),
+            ));
+            f
+        };
+        assert!(msg(&wide).contains("9000×1 px is out of range"), "{}", msg(&wide));
         // Truncated image data.
         let mut short = be16(1).to_vec();
         short.extend(be16(1));

@@ -2137,7 +2137,7 @@ fn heal_dab(
     if r <= 0.0 {
         return;
     }
-    let pad = (r * brush.reach()).ceil() as i32 + 2;
+    let pad = (r * brush.reach() + brush.margin()).ceil() as i32 + 2;
     let region = Rect::new(
         p.x as i32 - pad,
         p.y as i32 - pad,
@@ -2664,6 +2664,17 @@ impl Brush {
     pub fn reach(&self) -> f32 {
         self.tip.as_ref().map_or(1.0, |t| t.reach())
     }
+
+    /// Canvas pixels a sampled tip can reach beyond `radius × reach()`
+    /// when stamped small ([`crate::brush_tip::TIP_MARGIN`]); 0 for the
+    /// round tip.
+    pub fn margin(&self) -> f32 {
+        if self.tip.is_some() {
+            crate::brush_tip::TIP_MARGIN
+        } else {
+            0.0
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2702,7 +2713,7 @@ pub struct PaintStroke {
 /// Bounding box of a stroke's dabs, grown by the brush radius.
 pub fn stroke_bounds(brush: &Brush, points: &[StrokePoint], canvas: Rect) -> Rect {
     let scatter = brush.jitter.clamp(0.0, crate::brush_tip::MAX_SCATTER);
-    let r = (brush.radius * (brush.reach() + scatter)).ceil() as i32 + 2;
+    let r = (brush.radius * (brush.reach() + scatter) + brush.margin()).ceil() as i32 + 2;
     let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
     for p in points {
         x0 = x0.min(p.x.floor() as i32 - r);
@@ -2755,7 +2766,8 @@ impl Command for PaintStroke {
                 if let Some(p) = prev {
                     let (ox, oy) = ((d.x - p.x).round() as i32, (d.y - p.y).round() as i32);
                     if ox != 0 || oy != 0 {
-                        let r = ((self.brush.radius * self.brush.reach()).ceil() as i32 + 2).max(1);
+                        let reach = self.brush.radius * self.brush.reach() + self.brush.margin();
+                        let r = (reach.ceil() as i32 + 2).max(1);
                         let (sx, sy) = (d.x.round() as i32 - ox - r, d.y.round() as i32 - oy - r);
                         let side = (2 * r + 1) as usize;
                         let mut snap = vec![Rgba::TRANSPARENT; side * side];

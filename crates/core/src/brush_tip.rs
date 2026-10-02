@@ -49,7 +49,10 @@ impl Level {
     /// centres at `i + 0.5`); outside the image the tip is empty.
     #[inline]
     fn bilinear(&self, x: f32, y: f32) -> f32 {
-        let (fx, fy) = (x - 0.5, y - 0.5);
+        // Clamped well outside the image (where it reads as empty), so a
+        // wild coordinate can't overflow the integer neighbours.
+        let fx = (x - 0.5).clamp(-2.0, self.w as f32 + 1.0);
+        let fy = (y - 0.5).clamp(-2.0, self.h as f32 + 1.0);
         let (x0, y0) = (fx.floor(), fy.floor());
         let (tx, ty) = (fx - x0, fy - y0);
         let (x0, y0) = (x0 as isize, y0 as isize);
@@ -76,15 +79,28 @@ impl Level {
 /// Largest tip side accepted (Photoshop's limit is 5000).
 pub const MAX_TIP_SIDE: u32 = 8192;
 
+/// A tip's size is checked before its pixels are converted, so a bogus
+/// size can't allocate first and fail later.
+fn check_size(width: u32, height: u32) -> Result<(), String> {
+    if width == 0 || height == 0 || width > MAX_TIP_SIDE || height > MAX_TIP_SIDE {
+        return Err(format!(
+            "a brush tip must be 1–{MAX_TIP_SIDE} px on a side, not {width}×{height}"
+        ));
+    }
+    Ok(())
+}
+
+/// Canvas pixels a minified sampled tip can reach beyond
+/// `radius × reach()`: with the footprint capped at two canvas pixels
+/// (see [`stamp`]), the coarsest level's fade adds at most 2 px and its
+/// zero padding at most 4 px per axis — under 9 px once turned.
+pub const TIP_MARGIN: f32 = 9.0;
+
 impl BrushTip {
     /// A tip from coverage values in `[0, 1]`, row-major. Values are
     /// clamped; NaN reads as no paint.
     pub fn new(name: impl Into<String>, width: u32, height: u32, coverage: Vec<f32>) -> Result<Self, String> {
-        if width == 0 || height == 0 || width > MAX_TIP_SIDE || height > MAX_TIP_SIDE {
-            return Err(format!(
-                "a brush tip must be 1–{MAX_TIP_SIDE} px on a side, not {width}×{height}"
-            ));
-        }
+        check_size(width, height)?;
         if coverage.len() != width as usize * height as usize {
             return Err(format!(
                 "a {width}×{height} brush tip needs {} values, got {}",
@@ -115,6 +131,7 @@ impl BrushTip {
 
     /// A tip from 8-bit gray, 255 = full paint (Photoshop's sampled tips).
     pub fn from_gray8(name: impl Into<String>, width: u32, height: u32, gray: &[u8]) -> Result<Self, String> {
+        check_size(width, height)?;
         Self::new(
             name,
             width,
@@ -130,6 +147,7 @@ impl BrushTip {
         height: u32,
         gray: &[u16],
     ) -> Result<Self, String> {
+        check_size(width, height)?;
         Self::new(
             name,
             width,
@@ -199,6 +217,20 @@ pub struct TipSampler<'a> {
 }
 
 impl TipSampler<'_> {
+    /// How far past the tip's right and bottom edges (in tip pixels) this
+    /// sampler can still read coverage: half a texel of bilinear fade at
+    /// the coarsest level it reads, plus that level's zero padding (odd
+    /// sizes round up when halved). The left and top edges get the fade
+    /// only, so this bounds both sides.
+    pub fn margin(&self) -> (f32, f32) {
+        let top = (self.l0 + (self.t > 0.0) as usize).min(self.tip.levels.len() - 1);
+        let texel = (1u64 << top) as f32;
+        let level = &self.tip.levels[top];
+        let pad_x = level.w as f32 * texel - self.tip.width as f32;
+        let pad_y = level.h as f32 * texel - self.tip.height as f32;
+        (0.5 * texel + pad_x, 0.5 * texel + pad_y)
+    }
+
     /// Coverage at `(x, y)` in tip pixels.
     #[inline]
     pub fn at(&self, x: f32, y: f32) -> f32 {
@@ -216,7 +248,8 @@ impl BrushTip {
     /// The farthest a covered pixel can lie from the dab centre, as a
     /// multiple of the dab radius, at any angle: half the diagonal of the
     /// tip grown by half a texel each side (the bilinear fade) over half
-    /// its longer side.
+    /// its longer side. A minified dab reads coarser levels that spread a
+    /// little further; that is bounded in canvas pixels by [`TIP_MARGIN`].
     pub fn reach(&self) -> f32 {
         let (w, h) = (self.width as f32, self.height as f32);
         (w + 1.0).hypot(h + 1.0) / w.max(h)
@@ -595,16 +628,22 @@ pub(crate) fn stamp(
     }
     let rho = d.roundness.clamp(0.01, 1.0);
     let (sin, cos) = d.angle.sin_cos();
-    // Half extents of the unturned footprint, and canvas px per tip px.
-    // A sampled tip reaches half a texel past its edge, where bilinear
-    // filtering fades it out (see [`BrushTip::reach`]).
-    let (hw, hh, scale) = match tip {
-        None => (r, r * rho, 1.0),
-        Some(t) => {
-            let scale = 2.0 * r / t.width.max(t.height) as f32;
-            let (w, h) = (t.width as f32 + 1.0, t.height as f32 + 1.0);
-            (w * scale * 0.5, h * scale * 0.5 * rho, scale)
+    // Canvas px per tip px, and the sampler: the mip level follows the
+    // squashed axis's footprint, but no coarser than two canvas pixels
+    // along the other, so the blur (and how far it spreads) stays small.
+    let scale = tip.map_or(1.0, |t| 2.0 * r / t.width.max(t.height) as f32);
+    let sampler = tip.map(|t| t.sampler((1.0 / (scale * rho)).min(2.0 / scale)));
+    // Half extents of the unturned footprint. A sampled tip reaches past
+    // its edge by its levels' bilinear fade and zero padding (`margin`).
+    let (hw, hh) = match (tip, &sampler) {
+        (Some(t), Some(s)) => {
+            let (mx, my) = s.margin();
+            (
+                (t.width as f32 * 0.5 + mx) * scale,
+                (t.height as f32 * 0.5 + my) * scale * rho,
+            )
         }
+        _ => (r, r * rho),
     };
     let ex = (hw * cos).abs() + (hh * sin).abs();
     let ey = (hw * sin).abs() + (hh * cos).abs();
@@ -614,7 +653,6 @@ pub(crate) fn stamp(
     let y1 = (d.y + ey).ceil() as i32;
     let area = Rect::new(x0, y0, (x1 - x0 + 1) as u32, (y1 - y0 + 1) as u32).intersect(&canvas);
     let hard = hardness.clamp(0.0, 0.999);
-    let sampler = tip.map(|t| t.sampler(1.0 / (scale * rho)));
     for py in area.y..area.bottom() {
         for px in area.x..area.right() {
             let dx = px as f32 + 0.5 - d.x;
@@ -1188,6 +1226,57 @@ mod stroke_tests {
             vec![StrokePoint::new(40.5, 30.5, 1.0)],
         );
         assert_eq!((px(&d, 40, 37).a, px(&d, 47, 30).a), (1.0, 0.0));
+    }
+
+    #[test]
+    fn minified_tips_are_stamped_whole_without_a_clipped_fade() {
+        // Solid tips touching their borders, stamped small (coarse mip
+        // levels with zero padding), squashed and turned: the stamp must
+        // visit every pixel the sampler gives coverage to, and all of them
+        // lie within radius × reach + TIP_MARGIN (what stroke_bounds uses).
+        for (side, radius, rho, angle) in [
+            (200u32, 25.0f32, 0.25f32, 30f32),
+            (100, 6.0, 1.0, 0.0),
+            (37, 3.3, 0.6, 75.0),
+            (8, 20.0, 0.4, -20.0),
+        ] {
+            let tip = BrushTip::new("solid", side, side, vec![1.0; (side * side) as usize]).unwrap();
+            let d = Dab {
+                x: 60.3,
+                y: 50.7,
+                radius,
+                opacity: 1.0,
+                angle: angle.to_radians(),
+                roundness: rho,
+                flip_x: false,
+                flip_y: false,
+                color: None,
+            };
+            let mut got = std::collections::HashMap::new();
+            stamp(Some(&tip), 1.0, &d, Rect::new(0, 0, 120, 100), |x, y, c| {
+                got.insert((x, y), c);
+            });
+            let scale = 2.0 * radius / side as f32;
+            let s = tip.sampler((1.0 / (scale * rho)).min(2.0 / scale));
+            let (sin, cos) = d.angle.sin_cos();
+            let mut painted = 0;
+            for y in 0..100 {
+                for x in 0..120 {
+                    let (dx, dy) = (x as f32 + 0.5 - d.x, y as f32 + 0.5 - d.y);
+                    let lx = dx * cos - dy * sin;
+                    let ly = (dx * sin + dy * cos) / rho;
+                    let half = side as f32 * 0.5;
+                    let want = s.at(lx / scale + half, ly / scale + half);
+                    let have = got.get(&(x, y)).copied().unwrap_or(0.0);
+                    assert_eq!(have, want, "side {side} at ({x}, {y})");
+                    if want > 0.0 {
+                        painted += 1;
+                        assert!(dx.hypot(dy) <= radius * tip.reach() + TIP_MARGIN, "side {side}");
+                    }
+                }
+            }
+            assert!(painted > 10, "side {side}: {painted}");
+        }
     }
 
     #[test]

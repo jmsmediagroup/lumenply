@@ -559,6 +559,13 @@ impl App {
             self.status = "Select the part of the image to make a tip from".into();
             return;
         }
+        // Checked before compositing: a tip's own limit, so a huge canvas
+        // without a selection costs nothing.
+        let most = lumenply_core::brush_tip::MAX_TIP_SIDE;
+        if area.w > most || area.h > most {
+            self.status = format!("Select at most {most}×{most} px to make a brush tip from");
+            return;
+        }
         // Only the selected area is composited.
         let flat = lumenply_render::composite_rect(doc, area).to_raster(area);
         let enc = lumenply_doc::adjust::srgb_encode;
@@ -803,22 +810,28 @@ impl App {
         cells.extend(self.brushes.tips.iter().map(|t| (t.id.clone(), t.name.clone())));
         let rows = cells.len().div_ceil(PER_ROW);
         let mut pick = None;
-        let out = egui::ScrollArea::vertical()
-            .id_salt("brush-tip-grid")
-            .max_height(3.0 * (CELL + 4.0))
-            .auto_shrink([false, true])
-            .show_rows(ui, CELL, rows, |ui, range| {
+        // The spacing is set before `show_rows`, which works out the row
+        // pitch (and so what is in view while scrolling) from it.
+        let out = ui
+            .scope(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-                for r in range {
-                    ui.horizontal(|ui| {
-                        for (id, name) in cells.iter().skip(r * PER_ROW).take(PER_ROW) {
-                            if self.tip_cell(ui, id, name) {
-                                pick = Some(id.clone());
-                            }
+                egui::ScrollArea::vertical()
+                    .id_salt("brush-tip-grid")
+                    .max_height(3.0 * (CELL + 4.0))
+                    .auto_shrink([false, true])
+                    .show_rows(ui, CELL, rows, |ui, range| {
+                        for r in range {
+                            ui.horizontal(|ui| {
+                                for (id, name) in cells.iter().skip(r * PER_ROW).take(PER_ROW) {
+                                    if self.tip_cell(ui, id, name) {
+                                        pick = Some(id.clone());
+                                    }
+                                }
+                            });
                         }
-                    });
-                }
-            });
+                    })
+            })
+            .inner;
         a11y_scroll(ui.ctx(), &out, "Brush tips");
         if let Some(id) = pick {
             self.select_tip(&id);
@@ -1224,10 +1237,12 @@ mod tests {
         // is the tip's own (3 px wide).
         assert_eq!(app.brush.spacing, 1.0);
         assert_eq!(app.brush.radius, 1.5);
+        // The newest of that name: the shared test prefs may hold older ones.
         let preset = app
             .prefs
             .brush_presets
             .iter()
+            .rev()
             .find(|p| p.name == "Round 30")
             .expect("the computed brush became a preset");
         assert_eq!(
