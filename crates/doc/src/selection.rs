@@ -202,6 +202,12 @@ impl Mask {
         let (da, db) = (self.default, other.default);
         for c in coords {
             let b_px = other.tiles.tile(c).map(|t| t.pixels().into_owned());
+            if self.tiles.tile(c).is_none() {
+                // A fresh tile must start at this mask's default, not
+                // transparent (same rule as `Mask::set_value`).
+                self.tiles
+                    .insert(c, Arc::new(Tile::filled(Rgba::new(da, da, da, da))));
+            }
             let a_tile = self.tiles.tile_mut(c);
             for (i, p) in a_tile.pixels_mut().iter_mut().enumerate() {
                 let a = p.a;
@@ -493,6 +499,33 @@ mod tests {
         let mut z = b.clone();
         z.combine(&b, CombineOp::Subtract);
         assert!(z.is_empty());
+    }
+
+    #[test]
+    fn combining_with_select_all_keeps_the_default_coverage() {
+        // Select All has default 1.0 and no tiles. Combining a shape into it
+        // creates tiles that must start at the default, not at 0.
+        let r = Selection::rect(Rect::new(10, 10, 20, 20));
+
+        let mut s = Selection::all();
+        s.combine(&r, CombineOp::Subtract);
+        assert_eq!(s.value(15, 15), 0.0, "inside the subtracted rect");
+        assert_eq!(s.value(100, 100), 1.0, "same tile, outside the rect");
+        assert_eq!(s.value(5000, 5000), 1.0, "far away (default)");
+
+        let mut i = Selection::all();
+        i.combine(&r, CombineOp::Intersect);
+        assert_eq!(i.value(15, 15), 1.0, "inside the intersected rect");
+        assert_eq!(i.value(100, 100), 0.0, "same tile, outside the rect");
+
+        // Union with an inverted (default 1.0) selection on the other side.
+        let mut inv = Selection::rect(Rect::new(0, 0, 10, 10));
+        inv.invert(); // default 1.0, one tile with a 10×10 hole
+        let mut u = Selection::rect(Rect::new(300, 300, 10, 10));
+        u.combine(&inv, CombineOp::Union);
+        assert_eq!(u.value(305, 305), 1.0);
+        assert_eq!(u.value(5, 5), 0.0, "the hole survives the union");
+        assert_eq!(u.value(5000, 5000), 1.0, "defaults combine");
     }
 
     #[test]
