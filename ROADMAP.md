@@ -156,10 +156,13 @@ None of these could be tested in the container.
       the pen options bar, saved in .lumen, every change undoable)
 - [x] Skew and non-uniform scale in free transform (edge handles stretch one
       axis, mirror across the centre; W/H/Rotate/Skew fields in the options bar)
-- [~] Perspective transform: homography resampler (rect → quad, bilinear,
-      mask warps through the same mapping), PerspectiveLayer command, and a
-      Perspective toggle in free transform (corners drag freely, edges
-      carry both corners). Warp (mesh) still open
+- [x] Perspective and warp transforms: homography resampler (rect → quad)
+      with PerspectiveLayer, and a mesh warp (WarpGrid of (n+1)² points,
+      per-cell closed-form inverse bilinear, bilinear sampling) with
+      WarpLayer; masks follow both mappings. Edit menu + palette gain
+      Perspective and Warp (straight into the mode); free transform has
+      Perspective/Warp toggles (4×4 mesh, drag points, drag elsewhere to
+      move all; disabled with a reason for smart objects)
 - [~] Brush engine: spacing jitter, dodge/burn, smudge (drags pixels along
       the stroke from a per-dab snapshot), sponge (Sat+/Sat− scale chroma
       around gamma luminance) and presets (shape parameters saved in

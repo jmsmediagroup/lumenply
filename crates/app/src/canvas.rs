@@ -3,6 +3,9 @@ use super::*;
 /// Outlines longer than this animate as a static texture instead.
 const ANTS_MAX: usize = 20_000;
 
+/// Warp mesh resolution: cells per side (so (n+1)² control points).
+pub(crate) const WARP_CELLS: usize = 3;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ViewCmd {
     Fit,
@@ -16,6 +19,8 @@ pub(crate) enum Handle {
     Corner(usize),
     Inside,
     Rotate,
+    /// One control point of the warp mesh (row-major index).
+    WarpPoint(usize),
 }
 
 /// Which part of a path node a pen drag grabbed.
@@ -65,6 +70,11 @@ pub(crate) struct Xform {
     pub(crate) quad: Option<[(f32, f32); 4]>,
     /// The quad at the start of the current drag.
     pub(crate) qbase: [(f32, f32); 4],
+    /// Warp mode: a (WARP_CELLS+1)² mesh of free control points over the
+    /// layer bounds, row-major; exclusive with perspective.
+    pub(crate) warp: Option<Vec<(f32, f32)>>,
+    /// The mesh at the start of the current drag.
+    pub(crate) wbase: Vec<(f32, f32)>,
     pub(crate) last_preview: Rect,
 }
 
@@ -87,6 +97,10 @@ impl Xform {
 
     /// Transformed corners, in document space.
     pub(crate) fn corners(&self) -> [(f32, f32); 4] {
+        if let Some(w) = &self.warp {
+            let n = WARP_CELLS;
+            return [w[0], w[n], w[(n + 1) * (n + 1) - 1], w[n * (n + 1)]];
+        }
         if let Some(q) = self.quad {
             return q;
         }
@@ -100,7 +114,41 @@ impl Xform {
         ]
     }
 
+    /// A warp mesh that starts exactly where the box is now: the current
+    /// corners, bilinearly interpolated (exact for any affine state).
+    pub(crate) fn initial_warp(&self) -> Vec<(f32, f32)> {
+        let [a, b, c, d] = self.corners();
+        let n = WARP_CELLS;
+        let mut pts = Vec::with_capacity((n + 1) * (n + 1));
+        for j in 0..=n {
+            let v = j as f32 / n as f32;
+            for i in 0..=n {
+                let u = i as f32 / n as f32;
+                let top = (a.0 + (b.0 - a.0) * u, a.1 + (b.1 - a.1) * u);
+                let bot = (d.0 + (c.0 - d.0) * u, d.1 + (c.1 - d.1) * u);
+                pts.push((top.0 + (bot.0 - top.0) * v, top.1 + (bot.1 - top.1) * v));
+            }
+        }
+        pts
+    }
+
+    pub(crate) fn warp_grid(&self) -> Option<lumenply_render::WarpGrid> {
+        self.warp.as_ref().map(|w| lumenply_render::WarpGrid {
+            src: self.bounds,
+            cols: WARP_CELLS,
+            rows: WARP_CELLS,
+            points: w.clone(),
+        })
+    }
+
     pub(crate) fn bbox(&self) -> Rect {
+        if let Some(w) = &self.warp {
+            let x0 = w.iter().map(|p| p.0).fold(f32::INFINITY, f32::min).floor() as i32;
+            let x1 = w.iter().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max).ceil() as i32;
+            let y0 = w.iter().map(|p| p.1).fold(f32::INFINITY, f32::min).floor() as i32;
+            let y1 = w.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max).ceil() as i32;
+            return Rect::new(x0, y0, (x1 - x0).max(1) as u32, (y1 - y0).max(1) as u32);
+        }
         if self.quad.is_some() {
             let cs = self.corners();
             let xs = cs.iter().map(|p| p.0);
@@ -537,6 +585,18 @@ impl App {
         let centre_s = to_screen(cx + x.dx, cy + x.dy);
 
         let hit = |q: Pos2| -> Handle {
+            if let Some(w) = &x.warp {
+                // Nearest control point under the pointer, else move all.
+                let best = w
+                    .iter()
+                    .enumerate()
+                    .map(|(k, (px, py))| (k, to_screen(*px, *py).distance(q)))
+                    .min_by(|a, b| a.1.total_cmp(&b.1));
+                return match best {
+                    Some((k, d)) if d <= 10.0 => Handle::WarpPoint(k),
+                    _ => Handle::Inside,
+                };
+            }
             for (i, (px, py)) in x.corners().iter().enumerate() {
                 if to_screen(*px, *py).distance(q) <= 10.0 {
                     return Handle::Corner(i);
@@ -565,6 +625,7 @@ impl App {
                 Handle::Edge(_) => egui::CursorIcon::ResizeVertical,
                 Handle::Inside => egui::CursorIcon::Move,
                 Handle::Rotate => egui::CursorIcon::Alias,
+                Handle::WarpPoint(_) => egui::CursorIcon::Crosshair,
             });
         }
         if resp.drag_started_by(primary) {
@@ -575,12 +636,33 @@ impl App {
                 if let Some(quad) = x.quad {
                     x.qbase = quad;
                 }
+                if let Some(w) = &x.warp {
+                    x.wbase = w.clone();
+                }
             }
         }
         let mut changed = false;
         if let (Some(DragKind::Xform(h)), true) = (self.drag, resp.dragged_by(primary)) {
             let qbase = x.qbase;
-            if let (Some(a), Some(b), Some(quad)) =
+            let wbase = x.wbase.clone();
+            if let (Some(a), Some(b), Some(w)) =
+                (self.drag_start, resp.interact_pointer_pos(), x.warp.as_mut())
+            {
+                let (ax, ay) = to_doc(a);
+                let (bx, by) = to_doc(b);
+                let (ddx, ddy) = (bx - ax, by - ay);
+                if wbase.len() == w.len() {
+                    match h {
+                        Handle::WarpPoint(k) => w[k] = (wbase[k].0 + ddx, wbase[k].1 + ddy),
+                        _ => {
+                            for (p, q) in w.iter_mut().zip(&wbase) {
+                                *p = (q.0 + ddx, q.1 + ddy);
+                            }
+                        }
+                    }
+                    changed = true;
+                }
+            } else if let (Some(a), Some(b), Some(quad)) =
                 (self.drag_start, resp.interact_pointer_pos(), x.quad.as_mut())
             {
                 // Perspective: corners move freely, edges carry both of
@@ -596,7 +678,7 @@ impl App {
                 match h {
                     Handle::Corner(i) => shift(&[i]),
                     Handle::Edge(i) => shift(&[i, (i + 1) % 4]),
-                    Handle::Inside | Handle::Rotate => shift(&[0, 1, 2, 3]),
+                    Handle::Inside | Handle::Rotate | Handle::WarpPoint(_) => shift(&[0, 1, 2, 3]),
                 }
                 changed = true;
             } else if let (Some(a), Some(b)) = (self.drag_start, resp.interact_pointer_pos()) {
@@ -638,6 +720,7 @@ impl App {
                         let a1 = (b.y - centre_s.y).atan2(b.x - centre_s.x);
                         x.angle = x.base.2 + (a1 - a0);
                     }
+                    Handle::WarpPoint(_) => {}
                 }
                 changed = true;
             }
@@ -658,16 +741,19 @@ impl App {
     /// drag or options-bar fields).
     pub(crate) fn preview_xform(&mut self, ctx: &egui::Context, x: &mut Xform) {
         let mut preview = self.editor.doc().clone();
-        let ok = match x.quad {
-            Some(quad) => PerspectiveLayer { layer: x.layer, quad }
+        let ok = if let Some(grid) = x.warp_grid() {
+            WarpLayer { layer: x.layer, grid }.apply(&mut preview).is_ok()
+        } else if let Some(quad) = x.quad {
+            PerspectiveLayer { layer: x.layer, quad }
                 .apply(&mut preview)
-                .is_ok(),
-            None => TransformLayer {
+                .is_ok()
+        } else {
+            TransformLayer {
                 layer: x.layer,
                 transform: x.affine(),
             }
             .apply(&mut preview)
-            .is_ok(),
+            .is_ok()
         };
         if ok {
             let area = x.last_preview.union(&x.bbox());
@@ -1734,6 +1820,33 @@ pub(crate) fn point_in_convex(poly: &[Pos2], q: Pos2) -> bool {
 }
 
 pub(crate) fn paint_xform_box(painter: &egui::Painter, x: &Xform, to_screen: impl Fn(f32, f32) -> Pos2) {
+    if let Some(w) = &x.warp {
+        let n = WARP_CELLS + 1;
+        let at = |i: usize, j: usize| {
+            let (px, py) = w[j * n + i];
+            to_screen(px, py)
+        };
+        let mut lines: Vec<Vec<Pos2>> = Vec::new();
+        for j in 0..n {
+            lines.push((0..n).map(|i| at(i, j)).collect());
+        }
+        for i in 0..n {
+            lines.push((0..n).map(|j| at(i, j)).collect());
+        }
+        for l in lines {
+            painter.add(Shape::line(
+                l.clone(),
+                Stroke::new(2.0, Color32::from_black_alpha(140)),
+            ));
+            painter.add(Shape::line(l, Stroke::new(1.0, Color32::WHITE)));
+        }
+        for &(px, py) in w {
+            let p = to_screen(px, py);
+            painter.circle_filled(p, 4.0, Color32::WHITE);
+            painter.circle_stroke(p, 4.0, Stroke::new(1.0, ACCENT));
+        }
+        return;
+    }
     let pts: Vec<Pos2> = x.corners().iter().map(|(px, py)| to_screen(*px, *py)).collect();
     let mut closed = pts.clone();
     closed.push(pts[0]);
@@ -1793,5 +1906,62 @@ pub(crate) fn paint_checker(painter: &egui::Painter, doc_rect: egui::Rect, clip:
                 painter.rect_filled(r, 0.0, Color32::from_gray(188));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn xform(bounds: Rect) -> Xform {
+        Xform {
+            layer: 1,
+            bounds,
+            sx: 1.0,
+            sy: 1.0,
+            shear: 0.0,
+            angle: 0.0,
+            dx: 0.0,
+            dy: 0.0,
+            base: (1.0, 1.0, 0.0, 0.0, 0.0),
+            quad: None,
+            qbase: [(0.0, 0.0); 4],
+            warp: None,
+            wbase: Vec::new(),
+            last_preview: bounds,
+        }
+    }
+
+    #[test]
+    fn a_fresh_warp_mesh_starts_exactly_where_the_box_is() {
+        // Scaled, rotated and moved: toggling warp on must not shift a
+        // single mesh point, or merely switching modes would distort.
+        let mut x = xform(Rect::new(10, 20, 90, 60));
+        x.sx = 1.5;
+        x.sy = 0.75;
+        x.angle = 0.4;
+        x.dx = 12.0;
+        x.dy = -7.0;
+        let a = x.affine();
+        let mesh = x.initial_warp();
+        let identity = lumenply_render::WarpGrid::identity(x.bounds, WARP_CELLS, WARP_CELLS);
+        assert_eq!(mesh.len(), identity.points.len());
+        for (m, p) in mesh.iter().zip(&identity.points) {
+            let (ex, ey) = a.apply(p.0, p.1);
+            assert!(
+                (m.0 - ex).abs() < 1e-3 && (m.1 - ey).abs() < 1e-3,
+                "mesh point {m:?} vs affine {:?}",
+                (ex, ey)
+            );
+        }
+        // With the mesh on, the box corners are the mesh corners and the
+        // bounding box covers them.
+        x.warp = Some(mesh.clone());
+        assert_eq!(x.corners()[0], mesh[0]);
+        assert_eq!(x.corners()[2], mesh[mesh.len() - 1]);
+        let b = x.bbox();
+        assert!(mesh
+            .iter()
+            .all(|p| b.contains(p.0.floor() as i32, p.1.floor() as i32)));
     }
 }

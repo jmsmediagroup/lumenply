@@ -902,6 +902,70 @@ impl Command for PerspectiveLayer {
     }
 }
 
+/// Bend a pixel layer through a warp mesh laid over its painted bounds.
+/// The mask warps through the same mesh, so it stays registered.
+pub struct WarpLayer {
+    pub layer: LayerId,
+    pub grid: lumenply_render::WarpGrid,
+}
+
+impl Command for WarpLayer {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn label(&self) -> String {
+        "Warp".into()
+    }
+
+    fn affected(&self, doc: &Document) -> Option<Rect> {
+        let old = doc
+            .layer(self.layer)
+            .and_then(|l| l.pixels())
+            .and_then(|s| s.content_bounds())?;
+        if !self.grid.is_valid() {
+            return Some(old);
+        }
+        let xs = self.grid.points.iter().map(|p| p.0);
+        let ys = self.grid.points.iter().map(|p| p.1);
+        let x0 = xs.clone().fold(f32::INFINITY, f32::min).floor() as i32 - 1;
+        let x1 = xs.fold(f32::NEG_INFINITY, f32::max).ceil() as i32 + 1;
+        let y0 = ys.clone().fold(f32::INFINITY, f32::min).floor() as i32 - 1;
+        let y1 = ys.fold(f32::NEG_INFINITY, f32::max).ceil() as i32 + 1;
+        let new = Rect::new(x0, y0, (x1 - x0).max(1) as u32, (y1 - y0).max(1) as u32);
+        Some(old.union(&new).intersect(&doc.canvas()))
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        if !self.grid.is_valid() {
+            return Err(EditError::Invalid("the warp mesh is malformed".into()));
+        }
+        let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
+        let store = match &mut l.content {
+            LayerContent::Pixel(store) => store,
+            LayerContent::Text(_) => {
+                return Err(EditError::Invalid(
+                    "rasterize the text layer before warping it".into(),
+                ))
+            }
+            LayerContent::Smart(_) => {
+                return Err(EditError::Invalid(
+                    "smart objects keep affine transforms only; rasterize before warping".into(),
+                ))
+            }
+            _ => return Err(EditError::NotPixel(self.layer)),
+        };
+        if store.content_bounds().is_none() {
+            return Err(EditError::Invalid("the layer has no pixels to warp".into()));
+        }
+        *store = lumenply_render::warp_store(store, &self.grid);
+        if let Some(m) = l.mask.as_mut() {
+            *m = lumenply_render::warp_mask(m, &self.grid);
+        }
+        Ok(())
+    }
+}
+
 /// Mirror a pixel layer about the vertical or horizontal axis of its bounds.
 pub struct FlipLayer {
     pub layer: LayerId,
@@ -3704,6 +3768,58 @@ mod tests {
         assert!(PerspectiveLayer {
             layer: id,
             quad: [(0.0, 0.0); 4]
+        }
+        .apply(&mut doc)
+        .is_err());
+    }
+
+    #[test]
+    fn warp_layer_bends_pixels_and_mask_together() {
+        let mut doc = Document::new(64, 64);
+        let id = doc.add_pixel_layer("L");
+        for y in 8..56 {
+            for x in 8..56 {
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(0.3, 0.6, 0.9, 1.0),
+                );
+            }
+        }
+        // Mask hides the left half.
+        let mut mask = Mask::reveal_all();
+        for y in 8..56 {
+            for x in 8..32 {
+                mask.set_value(x, y, 0.0);
+            }
+        }
+        doc.layer_mut(id).unwrap().mask = Some(mask);
+        let src = doc.layer(id).unwrap().pixels().unwrap().content_bounds().unwrap();
+
+        // Pull the centre of a 2×2-cell mesh 10 px right: the mask's
+        // vertical edge at mid-height moves with it, the top edge stays.
+        let mut grid = lumenply_render::WarpGrid::identity(src, 2, 2);
+        grid.points[4].0 += 10.0;
+        let cmd = WarpLayer { layer: id, grid };
+        assert!(cmd.affected(&doc).unwrap().contains(40, 32));
+        cmd.apply(&mut doc).unwrap();
+        let m = doc.layer(id).unwrap().mask.as_ref().unwrap();
+        assert!(m.value(38, 32) < 0.1, "mask edge bent right at mid-height");
+        assert!(m.value(34, 9) > 0.9, "mask edge stays put at the pinned top");
+        assert!(doc.layer(id).unwrap().pixels().unwrap().get_pixel(32, 32).a > 0.99);
+
+        // A malformed mesh and a text layer both refuse.
+        let mut bad = lumenply_render::WarpGrid::identity(src, 2, 2);
+        bad.points.truncate(3);
+        assert!(WarpLayer { layer: id, grid: bad }.apply(&mut doc).is_err());
+        let tid = doc.alloc_id();
+        doc.add_layer(Layer::text(
+            tid,
+            lumenply_doc::TextLayer::new("x", 0.0, 10.0, 12.0, [0.0, 0.0, 0.0, 1.0]),
+        ));
+        assert!(WarpLayer {
+            layer: tid,
+            grid: lumenply_render::WarpGrid::identity(src, 2, 2)
         }
         .apply(&mut doc)
         .is_err());

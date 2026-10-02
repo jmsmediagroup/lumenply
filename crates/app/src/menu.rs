@@ -142,15 +142,54 @@ impl App {
             base: (1.0, 1.0, 0.0, 0.0, 0.0),
             quad: None,
             qbase: [(0.0, 0.0); 4],
+            warp: None,
+            wbase: Vec::new(),
             last_preview: b,
         });
         self.status =
             "Free transform: corners scale, edges stretch one axis, outside rotates, inside moves".into();
     }
 
+    /// Free transform straight into perspective mode.
+    pub(crate) fn begin_perspective(&mut self) {
+        if !self.active_is_pixel() {
+            self.status = "Perspective needs a pixel layer (rasterize smart objects first)".into();
+            return;
+        }
+        self.begin_free_transform();
+        if let Some(x) = self.xform.as_mut() {
+            x.quad = Some(x.corners());
+            self.status = "Perspective: drag each corner freely; Enter applies".into();
+        }
+    }
+
+    /// Free transform straight into warp mode.
+    pub(crate) fn begin_warp(&mut self) {
+        if !self.active_is_pixel() {
+            self.status = "Warp needs a pixel layer (rasterize smart objects first)".into();
+            return;
+        }
+        self.begin_free_transform();
+        if let Some(x) = self.xform.as_mut() {
+            let mesh = x.initial_warp();
+            x.warp = Some(mesh);
+            self.status = "Warp: drag any mesh point; drag elsewhere moves it all; Enter applies".into();
+        }
+    }
+
     pub(crate) fn commit_free_transform(&mut self) {
         if let Some(x) = self.xform.take() {
-            if let Some(quad) = x.quad {
+            if let Some(grid) = x.warp_grid() {
+                let identity = lumenply_render::WarpGrid::identity(x.bounds, grid.cols, grid.rows);
+                let moved = grid
+                    .points
+                    .iter()
+                    .zip(&identity.points)
+                    .any(|(a, b)| (a.0 - b.0).abs() > 1e-3 || (a.1 - b.1).abs() > 1e-3);
+                if moved {
+                    self.run(&WarpLayer { layer: x.layer, grid });
+                }
+            } else if let Some(quad) = x.quad {
                 let b = x.bounds;
                 let identity = [
                     (b.x as f32, b.y as f32),
@@ -298,11 +337,20 @@ impl App {
                         }
                         ui.separator();
                         let pixel = self.active_is_pixel();
+                        let smart = self.active_layer().is_some_and(|l| l.smart_layer().is_some());
                         if ui
-                            .add_enabled(pixel, egui::Button::new("Free transform   Ctrl+T"))
+                            .add_enabled(pixel || smart, egui::Button::new("Free transform   Ctrl+T"))
                             .clicked()
                         {
                             self.begin_free_transform();
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(pixel, egui::Button::new("Perspective")).clicked() {
+                            self.begin_perspective();
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(pixel, egui::Button::new("Warp")).clicked() {
+                            self.begin_warp();
                             ui.close_menu();
                         }
                         if ui

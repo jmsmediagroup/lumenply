@@ -53,6 +53,8 @@ impl App {
             m("Fill with brush colour", "Shift+F5", "fill"),
             m("Clear", "Delete", "clear"),
             m("Free transform", "Ctrl+T", "xform"),
+            m("Perspective transform", "", "perspective"),
+            m("Warp", "", "warp"),
             m("Select all", "Ctrl+A", "select-all"),
             m("Deselect", "Ctrl+D", "deselect"),
             m("Invert selection", "Ctrl+Shift+I", "invert-sel"),
@@ -263,6 +265,8 @@ impl App {
             "fill" => self.fill_active(),
             "clear" => self.clear_active(),
             "xform" => self.begin_free_transform(),
+            "perspective" => self.begin_perspective(),
+            "warp" => self.begin_warp(),
             "select-all" => self.run(&SetSelection {
                 selection: Some(Selection::all()),
             }),

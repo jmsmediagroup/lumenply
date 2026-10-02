@@ -373,6 +373,203 @@ pub fn perspective_mask(mask: &lumenply_doc::Mask, h: &Homography) -> lumenply_d
     out
 }
 
+/// A warp mesh: `(cols + 1) × (rows + 1)` destination points, row-major,
+/// for a regular grid laid over `src`. Point `(i, j)` is where the grid
+/// intersection at column line `i`, row line `j` of `src` lands.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WarpGrid {
+    pub src: Rect,
+    pub cols: usize,
+    pub rows: usize,
+    pub points: Vec<(f32, f32)>,
+}
+
+impl WarpGrid {
+    /// The undistorted grid over `src`.
+    pub fn identity(src: Rect, cols: usize, rows: usize) -> WarpGrid {
+        let mut points = Vec::with_capacity((cols + 1) * (rows + 1));
+        for j in 0..=rows {
+            for i in 0..=cols {
+                points.push((
+                    src.x as f32 + src.w as f32 * i as f32 / cols.max(1) as f32,
+                    src.y as f32 + src.h as f32 * j as f32 / rows.max(1) as f32,
+                ));
+            }
+        }
+        WarpGrid {
+            src,
+            cols,
+            rows,
+            points,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.cols >= 1
+            && self.rows >= 1
+            && self.cols <= 64
+            && self.rows <= 64
+            && !self.src.is_empty()
+            && self.points.len() == (self.cols + 1) * (self.rows + 1)
+            && self.points.iter().all(|p| p.0.is_finite() && p.1.is_finite())
+    }
+
+    #[inline]
+    pub fn point(&self, i: usize, j: usize) -> (f32, f32) {
+        self.points[j * (self.cols + 1) + i]
+    }
+}
+
+/// Inverse of the bilinear map of quad `(a, b, c, d)` = corners at
+/// (u,v) = (0,0), (1,0), (1,1), (0,1): the `(u, v)` that lands on `p`, if
+/// it lies inside the quad (closed form; Quilez's formulation).
+fn inverse_bilinear(
+    p: (f32, f32),
+    a: (f32, f32),
+    b: (f32, f32),
+    c: (f32, f32),
+    d: (f32, f32),
+) -> Option<(f32, f32)> {
+    let cross = |x: (f32, f32), y: (f32, f32)| x.0 * y.1 - x.1 * y.0;
+    let e = (b.0 - a.0, b.1 - a.1);
+    let f = (d.0 - a.0, d.1 - a.1);
+    let g = (a.0 - b.0 + c.0 - d.0, a.1 - b.1 + c.1 - d.1);
+    let h = (p.0 - a.0, p.1 - a.1);
+    let k2 = cross(g, f);
+    let k1 = cross(e, f) + cross(h, g);
+    let k0 = cross(h, e);
+    // u from v, through whichever axis is better conditioned.
+    let u_of = |v: f32| {
+        let (dx, dy) = (e.0 + g.0 * v, e.1 + g.1 * v);
+        if dx.abs() >= dy.abs() {
+            (h.0 - f.0 * v) / dx
+        } else {
+            (h.1 - f.1 * v) / dy
+        }
+    };
+    const EPS: f32 = 1e-4;
+    let inside = |u: f32, v: f32| (-EPS..=1.0 + EPS).contains(&u) && (-EPS..=1.0 + EPS).contains(&v);
+    if k2.abs() < 1e-6 * (k1.abs() + 1.0) {
+        // Parallelogram-like cell: the quadratic degenerates to linear.
+        if k1.abs() < 1e-12 {
+            return None;
+        }
+        let v = -k0 / k1;
+        let u = u_of(v);
+        return inside(u, v).then_some((u.clamp(0.0, 1.0), v.clamp(0.0, 1.0)));
+    }
+    let disc = k1 * k1 - 4.0 * k0 * k2;
+    if disc < 0.0 {
+        return None;
+    }
+    let w = disc.sqrt();
+    for v in [(-k1 - w) / (2.0 * k2), (-k1 + w) / (2.0 * k2)] {
+        let u = u_of(v);
+        if u.is_finite() && inside(u, v) {
+            return Some((u.clamp(0.0, 1.0), v.clamp(0.0, 1.0)));
+        }
+    }
+    None
+}
+
+/// Resample `src` through a warp mesh: each destination pixel finds the
+/// cell covering it, inverts that cell's bilinear map, and samples the
+/// source bilinearly at the matching spot of the regular source grid.
+/// Content outside `grid.src` is dropped (the mesh defines no mapping
+/// there). Returns an empty store for an invalid grid.
+pub fn warp_store(src: &TileStore, grid: &WarpGrid) -> TileStore {
+    if !grid.is_valid() {
+        return TileStore::new();
+    }
+    struct Cell {
+        i: usize,
+        j: usize,
+        quad: [(f32, f32); 4],
+        bounds: Rect,
+    }
+    let mut cells = Vec::with_capacity(grid.cols * grid.rows);
+    for j in 0..grid.rows {
+        for i in 0..grid.cols {
+            let quad = [
+                grid.point(i, j),
+                grid.point(i + 1, j),
+                grid.point(i + 1, j + 1),
+                grid.point(i, j + 1),
+            ];
+            let x0 = quad.iter().map(|p| p.0).fold(f32::INFINITY, f32::min).floor() as i32 - 1;
+            let y0 = quad.iter().map(|p| p.1).fold(f32::INFINITY, f32::min).floor() as i32 - 1;
+            let x1 = quad.iter().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max).ceil() as i32 + 1;
+            let y1 = quad.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max).ceil() as i32 + 1;
+            cells.push(Cell {
+                i,
+                j,
+                quad,
+                bounds: Rect::new(x0, y0, (x1 - x0).max(1) as u32, (y1 - y0).max(1) as u32),
+            });
+        }
+    }
+    let dst_bounds = cells
+        .iter()
+        .map(|c| c.bounds)
+        .reduce(|a, b| a.union(&b))
+        .unwrap_or_default();
+    let (sw, sh) = (grid.src.w as f32, grid.src.h as f32);
+    let (cols, rows) = (grid.cols as f32, grid.rows as f32);
+    let tiles: Vec<(TileCoord, Option<Tile>)> = dst_bounds
+        .tiles()
+        .into_par_iter()
+        .map(|tc| {
+            let tr = tc.rect();
+            let (ox, oy) = tc.origin();
+            let mut tile = Tile::new();
+            let mut any = false;
+            for cell in cells.iter().filter(|c| !c.bounds.intersect(&tr).is_empty()) {
+                let r = cell.bounds.intersect(&tr);
+                let [a, b, c, d] = cell.quad;
+                for py in r.y..r.bottom() {
+                    for px in r.x..r.right() {
+                        let q = (px as f32 + 0.5, py as f32 + 0.5);
+                        let Some((u, v)) = inverse_bilinear(q, a, b, c, d) else {
+                            continue;
+                        };
+                        let sx = grid.src.x as f32 + (cell.i as f32 + u) / cols * sw;
+                        let sy = grid.src.y as f32 + (cell.j as f32 + v) / rows * sh;
+                        let p = sample_bilinear(src, sx - 0.5, sy - 0.5);
+                        if p.a > 0.0 {
+                            any = true;
+                            tile.set((px - ox) as usize, (py - oy) as usize, p);
+                        }
+                    }
+                }
+            }
+            (tc, any.then_some(tile))
+        })
+        .collect();
+    let mut out = TileStore::new();
+    for (c, tile) in tiles {
+        if let Some(t) = tile {
+            out.insert(c, Arc::new(t));
+        }
+    }
+    out
+}
+
+/// Warp a mask's coverage through the same mesh as its layer.
+pub fn warp_mask(mask: &lumenply_doc::Mask, grid: &WarpGrid) -> lumenply_doc::Mask {
+    let tiles = if mask.default == 0.0 {
+        warp_store(&mask.tiles, grid)
+    } else {
+        complement(&warp_store(&complement(&mask.tiles), grid))
+    };
+    let mut out = lumenply_doc::Mask {
+        tiles,
+        default: mask.default,
+        enabled: mask.enabled,
+    };
+    out.prune_uniform();
+    out
+}
+
 /// Bilinear sample at a continuous source position (pixel centres at
 /// integer coordinates).
 #[inline]
@@ -448,6 +645,79 @@ mod tests {
                 assert!((a.r - c.r).abs() < 1e-3 && (a.a - c.a).abs() < 1e-3, "at {x},{y}");
             }
         }
+    }
+
+    #[test]
+    fn inverse_bilinear_recovers_parameters() {
+        // A skewed, non-parallelogram quad: map known (u, v) forward, then
+        // invert.
+        let (a, b, c, d) = ((0.0, 0.0), (10.0, 1.0), (12.0, 9.0), (-1.0, 8.0));
+        let fwd = |u: f32, v: f32| {
+            let lerp = |p: (f32, f32), q: (f32, f32), t: f32| (p.0 + (q.0 - p.0) * t, p.1 + (q.1 - p.1) * t);
+            let top = lerp(a, b, u);
+            let bot = lerp(d, c, u);
+            lerp(top, bot, v)
+        };
+        for &(u, v) in &[(0.25, 0.25), (0.5, 0.5), (0.9, 0.1), (0.1, 0.8)] {
+            let (iu, iv) = inverse_bilinear(fwd(u, v), a, b, c, d).unwrap();
+            assert!(
+                (iu - u).abs() < 1e-3 && (iv - v).abs() < 1e-3,
+                "({u},{v}) -> ({iu},{iv})"
+            );
+        }
+        assert!(
+            inverse_bilinear((50.0, 50.0), a, b, c, d).is_none(),
+            "outside the quad"
+        );
+    }
+
+    #[test]
+    fn identity_warp_reproduces_and_a_moved_centre_bends_the_middle() {
+        // A 40×40 square with a single bright vertical stripe at x = 20.
+        let mut r = Raster::new(40, 40);
+        for y in 0..40 {
+            for x in 0..40 {
+                let v = if x == 20 { 1.0 } else { 0.2 };
+                r.set(x, y, Rgba::from_straight(v, v, v, 1.0));
+            }
+        }
+        let store = TileStore::from_raster(&r, 0, 0);
+        let src = store.content_bounds().unwrap();
+
+        let id = WarpGrid::identity(src, 2, 2);
+        let out = warp_store(&store, &id);
+        for y in 0..40 {
+            for x in 0..40 {
+                let (p, q) = (store.get_pixel(x, y), out.get_pixel(x, y));
+                assert!(
+                    (p.r - q.r).abs() < 1e-3 && (p.a - q.a).abs() < 1e-3,
+                    "identity at {x},{y}"
+                );
+            }
+        }
+
+        // Push the centre point (index 4 of the 3×3 grid) right by 8 px.
+        let mut bent = WarpGrid::identity(src, 2, 2);
+        bent.points[4].0 += 8.0;
+        let out = warp_store(&store, &bent);
+        let brightest = |y: i32| {
+            (0..40).max_by(|&a, &b| out.get_pixel(a, y).r.partial_cmp(&out.get_pixel(b, y).r).unwrap())
+        };
+        assert_eq!(
+            brightest(20),
+            Some(28),
+            "stripe follows the centre point at mid-height"
+        );
+        assert_eq!(brightest(0), Some(20), "the pinned top edge keeps the stripe");
+        assert_eq!(brightest(39), Some(20), "the pinned bottom edge keeps the stripe");
+        // The outline is unchanged: the corners and edge points did not move.
+        let b = out.content_bounds().unwrap();
+        assert_eq!((b.x, b.y, b.w, b.h), (0, 0, 40, 40));
+
+        // Invalid grids produce nothing rather than panicking.
+        let mut bad = WarpGrid::identity(src, 2, 2);
+        bad.points.pop();
+        assert!(warp_store(&store, &bad).is_empty());
     }
 
     #[test]

@@ -24,7 +24,7 @@ pub use filters::{apply_filter, filter_raster, Filter};
 pub use gpu::GpuCompositor;
 pub use transform::{
     perspective_mask, perspective_store, perspective_store_h, sample_bilinear, transform_mask,
-    transform_store, Homography,
+    transform_store, warp_mask, warp_store, Homography, WarpGrid,
 };
 
 use lumenply_doc::{Adjustment, BlendMode, Document, Layer, LayerContent, Mask};

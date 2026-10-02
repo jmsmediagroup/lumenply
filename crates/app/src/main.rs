@@ -98,6 +98,38 @@ impl App {
     /// backend for a frame grab, save it, quit. Lets the UI be inspected
     /// without macOS screen-recording permission.
     fn debug_screenshot(&mut self, ctx: &egui::Context) {
+        // `--screenshot-do a,b,...`: palette action ids run once before the
+        // capture, so UI states behind a click can be verified headlessly.
+        // Two debug-only tokens: `select-pixel` activates the topmost pixel
+        // layer; `debug-bend` drags an inner warp point.
+        if self.shot.is_some() && !self.shot_do.is_empty() {
+            for act in std::mem::take(&mut self.shot_do) {
+                match act.as_str() {
+                    "select-pixel" => {
+                        let id = self
+                            .editor
+                            .doc()
+                            .layers()
+                            .iter()
+                            .rev()
+                            .find(|l| l.pixels().is_some())
+                            .map(|l| l.id);
+                        self.set_active(id);
+                    }
+                    "debug-bend" => {
+                        if let Some(mut x) = self.xform.clone() {
+                            if let Some(w) = x.warp.as_mut() {
+                                w[5].0 += 90.0;
+                                w[5].1 -= 60.0;
+                            }
+                            self.preview_xform(ctx, &mut x);
+                            self.xform = Some(x);
+                        }
+                    }
+                    other => self.run_menu_action(other),
+                }
+            }
+        }
         let Some((path, frames_left)) = &mut self.shot else {
             return;
         };
@@ -252,6 +284,8 @@ struct App {
     /// Debug: save a screenshot of the window here after a few frames,
     /// then exit (`--screenshot path.png`). Used to verify the UI headlessly.
     shot: Option<(PathBuf, u32)>,
+    /// Debug: actions to run before the screenshot (`--screenshot-do`).
+    shot_do: Vec<String>,
     /// Documents open in other tabs, in display order with the live
     /// document occupying slot `cur_tab` (its state lives in the fields
     /// above, not in this list).
@@ -425,6 +459,12 @@ impl App {
                 .position(|a| a == "--screenshot")
                 .and_then(|i| args.get(i + 1))
                 .map(|p| (PathBuf::from(p), 6)),
+            shot_do: args
+                .iter()
+                .position(|a| a == "--screenshot-do")
+                .and_then(|i| args.get(i + 1))
+                .map(|s| s.split(',').map(str::to_string).collect())
+                .unwrap_or_default(),
             filter_previewed: false,
             status,
             tabs: Vec::new(),

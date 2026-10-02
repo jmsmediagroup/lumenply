@@ -17,7 +17,15 @@ impl App {
                         // same fields. In perspective mode the corners are
                         // free points, so the numbers go quiet.
                         let persp = x.quad.is_some();
-                        ui.add_enabled_ui(!persp, |ui| {
+                        let warping = x.warp.is_some();
+                        // Smart objects re-render through an affine only.
+                        let smart = self
+                            .editor
+                            .doc()
+                            .layer(x.layer)
+                            .is_some_and(|l| l.smart_layer().is_some());
+                        let affine_only = "Smart objects keep affine transforms; rasterize first";
+                        ui.add_enabled_ui(!persp && !warping, |ui| {
                             let mut sx = x.sx * 100.0;
                             let mut sy = x.sy * 100.0;
                             let mut rot = x.angle.to_degrees();
@@ -54,11 +62,27 @@ impl App {
                         });
                         let mut persp = persp;
                         if ui
-                            .checkbox(&mut persp, "Perspective")
+                            .add_enabled(!smart, egui::Checkbox::new(&mut persp, "Perspective"))
                             .on_hover_text("Drag each corner freely; edges carry both of their corners")
+                            .on_disabled_hover_text(affine_only)
                             .changed()
                         {
                             x.quad = persp.then(|| x.corners());
+                            x.warp = None;
+                            self.preview_xform(ctx, &mut x);
+                            self.xform = Some(x.clone());
+                        }
+                        let mut warping = warping;
+                        if ui
+                            .add_enabled(!smart, egui::Checkbox::new(&mut warping, "Warp"))
+                            .on_hover_text("Bend the layer through a 4×4 mesh: drag any point")
+                            .on_disabled_hover_text(affine_only)
+                            .changed()
+                        {
+                            // Start the mesh where the box is now, so
+                            // toggling on changes nothing until a drag.
+                            x.warp = warping.then(|| x.initial_warp());
+                            x.quad = None;
                             self.preview_xform(ctx, &mut x);
                             self.xform = Some(x.clone());
                         }

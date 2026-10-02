@@ -61,7 +61,10 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
 
 - **Verify UI changes by looking at them**: `cargo run --release -p lumenply-app -- --demo
   --screenshot /tmp/ui.png` renders a few frames, saves the window and exits —
-  no macOS screen-recording permission needed. The dark theme is forced via
+  no macOS screen-recording permission needed. To reach a state behind a click,
+  add `--screenshot-do select-pixel,warp,debug-bend` (palette action ids, run
+  once before the capture; `select-pixel` and `debug-bend` are debug-only
+  tokens in `debug_screenshot`). The dark theme is forced via
   `ctx.set_theme(ThemePreference::Dark)`; without it eframe follows the OS and
   repaints everything in egui's stock light palette on a light-mode system.
 
