@@ -46,6 +46,7 @@ mod properties;
 mod quick_select_tool;
 #[cfg(test)]
 mod select_fill_tests;
+mod select_mask;
 mod session;
 mod shape_tool;
 mod smart_contents;
@@ -281,6 +282,10 @@ struct App {
     liquify: Option<Box<liquify::LiquifyState>>,
     /// The Camera Raw develop workspace, while a RAW file is being opened.
     camera_raw: Option<Box<camera_raw::CameraRawState>>,
+    /// Select ▸ Select and Mask's workspace, while open (it replaces the
+    /// editor UI), and the settings it remembers between openings.
+    select_mask: Option<Box<select_mask::SelectMaskState>>,
+    select_mask_prefs: select_mask::SelectMaskPrefs,
     /// Clone source point (document space), and whether the next click picks it.
     clone_source: Option<(f32, f32)>,
     clone_picking: bool,
@@ -462,6 +467,8 @@ impl App {
             export_as: None,
             quick: Default::default(),
             camera_raw: None,
+            select_mask: None,
+            select_mask_prefs: Default::default(),
             clone_source: None,
             clone_picking: true,
             clone_offset: (0, 0),
@@ -1030,6 +1037,10 @@ impl App {
             if i.consume_key(M::COMMAND | M::SHIFT | M::ALT, Key::E) {
                 fired.push("stamp-visible");
             }
+            // Select and Mask (Alt+Cmd+R) holds the rulers chord.
+            if i.consume_key(M::COMMAND | M::ALT, Key::R) {
+                fired.push("select-mask");
+            }
             for (id, ..) in session::SHORTCUTS {
                 if let Some((m, k)) = session::resolve_chord(&self.prefs, id) {
                     if i.consume_key(m, k) {
@@ -1312,6 +1323,11 @@ impl App {
         }
         if self.camera_raw.is_some() {
             self.camera_raw_ui(ctx);
+            self.debug_screenshot(ctx);
+            return;
+        }
+        if self.select_mask.is_some() {
+            self.select_mask_ui(ctx);
             self.debug_screenshot(ctx);
             return;
         }

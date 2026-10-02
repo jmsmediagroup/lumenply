@@ -442,6 +442,7 @@ impl App {
         let quick = self.quick_mask;
         self.act_check(ui, "Quick mask", "quick-mask", quick)
             .on_hover_text("Paint the selection: white selects, black deselects");
+        self.act(ui, "Select and Mask...", "select-mask");
         menu_separator(ui);
         menu(ui, "Modify", |ui| {
             self.act(ui, "Border...", "sel-border");

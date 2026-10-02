@@ -186,6 +186,29 @@ pub fn paint_band(dabs: &[RefineDab], w: usize, h: usize, origin: (f32, f32), sc
     out
 }
 
+/// The uncertain band Edge Detection works in (for the workspace's Show
+/// Edge view): within `radius` of the selection edge, plus the brush.
+pub fn refine_band(coverage: &[f32], band: Option<&[i8]>, w: usize, h: usize, radius: f32) -> Vec<bool> {
+    let inside: Vec<bool> = coverage.iter().map(|&c| c >= 0.5).collect();
+    let mut unknown = vec![false; w * h];
+    if radius > 0.0 {
+        let sd = signed_distance(&inside, w, h);
+        for (u, d) in unknown.iter_mut().zip(&sd) {
+            *u = d.abs() < radius;
+        }
+    }
+    if let Some(b) = band {
+        for (u, &v) in unknown.iter_mut().zip(b) {
+            match v {
+                1 => *u = true,
+                -1 => *u = false,
+                _ => {}
+            }
+        }
+    }
+    unknown
+}
+
 /// The refined coverage of a `image`-sized buffer.
 ///
 /// `coverage` is the selection over the same pixels, `band` the brush's
@@ -198,17 +221,35 @@ pub fn refine_matte(
     p: &RefineParams,
     scale: f32,
 ) -> Vec<f32> {
+    let matte = edge_matte(image, coverage, band, p, scale);
+    global_refine(matte, image.width as usize, image.height as usize, p, scale)
+}
+
+fn sane_scale(scale: f32) -> f32 {
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
+
+/// Edge detection alone (Radius, Smart Radius and the brush): the matte
+/// before the global refinements. The workspace keeps it while only
+/// those change.
+pub fn edge_matte(
+    image: &Raster,
+    coverage: &[f32],
+    band: Option<&[i8]>,
+    p: &RefineParams,
+    scale: f32,
+) -> Vec<f32> {
     let p = p.sanitized();
     let (w, h) = (image.width as usize, image.height as usize);
     assert_eq!(coverage.len(), w * h, "coverage does not match the image");
     if w == 0 || h == 0 {
         return Vec::new();
     }
-    let scale = if scale.is_finite() && scale > 0.0 {
-        scale
-    } else {
-        1.0
-    };
+    let scale = sane_scale(scale);
     let tri = Trimap::new(coverage, band, w, h, p.radius * scale);
     let mut alpha = coverage.to_vec();
     if tri.any_unknown {
@@ -231,6 +272,17 @@ pub fn refine_matte(
         if p.smart_radius && p.radius * scale > 2.0 {
             smart_radius(&mut alpha, &tri.unknown, w, h, p.radius * scale);
         }
+    }
+    alpha
+}
+
+/// The global refinements (Smooth, Feather, Contrast, Shift Edge) of a
+/// `w`×`h` matte, in Photoshop's order.
+pub fn global_refine(mut alpha: Vec<f32>, w: usize, h: usize, p: &RefineParams, scale: f32) -> Vec<f32> {
+    let p = p.sanitized();
+    let scale = sane_scale(scale);
+    if w == 0 || h == 0 {
+        return alpha;
     }
     let rs = smooth_px(p.smooth) * scale;
     if rs > 0.0 {
@@ -285,22 +337,7 @@ impl Trimap {
     fn new(coverage: &[f32], band: Option<&[i8]>, w: usize, h: usize, radius: f32) -> Trimap {
         let inside: Vec<bool> = coverage.iter().map(|&c| c >= 0.5).collect();
         let n = w * h;
-        let mut unknown = vec![false; n];
-        if radius > 0.0 {
-            let sd = signed_distance(&inside, w, h);
-            for i in 0..n {
-                unknown[i] = sd[i].abs() < radius;
-            }
-        }
-        if let Some(b) = band {
-            for i in 0..n {
-                match b[i] {
-                    1 => unknown[i] = true,
-                    -1 => unknown[i] = false,
-                    _ => {}
-                }
-            }
-        }
+        let unknown = refine_band(coverage, band, w, h, radius);
         let any_unknown = unknown.iter().any(|&u| u);
         if !any_unknown {
             return Trimap {
@@ -1102,16 +1139,11 @@ impl Command for RefineSelection {
             let (w, h) = (roi.w as usize, roi.h as usize);
             let band = (!self.brush.is_empty())
                 .then(|| paint_band(&self.brush, w, h, (roi.x as f32, roi.y as f32), 1.0));
-            let alpha = refine_matte(&image, &cov, band.as_deref(), &params, 1.0);
+            let matte = edge_matte(&image, &cov, band.as_deref(), &params, 1.0);
+            let alpha = global_refine(matte.clone(), w, h, &params, 1.0);
             if self.output.makes_layer() && params.decontaminates() {
                 // Colours come from the layer the new one copies, fitted
                 // with the matte before the global refinements.
-                let matte_only = RefineParams {
-                    radius: params.radius,
-                    smart_radius: params.smart_radius,
-                    ..RefineParams::default()
-                };
-                let matte = refine_matte(&image, &cov, band.as_deref(), &matte_only, 1.0);
                 let id = source.expect("checked above");
                 let layer_px = doc
                     .layer(id)
