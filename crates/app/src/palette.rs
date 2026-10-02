@@ -166,6 +166,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("New fill layer: gradient", "fill-gradient"),
     ("Spot Healing Brush (Heal ▸ Spot)", "tool-spot-heal"),
     ("Patch tool (Heal ▸ Patch)", "tool-patch"),
+    ("Content-Aware Move tool (Heal ▸ Move)", "tool-content-move"),
     ("Red Eye tool (Heal ▸ Red Eye)", "tool-red-eye"),
     ("Blur tool (Brush ▸ Blur)", "tool-blur"),
     ("Sharpen tool (Brush ▸ Sharpen)", "tool-sharpen"),
@@ -843,7 +844,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 120); // + keyboard shortcuts, retouching modes
+        assert_eq!(n, 121); // + keyboard shortcuts, retouching modes
     }
 
     #[test]

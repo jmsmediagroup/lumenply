@@ -592,6 +592,114 @@ impl Command for HealRegion {
     }
 }
 
+/// Heal ▸ Move (Photoshop's Content-Aware Move): carry the selected pixels
+/// of a layer `offset` away. With `fill`, the area they leave is rebuilt
+/// by PatchMatch from its surroundings (as Content-Aware Fill does); with
+/// `adapt`, the moved copy is healed into its new place (its tone pulled to
+/// the new rim, as Patch does), otherwise it lands as it was. A soft
+/// selection blends both by its coverage. The selection moves with the
+/// pixels. One undo step.
+pub struct ContentAwareMove {
+    pub layer: LayerId,
+    pub offset: (i32, i32),
+    pub fill: bool,
+    pub adapt: bool,
+}
+
+impl ContentAwareMove {
+    fn hole(doc: &Document) -> EditResult<Rect> {
+        let none = || EditError::Invalid("select what to move first".into());
+        let hole = doc
+            .selection
+            .as_ref()
+            .ok_or_else(none)?
+            .tight_bounds(doc.canvas());
+        if hole.is_empty() {
+            return Err(none());
+        }
+        Ok(hole)
+    }
+}
+
+impl Command for ContentAwareMove {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn label(&self) -> String {
+        "Content-aware move".into()
+    }
+
+    fn affected(&self, doc: &Document) -> Option<Rect> {
+        let hole = ContentAwareMove::hole(doc).ok()?;
+        let (dx, dy) = self.offset;
+        Some(
+            hole.union(&Rect::new(hole.x + dx, hole.y + dy, hole.w, hole.h))
+                .intersect(&doc.canvas()),
+        )
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        let hole = ContentAwareMove::hole(doc)?;
+        if self.offset == (0, 0) {
+            return Err(EditError::Invalid("drag the selection somewhere else".into()));
+        }
+        let canvas = doc.canvas();
+        let (dx, dy) = self.offset;
+        let sel = doc.selection.clone().expect("checked by hole()");
+        let store = doc
+            .layer_mut(self.layer)
+            .ok_or(EditError::NoLayer(self.layer))?
+            .pixels_mut()
+            .ok_or(EditError::NotPixel(self.layer))?;
+        // The layer as it was: the moved pixels come from here.
+        let before = store.clone();
+        if self.fill {
+            let m = hole.w.max(hole.h).max(64) as i32;
+            let area = Rect::new(
+                hole.x - m,
+                hole.y - m,
+                hole.w + 2 * m as u32,
+                hole.h + 2 * m as u32,
+            )
+            .intersect(&canvas);
+            let src = before.to_raster(area);
+            let cov = sel.coverage.to_dense(area);
+            let holes: Vec<bool> = cov.iter().map(|&c| c > 0.0).collect();
+            let filled = lumenply_render::inpaint::inpaint(&src, &holes, 0x5EED_0004)
+                .map_err(|e| EditError::Invalid(e.to_string()))?;
+            lay_down(store, area, &filled, &cov);
+        }
+        // The landing area, one pixel wider so Adapt has a rim to read.
+        let dest = Rect::new(hole.x + dx - 1, hole.y + dy - 1, hole.w + 2, hole.h + 2).intersect(&canvas);
+        if dest.is_empty() {
+            return Err(EditError::Invalid(
+                "the selection was dragged off the canvas".into(),
+            ));
+        }
+        let (w, h) = (dest.w as usize, dest.h as usize);
+        let mut cov = vec![0f32; w * h];
+        let mut moved = Raster::new(dest.w, dest.h);
+        for y in 0..h {
+            for x in 0..w {
+                let (px, py) = (dest.x + x as i32, dest.y + y as i32);
+                cov[y * w + x] = sel.value(px - dx, py - dy);
+                moved.set(x as u32, y as u32, before.get_pixel(px - dx, py - dy));
+            }
+        }
+        let landed = if self.adapt {
+            heal_patch(&store.to_raster(dest), &moved, &cov)?
+        } else {
+            moved
+        };
+        lay_down(store, dest, &landed, &cov);
+        let mut sel = sel;
+        sel.coverage.tiles = sel.coverage.tiles.translated(dx, dy);
+        doc.selection = Some(sel);
+        Ok(())
+    }
+}
+
 /// Heal ▸ Red Eye: find the red pupil in `area` (the reddest connected
 /// patch nearest the box centre) and turn it a dark neutral.
 ///
@@ -1171,6 +1279,85 @@ mod tests {
         assert!(worst < 2e-3, "worst {worst}");
         // (30, 20): 0.2 + 0.3 = 0.5.
         assert!((enc(px.get_pixel(30, 20))[1] - 0.5).abs() < 2e-3);
+    }
+
+    #[test]
+    fn content_aware_move_carries_pixels_and_fills_behind() {
+        let (mut ed, id) = patch_doc();
+        ed.execute(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(20, 14, 8, 8))),
+        })
+        .unwrap();
+        let mv = ContentAwareMove {
+            layer: id,
+            offset: (24, 0),
+            fill: true,
+            adapt: false,
+        };
+        assert_eq!(mv.affected(ed.doc()), Some(Rect::new(20, 14, 32, 8)));
+        ed.execute(&mv).unwrap();
+        assert_eq!(ed.history().last().copied(), Some("Content-aware move"));
+        let doc = ed.doc();
+        let px = doc.layer(id).unwrap().pixels().unwrap();
+        // The white square landed 24 px right, exactly as it was...
+        for (x, y) in [(44, 14), (51, 21), (48, 18)] {
+            assert!((enc(px.get_pixel(x, y))[0] - 1.0).abs() < 1e-3, "({x}, {y})");
+        }
+        // ...the stripes grew back where it was, and the selection moved.
+        let mut worst = 0f32;
+        for y in 14..22 {
+            for x in 20..28 {
+                worst = worst.max((enc(px.get_pixel(x, y))[0] - stripes(x as u32, y as u32)).abs());
+            }
+        }
+        assert!(worst < 0.03, "worst {worst}");
+        assert_eq!(
+            doc.selection.as_ref().unwrap().tight_bounds(doc.canvas()),
+            Rect::new(44, 14, 8, 8)
+        );
+    }
+
+    #[test]
+    fn an_adapted_move_takes_on_the_tone_of_its_new_place() {
+        // Grey 0.3 above row 32, 0.6 below; a 0.45 square at the top.
+        let mut r = Raster::new(32, 64);
+        for y in 0..64 {
+            for x in 0..32 {
+                let v = if (8..16).contains(&x) && (8..16).contains(&y) {
+                    0.45
+                } else if y < 32 {
+                    0.3
+                } else {
+                    0.6
+                };
+                r.set(x, y, g(v, v, v));
+            }
+        }
+        let run = |adapt: bool| {
+            let mut ed = Editor::new(Document::new(32, 64));
+            ed.execute(&AddPixelLayer::from_raster("p", r.clone(), 0, 0))
+                .unwrap();
+            let id = ed.doc().layers()[0].id;
+            ed.execute(&SetSelection {
+                selection: Some(Selection::rect(Rect::new(8, 8, 8, 8))),
+            })
+            .unwrap();
+            ed.execute(&ContentAwareMove {
+                layer: id,
+                offset: (0, 32),
+                fill: true,
+                adapt,
+            })
+            .unwrap();
+            let px = ed.doc().layer(id).unwrap().pixels().unwrap().clone();
+            (enc(px.get_pixel(12, 44))[0], enc(px.get_pixel(12, 12))[0])
+        };
+        // The rim says "0.3 brighter here": 0.45 + 0.3 = 0.75.
+        let (landed, behind) = run(true);
+        assert!((landed - 0.75).abs() < 2e-3, "{landed}");
+        assert!((behind - 0.3).abs() < 2e-3, "{behind}");
+        let (landed, _) = run(false);
+        assert!((landed - 0.45).abs() < 1e-3, "{landed}");
     }
 
     #[test]

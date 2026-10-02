@@ -18,13 +18,17 @@ pub(crate) enum HealMode {
     Patch,
     /// Red eye: click a red pupil, or drag a box around the eye.
     RedEye,
+    /// Content-aware move: lasso something, drag it elsewhere; the gap
+    /// fills itself.
+    Move,
 }
 
 impl HealMode {
-    pub(crate) const ALL: [(HealMode, &'static str); 4] = [
+    pub(crate) const ALL: [(HealMode, &'static str); 5] = [
         (HealMode::Spot, "Spot"),
         (HealMode::Healing, "Healing"),
         (HealMode::Patch, "Patch"),
+        (HealMode::Move, "Move"),
         (HealMode::RedEye, "Red Eye"),
     ];
 }
@@ -65,6 +69,8 @@ pub(crate) struct Retouch {
     /// Patch: the selection is the clean texture, dragged onto the flaw
     /// (Photoshop's Destination); off, it is the flaw (Source).
     pub(crate) patch_destination: bool,
+    /// Content-aware move: heal the moved pixels into their new place.
+    pub(crate) move_adapt: bool,
     /// What Patch and Spot healing read (Photoshop's Sample menu).
     pub(crate) sample: RetouchSample,
     pub(crate) patch_drag: Option<PatchDrag>,
@@ -116,6 +122,7 @@ impl Default for Retouch {
             eraser_mode: EraserMode::Eraser,
             patch_aware: false,
             patch_destination: false,
+            move_adapt: false,
             sample: RetouchSample::Current,
             patch_drag: None,
             eye_from: None,
@@ -323,6 +330,18 @@ impl App {
                         }
                         true
                     }
+                    HealMode::Move => {
+                        check(ui, &mut self.retouch.move_adapt, "Adapt").on_hover_text(
+                            "Heal the moved pixels into their new surroundings (tone follows the new place)",
+                        );
+                        if wide {
+                            ui.label(
+                                RichText::new("Draw around something, then drag it; the gap fills itself")
+                                    .weak(),
+                            );
+                        }
+                        true
+                    }
                     HealMode::RedEye => {
                         crate::options_bar::bar_slider(
                             ui,
@@ -449,6 +468,7 @@ impl App {
         match id {
             "tool-spot-heal" => self.retouch.heal_mode = HealMode::Spot,
             "tool-patch" => self.retouch.heal_mode = HealMode::Patch,
+            "tool-content-move" => self.retouch.heal_mode = HealMode::Move,
             "tool-red-eye" => self.retouch.heal_mode = HealMode::RedEye,
             "tool-blur" => self.brush.mode = BrushMode::Blur,
             "tool-sharpen" => self.brush.mode = BrushMode::Sharpen,
@@ -458,7 +478,7 @@ impl App {
             _ => return false,
         }
         self.tool = match id {
-            "tool-spot-heal" | "tool-patch" | "tool-red-eye" => Tool::Heal,
+            "tool-spot-heal" | "tool-patch" | "tool-content-move" | "tool-red-eye" => Tool::Heal,
             "tool-bg-eraser" | "tool-magic-eraser" => Tool::Eraser,
             _ => Tool::Brush,
         };
@@ -562,7 +582,7 @@ impl App {
             self.pan = resp.rect.size() / 2.0 - egui::vec2(x, y) * z;
         }
         match (self.tool, self.retouch.heal_mode) {
-            (Tool::Heal, HealMode::Patch) => self.patch_canvas(ctx, resp, to_doc),
+            (Tool::Heal, HealMode::Patch | HealMode::Move) => self.patch_canvas(ctx, resp, to_doc),
             (Tool::Heal, HealMode::RedEye) => self.red_eye_canvas(ctx, resp, to_doc),
             (Tool::Eraser, _) if self.retouch.eraser_mode == EraserMode::Magic => {
                 self.magic_eraser_canvas(ctx, resp, to_doc)
@@ -590,9 +610,25 @@ impl App {
         }
     }
 
-    /// Patch: a drag outside the selection draws a freehand lasso (it
-    /// becomes the selection); a drag inside it moves the patch, previewing
-    /// the healed result, and the release applies it.
+    /// What a drag inside the selection does in Patch or Move mode. The
+    /// preview (`commit` false) skips the slow parts: content-aware
+    /// synthesis, and Move's fill behind.
+    fn drag_command(&self, layer: LayerId, offset: (i32, i32), commit: bool) -> Box<dyn Command> {
+        if self.retouch.heal_mode == HealMode::Move {
+            Box::new(ContentAwareMove {
+                layer,
+                offset,
+                fill: commit,
+                adapt: self.retouch.move_adapt,
+            })
+        } else {
+            Box::new(self.patch_command(layer, offset, commit && self.retouch.patch_aware))
+        }
+    }
+
+    /// Patch and Move: a drag outside the selection draws a freehand lasso
+    /// (it becomes the selection); a drag inside it carries the selection,
+    /// previewing the result, and the release applies it.
     fn patch_canvas(
         &mut self,
         ctx: &egui::Context,
@@ -649,14 +685,19 @@ impl App {
                 if let (Some(mut pd), Some(layer)) = (self.retouch.patch_drag, self.active) {
                     let off = ((q.0 - pd.from.0).round() as i32, (q.1 - pd.from.1).round() as i32);
                     if off != pd.offset {
+                        // Repaint where the last preview drew as well.
+                        let was = self
+                            .drag_command(layer, pd.offset, false)
+                            .affected(self.editor.doc());
                         pd.offset = off;
                         self.retouch.patch_drag = Some(pd);
-                        // Preview the healed copy (content-aware runs on
-                        // release only: it takes too long per frame).
-                        let cmd = self.patch_command(layer, off, false);
+                        let cmd = self.drag_command(layer, off, false);
                         let mut preview = self.editor.doc().clone();
                         if cmd.apply(&mut preview).is_ok() {
-                            let area = cmd.affected(self.editor.doc());
+                            let area = match (cmd.affected(self.editor.doc()), was) {
+                                (Some(a), Some(b)) => Some(a.union(&b)),
+                                _ => None,
+                            };
                             self.preview(ctx, &preview, area);
                         } else {
                             self.mark(None);
@@ -676,8 +717,8 @@ impl App {
                     let pd = self.retouch.patch_drag.take();
                     match (pd, self.active) {
                         (Some(pd), Some(layer)) if pd.offset != (0, 0) => {
-                            let cmd = self.patch_command(layer, pd.offset, self.retouch.patch_aware);
-                            self.run(&cmd);
+                            let cmd = self.drag_command(layer, pd.offset, true);
+                            self.run(cmd.as_ref());
                         }
                         _ => self.mark(None),
                     }
@@ -766,7 +807,7 @@ impl App {
             ));
         };
         match (self.tool, self.retouch.heal_mode) {
-            (Tool::Heal, HealMode::Patch) => {
+            (Tool::Heal, HealMode::Patch | HealMode::Move) => {
                 if self.drag == Some(DragKind::Lasso) && !self.lasso.is_empty() {
                     let mut pts: Vec<Pos2> = self.lasso.iter().map(|&(x, y)| ts(x, y)).collect();
                     pts.push(pts[0]);
@@ -845,7 +886,9 @@ impl App {
     /// magic eraser there; `retouch:sample=current|below|all` picks what
     /// Patch and Spot healing read, `retouch:dest=1` Patch's Destination,
     /// `retouch:aware=0` turns content-aware spot healing off,
-    /// `retouch:offset=DX:DY` sets the healing (clone) source offset.
+    /// `retouch:offset=DX:DY` sets the healing (clone) source offset,
+    /// `retouch:move=DX:DY` content-aware moves the selection,
+    /// `retouch:adapt=1` heals moved pixels into their new place.
     pub(crate) fn debug_retouch(&mut self, ctx: &egui::Context, tok: &str) -> bool {
         let Some(rest) = tok.strip_prefix("retouch:") else {
             return false;
@@ -934,6 +977,21 @@ impl App {
                     );
                 }
             }
+            ("move", &[dx, dy]) => {
+                if let Some(layer) = layer {
+                    self.retouch.heal_mode = HealMode::Move;
+                    let t = std::time::Instant::now();
+                    let cmd = self.drag_command(layer, (dx as i32, dy as i32), true);
+                    self.run(cmd.as_ref());
+                    eprintln!(
+                        "{} took {:.3} s ({})",
+                        cmd.label(),
+                        t.elapsed().as_secs_f32(),
+                        self.status
+                    );
+                }
+            }
+            ("adapt", &[v]) => self.retouch.move_adapt = v != 0.0,
             ("drag", &[dx, dy]) => {
                 if let Some(layer) = layer {
                     let offset = (dx as i32, dy as i32);
@@ -941,7 +999,7 @@ impl App {
                         from: (0.0, 0.0),
                         offset,
                     });
-                    let cmd = self.patch_command(layer, offset, false);
+                    let cmd = self.drag_command(layer, offset, false);
                     let mut preview = self.editor.doc().clone();
                     if cmd.apply(&mut preview).is_ok() {
                         let area = cmd.affected(self.editor.doc());
@@ -1147,6 +1205,7 @@ mod tests {
         for want in [
             HealMode::Healing,
             HealMode::Patch,
+            HealMode::Move,
             HealMode::RedEye,
             HealMode::Spot,
         ] {
@@ -1256,6 +1315,38 @@ mod tests {
         assert_eq!(app.editor.history().last().copied(), Some("Patch"));
         assert_eq!(app.editor.history().len(), steps + 2);
         assert!(app.retouch.patch_drag.is_none() && app.drag.is_none());
+    }
+
+    #[test]
+    fn dragging_a_selection_in_move_mode_moves_it_and_fills_behind() {
+        let mut app = small_app();
+        let ctx = ctx();
+        let layer = app.active.unwrap();
+        app.run(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(8, 8, 8, 8))),
+        });
+        app.run(&Fill {
+            layer,
+            color: [1.0, 0.0, 0.0, 1.0],
+        });
+        app.tool = Tool::Heal;
+        app.retouch.heal_mode = HealMode::Move;
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        let at = to_screen(&mut app, &ctx);
+        drag(&mut app, &ctx, at(12.0, 12.0), at(32.0, 30.0));
+        assert_eq!(app.editor.history().last().copied(), Some("Content-aware move"));
+        let px = app.editor.doc().layer(layer).unwrap().pixels().unwrap();
+        // The red square sits 20 right and 18 down; the blue-grey around
+        // it fills in behind.
+        let moved = px.get_pixel(32, 30);
+        assert!((moved.r - 1.0).abs() < 1e-3 && moved.g.abs() < 1e-3, "{moved:?}");
+        let behind = px.get_pixel(12, 12);
+        assert!(
+            (behind.r - 0.2).abs() < 1e-3 && (behind.b - 0.4).abs() < 1e-3,
+            "{behind:?}"
+        );
     }
 
     #[test]

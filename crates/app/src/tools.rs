@@ -91,7 +91,7 @@ impl Tool {
             Tool::Eraser => "Eraser (E) — Shift+E cycles Eraser, Background and Magic",
             Tool::Clone => "Clone Stamp (S) — Alt+click or 'Pick source' to set the source",
             Tool::Heal => {
-                "Healing Brush (J) — Shift+J cycles Spot, Healing, Patch and Red Eye; Alt+click sets a texture source"
+                "Healing Brush (J) — Shift+J cycles Spot, Healing, Patch, Move and Red Eye; Alt+click sets a texture source"
             }
             Tool::Pen => {
                 "Pen (P) — click for corners, drag for curves; click the first point to close; Enter finishes"
