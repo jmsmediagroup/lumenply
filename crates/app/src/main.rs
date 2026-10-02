@@ -914,7 +914,13 @@ impl App {
                 && self.retouch.spot_aware
                 && self.drag != Some(DragKind::Stroke)
             {
-                return Box::new(SpotHealAware { layer, brush, points });
+                let sample = self.retouch.sample;
+                return Box::new(SpotHealAware {
+                    layer,
+                    brush,
+                    points,
+                    sample,
+                });
             }
             let texture =
                 self.retouch.heal_mode == retouch_ui::HealMode::Healing && self.clone_source.is_some();

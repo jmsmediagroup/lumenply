@@ -10,9 +10,7 @@ use lumenply_doc::adjust::{srgb_decode, srgb_encode};
 use lumenply_doc::{Document, LayerId};
 use lumenply_tiles::{Raster, Rect, Rgba};
 
-use crate::commands::{
-    dab_coverage, interpolate_dabs, sampler, stroke_bounds, Brush, SampleSource, StrokePoint,
-};
+use crate::commands::{dab_coverage, interpolate_dabs, stroke_bounds, Brush, StrokePoint};
 use crate::{Command, EditError, EditResult};
 
 /// Straight, gamma-encoded RGB and alpha of a premultiplied linear pixel.
@@ -149,25 +147,106 @@ fn relax(vals: &mut [[f32; 3]], known: &[bool], w: usize, h: usize, sweeps: usiz
 /// cloning), so the copied detail takes on the destination's tone. A soft
 /// selection blends the result in by its coverage. With `content_aware`
 /// the area is synthesised by PatchMatch from the dragged-to area and the
-/// patch's own surroundings instead. One undo step; the selection stays.
+/// patch's own surroundings instead.
+///
+/// With `destination` the roles swap (Photoshop's Destination mode): the
+/// selection is the clean texture, it is patched into the area `offset`
+/// away, and the selection moves there. Otherwise the selection stays.
+///
+/// Sampling a composite (`RetouchSample::CurrentAndBelow` or `All`) reads
+/// colours from it and lays the healed result onto the layer by coverage,
+/// so a patch works on an empty layer above the photo (non-destructive
+/// retouching). One undo step.
 pub struct PatchHeal {
     pub layer: LayerId,
-    /// Source position = destination + offset (canvas pixels).
+    /// Source position = destination + offset (canvas pixels); with
+    /// `destination`, where the selection is dragged to.
     pub offset: (i32, i32),
-    pub sample: SampleSource,
+    pub sample: RetouchSample,
     pub content_aware: bool,
+    pub destination: bool,
 }
 
 impl PatchHeal {
-    fn hole(doc: &Document) -> EditResult<Rect> {
+    /// The patched area's bounds, before the patch is applied.
+    fn hole(&self, doc: &Document) -> EditResult<Rect> {
         let none = || EditError::Invalid("draw around the area to patch first".into());
         let sel = doc.selection.as_ref().ok_or_else(none)?;
-        let hole = sel.tight_bounds(doc.canvas());
+        let canvas = doc.canvas();
+        let b = sel.tight_bounds(canvas);
+        let hole = if self.destination {
+            Rect::new(b.x + self.offset.0, b.y + self.offset.1, b.w, b.h).intersect(&canvas)
+        } else {
+            b
+        };
         if hole.is_empty() {
             return Err(none());
         }
         Ok(hole)
     }
+}
+
+/// What a retouching command reads, as in Photoshop's Sample menu.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RetouchSample {
+    /// The layer being retouched.
+    #[default]
+    Current,
+    /// The composite of that layer and everything under it: retouch on an
+    /// empty layer beneath adjustment layers without baking them in. (In a
+    /// group, the whole top-level group holding the layer counts.)
+    CurrentAndBelow,
+    /// The whole composite.
+    All,
+}
+
+/// `rect` of what a retouching command on `target` reads.
+pub(crate) fn read(doc: &Document, target: LayerId, sample: RetouchSample, rect: Rect) -> EditResult<Raster> {
+    Ok(match sample {
+        RetouchSample::Current => doc
+            .layer(target)
+            .ok_or(EditError::NoLayer(target))?
+            .pixels()
+            .ok_or(EditError::NotPixel(target))?
+            .to_raster(rect),
+        RetouchSample::All => lumenply_render::composite_rect(doc, rect).to_raster(rect),
+        RetouchSample::CurrentAndBelow => {
+            let mut top = target;
+            while let Some(p) = doc.parent_of(top) {
+                top = p;
+            }
+            let i = doc
+                .layers()
+                .iter()
+                .position(|l| l.id == top)
+                .ok_or(EditError::NoLayer(target))?;
+            lumenply_render::composite_layers(&doc.layers()[..=i], rect, doc.canvas()).to_raster(rect)
+        }
+    })
+}
+
+/// Lay `healed` (covering `area`) onto `store` by `cov`, premultiplied.
+fn lay_down(store: &mut lumenply_tiles::TileStore, area: Rect, healed: &Raster, cov: &[f32]) {
+    let w = area.w as usize;
+    for (i, &k) in cov.iter().enumerate() {
+        let k = k.min(1.0);
+        if k <= 0.0 {
+            continue;
+        }
+        let (x, y) = (area.x + (i % w) as i32, area.y + (i / w) as i32);
+        let (o, f) = (store.get_pixel(x, y), healed.pixels[i]);
+        store.set_pixel(
+            x,
+            y,
+            Rgba::new(
+                o.r + (f.r - o.r) * k,
+                o.g + (f.g - o.g) * k,
+                o.b + (f.b - o.b) * k,
+                o.a + (f.a - o.a) * k,
+            ),
+        );
+    }
+    store.prune_blank();
 }
 
 impl Command for PatchHeal {
@@ -184,81 +263,83 @@ impl Command for PatchHeal {
     }
 
     fn affected(&self, doc: &Document) -> Option<Rect> {
-        PatchHeal::hole(doc).ok()
+        self.hole(doc).ok()
     }
 
     fn apply(&self, doc: &mut Document) -> EditResult {
-        let hole = PatchHeal::hole(doc)?;
+        let hole = self.hole(doc)?;
         if self.offset == (0, 0) {
             return Err(EditError::Invalid(
                 "drag the patch onto the area to copy from".into(),
             ));
         }
         let canvas = doc.canvas();
-        let sel = doc.selection.clone().expect("checked by hole()");
-        // The source as it is before the patch, so it never reads its own
-        // writes where source and destination overlap.
-        let (ox, oy) = self.offset;
-        let source = |area: Rect, doc: &Document| -> EditResult<Raster> {
-            let sample = sampler(doc, self.sample)?;
-            let mut r = Raster::new(area.w, area.h);
-            for y in 0..area.h as i32 {
-                for x in 0..area.w as i32 {
-                    let sx = (area.x + x + ox).clamp(canvas.x, canvas.right() - 1);
-                    let sy = (area.y + y + oy).clamp(canvas.y, canvas.bottom() - 1);
-                    r.set(x as u32, y as u32, sample(sx, sy));
-                }
-            }
-            Ok(r)
-        };
         let layer = doc.layer(self.layer).ok_or(EditError::NoLayer(self.layer))?;
         layer.pixels().ok_or(EditError::NotPixel(self.layer))?;
-        let filled: Raster;
-        let area: Rect;
-        if self.content_aware {
+        // Destination mode: patch the dragged-to area from the selection,
+        // and carry the selection along.
+        let mut sel = doc.selection.clone().expect("checked by hole()");
+        let (ox, oy) = if self.destination {
+            let (dx, dy) = self.offset;
+            sel.coverage.tiles = sel.coverage.tiles.translated(dx, dy);
+            doc.selection = Some(sel.clone());
+            (-dx, -dy)
+        } else {
+            self.offset
+        };
+        let area = if self.content_aware {
             let m = (hole.w.max(hole.h) / 2).clamp(16, 96) as i32;
-            area = Rect::new(
+            Rect::new(
                 hole.x - m,
                 hole.y - m,
                 hole.w + 2 * m as u32,
                 hole.h + 2 * m as u32,
             )
-            .intersect(&canvas);
-            let src = source(area, doc)?;
-            let store = doc.layer(self.layer).and_then(|l| l.pixels()).expect("checked");
-            filled = content_aware_patch(
-                &store.to_raster(area),
-                &src,
-                &sel.coverage.to_dense(area),
-                area,
-                |x, y| !canvas.contains(x + ox, y + oy) || sel.value(x + ox, y + oy) > 0.0,
-            )?;
+            .intersect(&canvas)
         } else {
-            area = Rect::new(hole.x - 1, hole.y - 1, hole.w + 2, hole.h + 2).intersect(&canvas);
-            let src = source(area, doc)?;
-            let store = doc.layer(self.layer).and_then(|l| l.pixels()).expect("checked");
-            filled = heal_patch(&store.to_raster(area), &src, &sel.coverage.to_dense(area))?;
-        }
+            Rect::new(hole.x - 1, hole.y - 1, hole.w + 2, hole.h + 2).intersect(&canvas)
+        };
+        // Both are read before anything is written, so overlapping source
+        // and destination never feed on the patch itself. The source
+        // repeats the canvas edge where it runs off it.
+        let dst = read(doc, self.layer, self.sample, area)?;
+        let src = {
+            let shifted = Rect::new(area.x + ox, area.y + oy, area.w, area.h);
+            let inside = shifted.intersect(&canvas);
+            if inside.is_empty() {
+                return Err(EditError::Invalid("the patch was dragged off the canvas".into()));
+            }
+            let part = read(doc, self.layer, self.sample, inside)?;
+            let mut r = Raster::new(area.w, area.h);
+            for y in 0..area.h as i32 {
+                for x in 0..area.w as i32 {
+                    let sx = (shifted.x + x).clamp(inside.x, inside.right() - 1) - inside.x;
+                    let sy = (shifted.y + y).clamp(inside.y, inside.bottom() - 1) - inside.y;
+                    r.set(x as u32, y as u32, part.get(sx as u32, sy as u32));
+                }
+            }
+            r
+        };
         let cov = sel.coverage.to_dense(area);
+        let healed = if self.content_aware {
+            content_aware_patch(&dst, &src, &cov, area, |x, y| {
+                !canvas.contains(x + ox, y + oy) || sel.value(x + ox, y + oy) > 0.0
+            })?
+        } else {
+            heal_patch(&dst, &src, &cov)?
+        };
         let store = doc
             .layer_mut(self.layer)
             .and_then(|l| l.pixels_mut())
             .expect("checked above");
-        let w = area.w as usize;
-        for (i, &k) in cov.iter().enumerate() {
-            if k > 0.0 {
-                let (x, y) = (area.x + (i % w) as i32, area.y + (i / w) as i32);
-                store.set_pixel(x, y, filled.pixels[i]);
-            }
-        }
-        store.prune_blank();
+        lay_down(store, area, &healed, &cov);
         Ok(())
     }
 }
 
 /// The healed patch over `dst`'s area: `src` (the dragged-to texture,
 /// aligned with `dst`) plus the membrane of `dst − src` along the rim,
-/// blended in by `cov`. Pixels outside the patch come back as they were.
+/// with `dst`'s alpha. Pixels outside the patch come back as they were.
 fn heal_patch(dst: &Raster, src: &Raster, cov: &[f32]) -> EditResult<Raster> {
     let (w, h) = (dst.width as usize, dst.height as usize);
     let n = w * h;
@@ -292,17 +373,11 @@ fn heal_patch(dst: &Raster, src: &Raster, cov: &[f32]) -> EditResult<Raster> {
     membrane(&mut diff, &known, w, h);
     let mut out = dst.clone();
     for i in 0..n {
-        let k = cov[i].clamp(0.0, 1.0);
-        if k <= 0.0 || alpha[i] <= 0.0 {
+        if cov[i] <= 0.0 || alpha[i] <= 0.0 {
             continue;
         }
         let healed = [s[i][0] + diff[i][0], s[i][1] + diff[i][1], s[i][2] + diff[i][2]];
-        let mixed = [
-            d[i][0] + (healed[0].clamp(0.0, 1.0) - d[i][0]) * k,
-            d[i][1] + (healed[1].clamp(0.0, 1.0) - d[i][1]) * k,
-            d[i][2] + (healed[2].clamp(0.0, 1.0) - d[i][2]) * k,
-        ];
-        out.pixels[i] = decoded(mixed, alpha[i]);
+        out.pixels[i] = decoded(healed, alpha[i]);
     }
     Ok(out)
 }
@@ -336,18 +411,7 @@ fn content_aware_patch(
     let mut out = dst.clone();
     for y in 0..h {
         for x in 0..w {
-            let i = y * w + x;
-            let k = cov[i].clamp(0.0, 1.0);
-            if k <= 0.0 {
-                continue;
-            }
-            let (o, f) = (dst.pixels[i], filled.pixels[y * 2 * w + x]);
-            out.pixels[i] = Rgba::new(
-                o.r + (f.r - o.r) * k,
-                o.g + (f.g - o.g) * k,
-                o.b + (f.b - o.b) * k,
-                o.a + (f.a - o.a) * k,
-            );
+            out.pixels[y * w + x] = filled.pixels[y * 2 * w + x];
         }
     }
     Ok(out)
@@ -358,11 +422,14 @@ fn content_aware_patch(
 /// selection), then blended in by the stroke's coverage — each pixel's
 /// strongest dab coverage times the strength (`brush.color[3]`).
 /// Sampling is limited to the stroke's bounds grown by their larger side,
-/// 32 to 128 px. One undo step.
+/// 32 to 128 px. Sampling a composite (see [`RetouchSample`]) lays the
+/// result onto the layer, so it works on an empty layer above the photo.
+/// One undo step.
 pub struct SpotHealAware {
     pub layer: LayerId,
     pub brush: Brush,
     pub points: Vec<StrokePoint>,
+    pub sample: RetouchSample,
 }
 
 impl Command for SpotHealAware {
@@ -387,6 +454,10 @@ impl Command for SpotHealAware {
         if bounds.is_empty() {
             return Err(EditError::Invalid("the stroke is off the canvas".into()));
         }
+        doc.layer(self.layer)
+            .ok_or(EditError::NoLayer(self.layer))?
+            .pixels()
+            .ok_or(EditError::NotPixel(self.layer))?;
         let m = bounds.w.max(bounds.h).clamp(32, 128) as i32;
         let area = Rect::new(
             bounds.x - m,
@@ -395,9 +466,9 @@ impl Command for SpotHealAware {
             bounds.h + 2 * m as u32,
         )
         .intersect(&canvas);
-        let (w, h) = (area.w as usize, area.h as usize);
+        let w = area.w as usize;
         let strength = self.brush.color[3].clamp(0.0, 1.0);
-        let mut cov = vec![0f32; w * h];
+        let mut cov = vec![0f32; w * area.h as usize];
         let sel = doc.selection.clone();
         for d in interpolate_dabs(&self.brush, &self.points) {
             dab_coverage(&self.brush, d, canvas, sel.as_ref(), |x, y, c| {
@@ -411,29 +482,14 @@ impl Command for SpotHealAware {
         if !hole.iter().any(|&b| b) {
             return Ok(());
         }
-        let layer = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
-        let store = layer.pixels_mut().ok_or(EditError::NotPixel(self.layer))?;
-        let src = store.to_raster(area);
+        let src = read(doc, self.layer, self.sample, area)?;
         let filled = lumenply_render::inpaint::inpaint(&src, &hole, 0x5EED_0003)
             .map_err(|e| EditError::Invalid(e.to_string()))?;
-        for (i, &k) in cov.iter().enumerate() {
-            if k <= 0.0 {
-                continue;
-            }
-            let (o, f) = (src.pixels[i], filled.pixels[i]);
-            let k = k.min(1.0);
-            store.set_pixel(
-                area.x + (i % w) as i32,
-                area.y + (i / w) as i32,
-                Rgba::new(
-                    o.r + (f.r - o.r) * k,
-                    o.g + (f.g - o.g) * k,
-                    o.b + (f.b - o.b) * k,
-                    o.a + (f.a - o.a) * k,
-                ),
-            );
-        }
-        store.prune_blank();
+        let store = doc
+            .layer_mut(self.layer)
+            .and_then(|l| l.pixels_mut())
+            .expect("checked above");
+        lay_down(store, area, &filled, &cov);
         Ok(())
     }
 }
@@ -648,8 +704,9 @@ mod tests {
         let patch = PatchHeal {
             layer: id,
             offset: (0, 36),
-            sample: SampleSource::Layer(id),
+            sample: RetouchSample::Current,
             content_aware: false,
+            destination: false,
         };
         assert!(ed.execute(&patch).is_err(), "needs a selection");
         ed.execute(&SetSelection {
@@ -696,8 +753,9 @@ mod tests {
         ed.execute(&PatchHeal {
             layer: id,
             offset: (0, -12),
-            sample: SampleSource::Layer(id),
+            sample: RetouchSample::Current,
             content_aware: true,
+            destination: false,
         })
         .unwrap();
         assert_eq!(ed.history().last().copied(), Some("Patch (content-aware)"));
@@ -724,8 +782,9 @@ mod tests {
             let r = ed.execute(&PatchHeal {
                 layer,
                 offset,
-                sample: SampleSource::Merged,
+                sample: RetouchSample::All,
                 content_aware: false,
+                destination: false,
             });
             assert!(r.is_err());
         }
@@ -784,6 +843,154 @@ mod tests {
         assert!((c[0] - 0.8).abs() < 1e-5 && (c[1] - 0.1).abs() < 1e-5, "{c:?}");
     }
 
+    /// Worst gamma error against the stripes over the blemish's patch.
+    fn stripe_error(px: &lumenply_tiles::TileStore) -> f32 {
+        let mut worst = 0f32;
+        for y in 10..26 {
+            for x in 16..32 {
+                let c = enc(px.get_pixel(x, y));
+                worst = worst.max((c[0] - stripes(x as u32, y as u32)).abs());
+            }
+        }
+        worst
+    }
+
+    #[test]
+    fn a_destination_patch_carries_the_clean_selection_onto_the_flaw() {
+        let (mut ed, id) = patch_doc();
+        // Select clean texture below and drag it up onto the blemish.
+        ed.execute(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(16, 46, 16, 16))),
+        })
+        .unwrap();
+        let patch = PatchHeal {
+            layer: id,
+            offset: (0, -36),
+            sample: RetouchSample::Current,
+            content_aware: false,
+            destination: true,
+        };
+        assert_eq!(patch.affected(ed.doc()), Some(Rect::new(16, 10, 16, 16)));
+        ed.execute(&patch).unwrap();
+        let px = ed.doc().layer(id).unwrap().pixels().unwrap();
+        let worst = stripe_error(px);
+        assert!(worst < 2e-3, "worst {worst}");
+        // The clean area is untouched (0.4 + 0.1 + 0.25) and the selection
+        // moved onto the patched area.
+        assert!((enc(px.get_pixel(24, 50))[0] - 0.75).abs() < 1e-3);
+        let doc = ed.doc();
+        let moved = doc.selection.as_ref().unwrap().tight_bounds(doc.canvas());
+        assert_eq!(moved, Rect::new(16, 10, 16, 16));
+        ed.undo();
+        let doc = ed.doc();
+        let back = doc.selection.as_ref().unwrap().tight_bounds(doc.canvas());
+        assert_eq!(back, Rect::new(16, 46, 16, 16), "undo puts the selection back");
+    }
+
+    #[test]
+    fn merged_retouching_works_on_an_empty_layer_above_the_photo() {
+        let (mut ed, photo) = patch_doc();
+        ed.execute(&AddPixelLayer::new("retouch")).unwrap();
+        let top = ed.doc().layers().last().unwrap().id;
+        ed.execute(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(16, 10, 16, 16))),
+        })
+        .unwrap();
+        ed.execute(&PatchHeal {
+            layer: top,
+            offset: (0, 36),
+            sample: RetouchSample::All,
+            content_aware: false,
+            destination: false,
+        })
+        .unwrap();
+        // The photo keeps its blemish; the new layer holds opaque stripes
+        // over the patch and nothing elsewhere, so the composite is clean.
+        let doc = ed.doc();
+        let base = doc.layer(photo).unwrap().pixels().unwrap();
+        assert!((enc(base.get_pixel(24, 18))[0] - 1.0).abs() < 1e-3);
+        let over = doc.layer(top).unwrap().pixels().unwrap();
+        assert!((over.get_pixel(24, 18).a - 1.0).abs() < 1e-4);
+        assert!((enc(over.get_pixel(24, 18))[0] - 0.5).abs() < 2e-3);
+        assert!((enc(over.get_pixel(27, 18))[0] - 0.3).abs() < 2e-3);
+        assert_eq!(over.get_pixel(40, 18).a, 0.0);
+        let flat = lumenply_render::composite(doc);
+        let worst = stripe_error(&flat);
+        assert!(worst < 2e-3, "composite worst {worst}");
+
+        // Content-aware spot healing on the same empty layer.
+        ed.undo(); // the patch
+        ed.undo(); // the selection
+        ed.execute(&SpotHealAware {
+            layer: top,
+            brush: Brush {
+                radius: 7.0,
+                hardness: 1.0,
+                color: [0.0, 0.0, 0.0, 1.0],
+                spacing: 0.2,
+                jitter: 0.0,
+                mode: crate::commands::BrushMode::Paint,
+            },
+            points: vec![
+                StrokePoint::new(20.0, 18.0, 1.0),
+                StrokePoint::new(28.0, 18.0, 1.0),
+            ],
+            sample: RetouchSample::All,
+        })
+        .unwrap();
+        let doc = ed.doc();
+        let base = doc.layer(photo).unwrap().pixels().unwrap();
+        assert!(
+            (enc(base.get_pixel(24, 18))[0] - 1.0).abs() < 1e-3,
+            "the photo is untouched"
+        );
+        let flat = lumenply_render::composite(doc);
+        let mut worst = 0f32;
+        for y in 14..22 {
+            for x in 20..28 {
+                worst = worst.max((enc(flat.get_pixel(x, y))[0] - stripes(x as u32, y as u32)).abs());
+            }
+        }
+        assert!(worst < 0.03, "composite worst {worst}");
+    }
+
+    #[test]
+    fn current_and_below_ignores_the_layers_above() {
+        // photo, an empty retouch layer, then half-opaque black on top.
+        let (mut ed, _photo) = patch_doc();
+        ed.execute(&AddPixelLayer::new("retouch")).unwrap();
+        let retouch = ed.doc().layers().last().unwrap().id;
+        let mut veil = AddPixelLayer::from_raster(
+            "veil",
+            Raster::filled(64, 64, Rgba::new(0.0, 0.0, 0.0, 1.0)),
+            0,
+            0,
+        );
+        veil.opacity = 0.5;
+        ed.execute(&veil).unwrap();
+        ed.execute(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(16, 10, 16, 16))),
+        })
+        .unwrap();
+        let patch = |sample| PatchHeal {
+            layer: retouch,
+            offset: (0, 36),
+            sample,
+            content_aware: false,
+            destination: false,
+        };
+        ed.execute(&patch(RetouchSample::CurrentAndBelow)).unwrap();
+        let px = ed.doc().layer(retouch).unwrap().pixels().unwrap();
+        assert!(stripe_error(px) < 2e-3, "the veil above is not baked in");
+        ed.undo();
+        ed.execute(&patch(RetouchSample::All)).unwrap();
+        let px = ed.doc().layer(retouch).unwrap().pixels().unwrap();
+        assert!(stripe_error(px) > 0.1, "All layers samples the veil too");
+        // Current: the empty layer has nothing to heal from.
+        ed.undo();
+        assert!(ed.execute(&patch(RetouchSample::Current)).is_err());
+    }
+
     #[test]
     fn content_aware_spot_healing_rebuilds_the_stripes_under_the_stroke() {
         let (mut ed, id) = patch_doc();
@@ -801,6 +1008,7 @@ mod tests {
                 StrokePoint::new(20.0, 18.0, 1.0),
                 StrokePoint::new(28.0, 18.0, 1.0),
             ],
+            sample: RetouchSample::Current,
         };
         assert_eq!(stroke.affected(ed.doc()), Some(Rect::new(11, 9, 26, 18)));
         ed.execute(&stroke).unwrap();

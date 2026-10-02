@@ -62,6 +62,11 @@ pub(crate) struct Retouch {
     pub(crate) eraser_mode: EraserMode,
     /// Patch: synthesise with PatchMatch instead of healing the copy.
     pub(crate) patch_aware: bool,
+    /// Patch: the selection is the clean texture, dragged onto the flaw
+    /// (Photoshop's Destination); off, it is the flaw (Source).
+    pub(crate) patch_destination: bool,
+    /// What Patch and Spot healing read (Photoshop's Sample menu).
+    pub(crate) sample: RetouchSample,
     pub(crate) patch_drag: Option<PatchDrag>,
     /// Red eye: the press of a box being dragged (document space).
     pub(crate) eye_from: Option<(f32, f32)>,
@@ -108,6 +113,8 @@ impl Default for Retouch {
             heal_mode: HealMode::Spot,
             eraser_mode: EraserMode::Eraser,
             patch_aware: false,
+            patch_destination: false,
+            sample: RetouchSample::Current,
             patch_drag: None,
             eye_from: None,
             pupil: 50.0,
@@ -132,6 +139,30 @@ fn eye_box(center: (f32, f32), radius: f32) -> Rect {
         side.ceil() as u32,
         side.ceil() as u32,
     )
+}
+
+/// Photoshop's Sample menu for Patch and Spot healing.
+fn sample_menu(ui: &mut egui::Ui, value: &mut RetouchSample) {
+    const OPTIONS: [(RetouchSample, &str); 3] = [
+        (RetouchSample::Current, "Current layer"),
+        (RetouchSample::CurrentAndBelow, "Current & below"),
+        (RetouchSample::All, "All layers"),
+    ];
+    let current = OPTIONS.iter().find(|(m, _)| m == value).map_or("", |(_, l)| *l);
+    let r = egui::ComboBox::from_id_salt("retouch-sample")
+        .selected_text(current)
+        .width(118.0)
+        .show_ui(ui, |ui| {
+            popup_style(ui);
+            for (m, label) in OPTIONS {
+                ui.selectable_value(value, m, label);
+            }
+        })
+        .response;
+    a11y_name(&r, "Sample");
+    r.on_hover_text(
+        "What the heal reads. Below or All lets you retouch on an empty layer and keep the photo untouched",
+    );
 }
 
 /// A labelled mode control: segmented on a wide bar, a menu otherwise.
@@ -236,7 +267,7 @@ impl App {
     }
 
     /// The sample source for retouching commands on `layer`.
-    fn retouch_sample(&self, layer: LayerId) -> SampleSource {
+    pub(crate) fn retouch_sample(&self, layer: LayerId) -> SampleSource {
         if self.sample_merged {
             SampleSource::Merged
         } else {
@@ -262,16 +293,23 @@ impl App {
                 ui.separator();
                 match self.retouch.heal_mode {
                     HealMode::Patch => {
+                        let dest = &mut self.retouch.patch_destination;
+                        if wide {
+                            segmented(ui, dest, &[(false, "Source"), (true, "Destination")]);
+                        } else {
+                            check(ui, dest, "Destination");
+                        }
                         check(ui, &mut self.retouch.patch_aware, "Content-Aware").on_hover_text(
                             "Synthesise the patch from the dragged-to area (PatchMatch) instead of healing a copy of it",
                         );
-                        check(ui, &mut self.sample_merged, "All layers").on_hover_text(
-                            "Take the texture from the merged image instead of the active layer",
-                        );
+                        sample_menu(ui, &mut self.retouch.sample);
                         if wide {
-                            ui.label(
-                                RichText::new("Draw around the flaw, then drag it onto clean texture").weak(),
-                            );
+                            let hint = if self.retouch.patch_destination {
+                                "Draw around clean texture, then drag it onto the flaw"
+                            } else {
+                                "Draw around the flaw, then drag it onto clean texture"
+                            };
+                            ui.label(RichText::new(hint).weak());
                         }
                         true
                     }
@@ -302,6 +340,7 @@ impl App {
                         true
                     }
                     HealMode::Spot => {
+                        sample_menu(ui, &mut self.retouch.sample);
                         check(ui, &mut self.retouch.spot_aware, "Content-Aware").on_hover_text(
                             "On release, rebuild the stroked area from its surroundings (PatchMatch); \
                              off: blend the surrounding colour in",
@@ -487,8 +526,9 @@ impl App {
         PatchHeal {
             layer,
             offset,
-            sample: self.retouch_sample(layer),
+            sample: self.retouch.sample,
             content_aware,
+            destination: self.retouch.patch_destination,
         }
     }
 
@@ -744,7 +784,8 @@ impl App {
     /// mode, `retouch:radius=R` the brush radius, `retouch:source=N` the
     /// history brush's source step; `retouch:stroke=X0:Y0:X1:Y1` runs the
     /// current tool's stroke along that line; `retouch:magic=X:Y` runs the
-    /// magic eraser there.
+    /// magic eraser there; `retouch:sample=current|below|all` picks what
+    /// Patch and Spot healing read, `retouch:dest=1` Patch's Destination.
     pub(crate) fn debug_retouch(&mut self, ctx: &egui::Context, tok: &str) -> bool {
         let Some(rest) = tok.strip_prefix("retouch:") else {
             return false;
@@ -779,6 +820,14 @@ impl App {
                 }
             }
             ("radius", &[r]) => self.brush.radius = r,
+            ("sample", _) => {
+                self.retouch.sample = match arg {
+                    "below" => RetouchSample::CurrentAndBelow,
+                    "all" => RetouchSample::All,
+                    _ => RetouchSample::Current,
+                }
+            }
+            ("dest", &[v]) => self.retouch.patch_destination = v != 0.0,
             ("magic", &[x, y]) => {
                 if let Some(layer) = layer {
                     let cmd = self.magic_erase_command(layer, x as i32, y as i32);

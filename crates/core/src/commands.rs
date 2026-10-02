@@ -20,7 +20,7 @@ pub use crate::guides::{AddGuide, ClearGuides, MoveGuide, RemoveGuide};
 
 pub use crate::erasers::{BackgroundErase, MagicErase};
 pub use crate::fill_cmds::{AddFillLayer, SetFill};
-pub use crate::retouch::{PatchHeal, RedEye, SpotHealAware};
+pub use crate::retouch::{PatchHeal, RedEye, RetouchSample, SpotHealAware};
 pub use crate::retouch_brush::HistoryStroke;
 
 /// Add an empty pixel layer (or one filled from a raster) on top of the stack.
