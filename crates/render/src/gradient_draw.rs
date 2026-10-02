@@ -24,7 +24,8 @@ use lumenply_doc::{BlendMode, Gradient, GradientStyle, Mask, Selection};
 use lumenply_tiles::{Rect, Rgba, Tile, TileCoord, TileStore, TILE_SIZE};
 use rayon::prelude::*;
 
-use crate::{blend_channel, blend_pixel};
+use crate::blend::{blend_pixel_at, dissolve_weight};
+use crate::blend_channel;
 
 /// Everything a gradient drag paints with.
 #[derive(Clone, Debug, PartialEq)]
@@ -264,7 +265,7 @@ pub fn paint_pixels(store: &mut TileStore, area: Rect, sel: Option<&Selection>, 
     let prep = Prepared::new(paint);
     let opacity = paint.opacity.clamp(0.0, 1.0);
     for_each_pixel(store, Rgba::TRANSPARENT, area, sel, |px, x, y, i, k| {
-        px[i] = blend_pixel(px[i], prep.color_at(x, y), paint.blend, opacity * k);
+        px[i] = blend_pixel_at(px[i], prep.color_at(x, y), paint.blend, opacity * k, x, y);
     });
     store.prune_blank();
 }
@@ -288,7 +289,11 @@ pub fn paint_mask(mask: &mut Mask, area: Rect, sel: Option<&Selection>, paint: &
             let grey = (0.2126 * r + 0.7152 * g + 0.0722 * b).clamp(0.0, 1.0);
             let m = px[i].a;
             let target = blend_channel(paint.blend, m, grey);
-            let v = (m + (target - m) * (a * opacity * k)).clamp(0.0, 1.0);
+            let mut w = a * opacity * k;
+            if paint.blend == BlendMode::Dissolve {
+                w = dissolve_weight(w, x, y);
+            }
+            let v = (m + (target - m) * w).clamp(0.0, 1.0);
             px[i] = Rgba::new(v, v, v, v);
         },
     );
