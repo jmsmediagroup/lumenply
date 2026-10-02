@@ -130,8 +130,17 @@ impl App {
         let can_fx = !layer.clip
             && matches!(
                 layer.content,
-                LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Group(_)
+                LayerContent::Pixel(_)
+                    | LayerContent::Text(_)
+                    | LayerContent::Smart(_)
+                    | LayerContent::Group(_)
             );
+        let is_smart = layer.smart_layer().is_some();
+        // The painted bounds' centre: transforms pivot about it.
+        let pivot = layer
+            .raster_store()
+            .and_then(|s| s.content_bounds())
+            .map(|b| (b.x as f32 + b.w as f32 / 2.0, b.y as f32 + b.h as f32 / 2.0));
         let adj = match &layer.content {
             LayerContent::Adjustment(a) => Some(a.clone()),
             _ => None,
@@ -249,8 +258,31 @@ impl App {
                     .small()
                     .color(MUTED),
             );
-        } else if self.active_is_pixel() {
-            section_title(ui, "TRANSFORM");
+        } else if self.active_is_pixel() || is_smart {
+            let mut rasterize = false;
+            if is_smart {
+                ui.horizontal(|ui| {
+                    section_title(ui, "SMART OBJECT");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        rasterize = ui
+                            .add(
+                                egui::Button::new(RichText::new("Rasterize").small().color(MUTED))
+                                    .frame(false),
+                            )
+                            .on_hover_text("Turn it into ordinary pixels (transforms resample from then on)")
+                            .clicked();
+                    });
+                });
+                ui.label(
+                    RichText::new(
+                        "Scale and rotate as often as you like: it re-renders from the original pixels.",
+                    )
+                    .small()
+                    .color(MUTED),
+                );
+            } else {
+                section_title(ui, "TRANSFORM");
+            }
             slider_row(ui, "Scale", &mut self.xform_scale, 10.0..=400.0, "%");
             slider_row(ui, "Rotate", &mut self.xform_angle, -180.0..=180.0, "°");
             let pending = (self.xform_scale - 100.0).abs() > 0.01 || self.xform_angle.abs() > 0.01;
@@ -292,19 +324,30 @@ impl App {
                     free = true;
                 }
             });
+            // Scale and rotate about the painted centre (smart objects
+            // compose this into their transform).
+            let about = |sx: f32, sy: f32, a: f32| {
+                pivot.map(|(cx, cy)| TransformLayer {
+                    layer: id,
+                    transform: lumenply_tiles::Affine::around(cx, cy, sx, sy, a),
+                })
+            };
             if apply {
                 let s = self.xform_scale / 100.0;
-                let a = self.xform_angle.to_radians();
-                if let Some(cmd) = TransformLayer::around_center(self.editor.doc(), id, s, s, a) {
-                    self.run(&cmd);
-                    self.xform_scale = 100.0;
-                    self.xform_angle = 0.0;
-                } else {
-                    self.status = "Layer has no pixels to transform".into();
+                match about(s, s, self.xform_angle.to_radians()) {
+                    Some(cmd) => {
+                        self.run(&cmd);
+                        self.xform_scale = 100.0;
+                        self.xform_angle = 0.0;
+                    }
+                    None => self.status = "Layer has no pixels to transform".into(),
                 }
             }
             if let Some(h) = flip {
                 self.flip_active(h);
+            }
+            if rasterize {
+                self.run(&RasterizeLayer { layer: id });
             }
             if free {
                 self.begin_free_transform();

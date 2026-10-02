@@ -344,7 +344,6 @@ struct App {
     cur_tab: usize,
     /// Tab label while the live document has no file path.
     untitled: String,
-    untitled_seq: usize,
     /// No document is open: the welcome screen replaces the editor and
     /// `editor` is an empty placeholder that nothing may edit (see start.rs).
     no_doc: bool,
@@ -495,7 +494,6 @@ impl App {
             tabs: Vec::new(),
             cur_tab: 0,
             untitled: String::new(),
-            untitled_seq: 0,
             no_doc: true,
             start_thumb: None,
         };
@@ -697,9 +695,27 @@ impl App {
             self.tabs.insert(self.cur_tab, parked);
         }
         self.cur_tab = self.tabs.len();
-        self.untitled_seq += 1;
-        self.untitled = format!("Untitled-{}", self.untitled_seq);
+        self.untitled = self.next_untitled();
         self.set_doc(editor, path);
+    }
+
+    /// "Untitled-N" one past the highest N among the open, never-saved
+    /// tabs. Imports and the demo relabel their tab, so they never use up
+    /// a number (a counter would skip after them).
+    fn next_untitled(&self) -> String {
+        let n = |s: &str| s.strip_prefix("Untitled-").and_then(|n| n.parse::<usize>().ok());
+        let live = (!self.no_doc && self.path.is_none())
+            .then(|| n(&self.untitled))
+            .flatten();
+        let max = self
+            .tabs
+            .iter()
+            .filter(|t| t.path.is_none())
+            .filter_map(|t| n(&t.untitled))
+            .chain(live)
+            .max()
+            .unwrap_or(0);
+        format!("Untitled-{}", max + 1)
     }
 
     /// If `path` is already open in some tab, switch to it.
@@ -933,6 +949,12 @@ impl App {
             // act on the document underneath the live transform preview.
             return;
         }
+        // Esc first cancels an armed "New text" (the next canvas click would
+        // otherwise still start a new layer).
+        if self.text_new_armed && ctx.input_mut(|i| i.consume_key(M::NONE, Key::Escape)) {
+            self.text_new_armed = false;
+            self.status = "New text cancelled".into();
+        }
         // Esc is "get me out": drop the selection (the polygonal lasso and
         // free transform consume it first for their own cancel).
         if self.editor.doc().selection.is_some()
@@ -962,6 +984,27 @@ impl App {
         // the welcome screen that leaves only Open).
         for id in fired {
             self.run_menu_action(id);
+        }
+        // Canvas zoom: Cmd+= / Cmd+−, and Cmd+0 / Cmd+1 alongside the plain
+        // 0 / 1 keys (what Photoshop hands expect). `|` consumes both
+        // spellings of zoom-in.
+        let (zoom_in, zoom_out, cmd_fit, cmd_actual) = ctx.input_mut(|i| {
+            (
+                i.consume_key(M::COMMAND, Key::Equals) | i.consume_key(M::COMMAND, Key::Plus),
+                i.consume_key(M::COMMAND, Key::Minus),
+                i.consume_key(M::COMMAND, Key::Num0),
+                i.consume_key(M::COMMAND, Key::Num1),
+            )
+        });
+        for (hit, id) in [
+            (zoom_in, "zoom-in"),
+            (zoom_out, "zoom-out"),
+            (cmd_fit, "fit"),
+            (cmd_actual, "actual"),
+        ] {
+            if hit {
+                self.run_menu_action(id);
+            }
         }
         let (fill, delete) = ctx.input(|i| {
             (
@@ -1333,5 +1376,69 @@ mod key_tests {
         assert_eq!(delete_key_action(Tool::Brush), Some("clear"));
         assert_eq!(delete_key_action(Tool::Move), Some("clear"));
         assert_eq!(delete_key_action(Tool::RectSelect), Some("clear"));
+    }
+}
+
+#[cfg(test)]
+mod smart_tests {
+    use super::*;
+
+    #[test]
+    fn smart_objects_flip_losslessly_from_every_flip_entry_point() {
+        let mut app = App::launch(&["--demo".to_string()]);
+        let bg = app.editor.doc().layers()[0].id;
+        app.set_active(Some(bg));
+        app.run_menu_action("smart-object");
+        assert!(app.active_layer().unwrap().smart_layer().is_some());
+
+        // Flips used to error (FlipLayer is pixel-only); they now compose
+        // into the smart transform, and the registry no longer blocks them.
+        assert_eq!(app.action_block("flip-h"), None);
+        app.run_menu_action("flip-h");
+        let t = app.active_layer().unwrap().smart_layer().unwrap().transform;
+        assert!((t.a + 1.0).abs() < 1e-6, "mirrored on x: {t:?}");
+
+        // A second flip returns exactly to the original pixels' mapping.
+        app.run_menu_action("flip-h");
+        let s = app.active_layer().unwrap().smart_layer().unwrap();
+        assert!(
+            (s.transform.a - 1.0).abs() < 1e-6 && s.transform.tx.abs() < 1e-3,
+            "{:?}",
+            s.transform
+        );
+        assert!(
+            app.active_layer().unwrap().smart_layer().is_some(),
+            "still a smart object"
+        );
+        assert_eq!(app.editor.history().len(), 3, "convert + two flips");
+    }
+    #[test]
+    fn untitled_numbers_never_skip_after_imports() {
+        let mut app = App::launch(&["--demo".to_string()]);
+        let blank = || Editor::new(Document::new(8, 8));
+        app.open_in_new_tab(blank(), None);
+        assert_eq!(app.untitled, "Untitled-1", "the demo does not use up a number");
+        // An import relabels its tab with the file name.
+        app.open_in_new_tab(blank(), None);
+        app.untitled = "photo.jpg".into();
+        app.open_in_new_tab(blank(), None);
+        assert_eq!(app.untitled, "Untitled-2", "the import did not skip a number");
+    }
+    #[test]
+    fn escape_cancels_an_armed_new_text() {
+        let mut app = App::launch(&["--demo".to_string()]);
+        app.text_new_armed = true;
+        let ctx = egui::Context::default();
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(raw, |ctx| app.shortcuts(ctx));
+        assert!(!app.text_new_armed, "Esc disarms New text");
+        assert_eq!(app.status, "New text cancelled");
     }
 }

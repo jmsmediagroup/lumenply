@@ -43,8 +43,24 @@ impl App {
     }
 
     pub(crate) fn flip_active(&mut self, horizontal: bool) {
-        if let Some(layer) = self.active {
-            self.run(&FlipLayer { layer, horizontal });
+        let Some(layer) = self.active else { return };
+        // A smart object composes the flip into its transform (about its
+        // painted centre), so it stays lossless; FlipLayer is pixel-only.
+        let smart_pivot = self
+            .active_layer()
+            .filter(|l| l.smart_layer().is_some())
+            .and_then(|l| l.raster_store())
+            .and_then(|s| s.content_bounds())
+            .map(|b| (b.x as f32 + b.w as f32 / 2.0, b.y as f32 + b.h as f32 / 2.0));
+        match smart_pivot {
+            Some((cx, cy)) => {
+                let (sx, sy) = if horizontal { (-1.0, 1.0) } else { (1.0, -1.0) };
+                self.run(&TransformLayer {
+                    layer,
+                    transform: lumenply_tiles::Affine::around(cx, cy, sx, sy, 0.0),
+                });
+            }
+            None => self.run(&FlipLayer { layer, horizontal }),
         }
     }
 
@@ -533,8 +549,13 @@ impl App {
     }
 
     fn view_menu(&mut self, ui: &mut egui::Ui) {
+        self.act(ui, "Zoom in", "zoom-in");
+        self.act(ui, "Zoom out", "zoom-out");
         self.act(ui, "Fit on screen", "fit");
         self.act(ui, "Actual pixels", "actual");
+        menu_separator(ui);
+        let shown = !self.prefs.history_collapsed;
+        self.act_check(ui, "History strip", "toggle-history", shown);
     }
 
     fn help_menu(&mut self, ui: &mut egui::Ui) {

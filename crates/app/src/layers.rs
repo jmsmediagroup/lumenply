@@ -470,10 +470,10 @@ impl App {
                             act(ui, true, "Convert to smart object", "smart")
                                 .on_hover_text("Transforms re-render from the source: no quality loss");
                         }
-                        act(ui, pixel, "Flip horizontal", "fliph")
-                            .on_disabled_hover_text("Flips apply to pixel layers");
-                        act(ui, pixel, "Flip vertical", "flipv")
-                            .on_disabled_hover_text("Flips apply to pixel layers");
+                        act(ui, pixel || smart, "Flip horizontal", "fliph")
+                            .on_disabled_hover_text("Flips apply to pixel layers and smart objects");
+                        act(ui, pixel || smart, "Flip vertical", "flipv")
+                            .on_disabled_hover_text("Flips apply to pixel layers and smart objects");
                         menu_separator(ui);
                         act(ui, true, "Delete layer", "delete");
                     });

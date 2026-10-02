@@ -42,6 +42,9 @@ pub(crate) fn install(ctx: &egui::Context) {
     // system theme every frame and replaces our visuals with egui's stock
     // light palette on a light-mode OS.
     ctx.set_theme(egui::ThemePreference::Dark);
+    // Cmd +/−/0 belong to the canvas (zoom, fit), as in every photo editor;
+    // egui would otherwise scale the whole interface with them.
+    ctx.options_mut(|o| o.zoom_with_keyboard = false);
 
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert(

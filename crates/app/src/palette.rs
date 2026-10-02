@@ -109,8 +109,11 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Auto contrast", "auto-contrast"),
     ("Auto color", "auto-color"),
     ("32-bit float (HDR) on/off", "float-mode"),
+    ("Zoom in", "zoom-in"),
+    ("Zoom out", "zoom-out"),
     ("Fit on screen", "fit"),
     ("Actual pixels", "actual"),
+    ("Show or hide the history strip", "toggle-history"),
     ("About Lumenply", "about"),
 ];
 
@@ -375,9 +378,8 @@ impl App {
         match id {
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
             "redo" if !self.editor.can_redo() => Some("Nothing to redo"),
-            "fill" | "clear" | "layer-via-copy" | "flip-h" | "flip-v" | "smart-object" if !pixel => {
-                need_pixel
-            }
+            "flip-h" | "flip-v" if !pixel && !smart => Some("Select a pixel layer or smart object first"),
+            "fill" | "clear" | "layer-via-copy" | "smart-object" if !pixel => need_pixel,
             "xform" if !pixel && !smart => Some("Select a pixel layer or smart object first"),
             "perspective" | "warp" if smart => Some("Rasterize the smart object first"),
             "perspective" | "warp" if !pixel => need_pixel,
@@ -429,6 +431,12 @@ impl App {
         let (m, k) = match id {
             "fill" => (M::SHIFT, Key::F5),
             "clear" => return "Delete".into(),
+            // egui spells these keys "Equals"/"Minus"; show the symbols.
+            "zoom-in" | "zoom-out" => {
+                let base = shortcut_text(ctx, M::COMMAND, Key::A);
+                let sym = if id == "zoom-in" { "=" } else { "−" };
+                return format!("{}{sym}", base.trim_end_matches('A'));
+            }
             "fit" => (M::NONE, Key::Num0),
             "actual" => (M::NONE, Key::Num1),
             "quick-mask" => (M::NONE, Key::Q),
@@ -587,6 +595,12 @@ impl App {
             }
             "prefs" => self.dialog = Some(Dialog::Preferences(self.prefs.clone(), None)),
             "about" => self.dialog = Some(Dialog::About),
+            "zoom-in" => self.view_cmd = Some(ViewCmd::ZoomIn),
+            "zoom-out" => self.view_cmd = Some(ViewCmd::ZoomOut),
+            "toggle-history" => {
+                self.prefs.history_collapsed = !self.prefs.history_collapsed;
+                self.prefs.save();
+            }
             "fit" => self.view_cmd = Some(ViewCmd::Fit),
             "actual" => self.view_cmd = Some(ViewCmd::Actual),
             "palette" => self.toggle_palette(),
@@ -616,7 +630,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 61);
+        assert_eq!(n, 64); // + zoom in, zoom out, history strip
     }
 
     #[test]

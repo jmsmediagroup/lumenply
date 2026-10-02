@@ -105,14 +105,34 @@ impl App {
                 return;
             }
             "key" => {
-                if let Some(key) = Key::from_name(&target) {
+                // `Enter`, or with modifiers: `Cmd+Equals`, `Shift+Cmd+Z`.
+                let mut modifiers = egui::Modifiers::NONE;
+                let mut name = target.as_str();
+                while let Some((m, rest)) = name.split_once('+') {
+                    match m {
+                        "Cmd" => {
+                            modifiers.command = true;
+                            if cfg!(target_os = "macos") {
+                                modifiers.mac_cmd = true;
+                            } else {
+                                modifiers.ctrl = true;
+                            }
+                        }
+                        "Shift" => modifiers.shift = true,
+                        "Alt" => modifiers.alt = true,
+                        _ => break,
+                    }
+                    name = rest;
+                }
+                if let Some(key) = Key::from_name(name) {
+                    raw.modifiers = modifiers;
                     for pressed in [true, false] {
                         raw.events.push(egui::Event::Key {
                             key,
                             physical_key: None,
                             pressed,
                             repeat: false,
-                            modifiers: egui::Modifiers::NONE,
+                            modifiers,
                         });
                     }
                 }
