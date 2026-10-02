@@ -425,7 +425,7 @@ pub fn render_tile_over(
                 if layer.pass_through && !has_filter && layer.effects.is_empty() {
                     let before = dst.clone();
                     let after = render_tile_over(before.clone(), children, coord, canvas);
-                    dst = mix_tiles(before, after, layer.opacity, mask, coord);
+                    dst = mix_tiles(before, after, layer.opacity * layer.fill_opacity, mask, coord);
                     continue;
                 }
                 match render_tile(children, coord, canvas) {

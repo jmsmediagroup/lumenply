@@ -154,6 +154,38 @@ mod tests {
     }
 
     #[test]
+    fn a_groups_fill_fades_it_isolated_and_pass_through() {
+        for pass_through in [false, true] {
+            let (mut ed, square) = doc();
+            // Move the red square into a group at 40% fill.
+            let mut d = ed.doc().clone();
+            let mut sq = d.remove_layer(square).expect("square");
+            sq.effects = LayerEffects::default();
+            let gid = d.alloc_id();
+            let mut g = Layer::group(gid, "group");
+            g.children_mut().expect("group").push(sq);
+            g.pass_through = pass_through;
+            d.add_layer(g);
+            let mut ed2 = Editor::new(d);
+            ed2.execute(&SetFillOpacity {
+                layer: gid,
+                fill: 0.4,
+            })
+            .unwrap();
+            ed = ed2;
+            // 40% red over white: r = 1, g = b = 0.6, either way.
+            let p = px(&ed, 3, 3);
+            assert!((p.r - 1.0).abs() < 1e-3, "{pass_through}: {p:?}");
+            assert!(
+                (p.g - 0.6).abs() < 1e-3 && (p.b - 0.6).abs() < 1e-3,
+                "{pass_through}: {p:?}"
+            );
+            // Outside the square: untouched white.
+            assert!((px(&ed, 0, 0).g - 1.0).abs() < 1e-3);
+        }
+    }
+
+    #[test]
     fn fill_is_clamped_and_slider_drags_undo_in_one_step() {
         let (mut ed, id) = doc();
         let steps = ed.history().len();
