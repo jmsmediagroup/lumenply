@@ -153,8 +153,11 @@ impl App {
         if let Some((id, mut t)) = editing {
             let before = t.clone();
             let mut finished = false;
-            // Everything right of the text field needs about this much.
-            let field_w = (ui.available_width() - 760.0).clamp(110.0, 240.0);
+            // On a narrow window Tracking stays in Properties so the hint
+            // still fits; the text field takes what is left.
+            let narrow = ui.available_width() < 1100.0;
+            let reserve = if narrow { 800.0 } else { 760.0 };
+            let field_w = (ui.available_width() - reserve).clamp(110.0, 240.0);
             let r = text_field(ui, &mut t.text, field_w);
             finished |= r.lost_focus();
             finished |= font_picker(ui, "bar", &mut t.font, 170.0);
@@ -164,8 +167,10 @@ impl App {
             bar_separator(ui);
             muted(ui, "Size");
             finished |= edit_finished(&value_field(ui, &mut t.size, 6.0..=400.0, " px", 66.0));
-            muted(ui, "Tracking");
-            finished |= edit_finished(&value_field(ui, &mut t.tracking, -200.0..=800.0, "", 50.0));
+            if !narrow {
+                muted(ui, "Tracking");
+                finished |= edit_finished(&value_field(ui, &mut t.tracking, -200.0..=800.0, "", 50.0));
+            }
             finished |= text_color_button(ui, &mut t.color);
             self.commit_text(id, &before, t, finished);
             bar_separator(ui);
