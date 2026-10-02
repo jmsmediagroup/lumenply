@@ -122,9 +122,11 @@ None of these could be tested in the container.
       export (raw channels; Export menu), full precision both ways and
       psd-tools-cross-checked; Black & White/Exposure/Vibrance round-trip
       (expA fixed block; blwh/vibA Action Descriptors, psd-tools-parsed —
-      blwh maps PS's six weights onto our three). Still open: PSB (large
-      documents), text layers as editable PSD text, live filters as
-      smart filters
+      blwh maps PS's six weights onto our three); PSB import (version 2:
+      8-byte section/channel lengths, 4-byte RLE counts, 300k dim cap,
+      wide-length block keys; .psb accepted by app and CLI, fixture
+      psd-tools-verified). Still open: PSB export, text layers as
+      editable PSD text, live filters as smart filters
 - [x] OpenRaster (.ora) import/export for GIMP/Krita interchange (layers, groups,
       opacity, visibility, the ten blend modes; masks baked in, adjustments and
       live filters skipped with warnings)

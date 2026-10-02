@@ -119,6 +119,19 @@ impl<'a> Rd<'a> {
     fn i32(&mut self) -> Result<i32, PsdError> {
         Ok(self.u32()? as i32)
     }
+    fn u64(&mut self) -> Result<u64, PsdError> {
+        let b = self.bytes(8)?;
+        Ok(u64::from_be_bytes(b.try_into().expect("8 bytes")))
+    }
+    /// A section length: 4 bytes in PSD, 8 in PSB.
+    fn len_of(&mut self, psb: bool) -> Result<usize, PsdError> {
+        if psb {
+            let v = self.u64()?;
+            usize::try_from(v).map_err(|_| PsdError::Corrupt(format!("section length {v} overflows")))
+        } else {
+            Ok(self.u32()? as usize)
+        }
+    }
     fn skip(&mut self, n: usize) -> Result<(), PsdError> {
         self.need(n)?;
         self.pos += n;
@@ -243,7 +256,13 @@ fn inflate(src: &[u8], cap: usize) -> Result<Vec<u8>, PsdError> {
     Ok(out)
 }
 
-fn decode_channel(rd: &mut Rd, w: usize, h: usize, depth_bytes: usize) -> Result<Vec<u16>, PsdError> {
+fn decode_channel(
+    rd: &mut Rd,
+    w: usize,
+    h: usize,
+    depth_bytes: usize,
+    psb: bool,
+) -> Result<Vec<u16>, PsdError> {
     let compression = rd.u16()?;
     let plane_len = w * h * depth_bytes;
     match compression {
@@ -251,7 +270,12 @@ fn decode_channel(rd: &mut Rd, w: usize, h: usize, depth_bytes: usize) -> Result
         1 => {
             let mut counts = Vec::with_capacity(h);
             for _ in 0..h {
-                counts.push(rd.u16()? as usize);
+                // RLE row byte counts are 2 bytes in PSD, 4 in PSB.
+                counts.push(if psb {
+                    rd.u32()? as usize
+                } else {
+                    rd.u16()? as usize
+                });
             }
             // Don't let a lying header size the allocation: RLE cannot
             // expand the remaining input by more than 128×.
@@ -1211,17 +1235,25 @@ struct RawLayer {
 }
 
 /// Largest dimension the PSD v1 format allows for the canvas, a layer or a
-/// mask. Anything bigger is corrupt.
+/// mask; PSB (v2) raises it tenfold. Anything bigger is corrupt.
 const MAX_DIM: u32 = 30_000;
+const MAX_DIM_PSB: u32 = 300_000;
 
 /// Validate a bounds rectangle read from the file.
-fn checked_rect(left: i32, top: i32, right: i32, bottom: i32, what: &str) -> Result<Rect, PsdError> {
+fn checked_rect(
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+    max: u32,
+    what: &str,
+) -> Result<Rect, PsdError> {
     let w = right.saturating_sub(left).max(0) as u32;
     let h = bottom.saturating_sub(top).max(0) as u32;
-    let m = MAX_DIM as i32;
-    if w > MAX_DIM || h > MAX_DIM || !(-m..=m).contains(&left) || !(-m..=m).contains(&top) {
+    let m = max as i32;
+    if w > max || h > max || !(-m..=m).contains(&left) || !(-m..=m).contains(&top) {
         return Err(PsdError::Corrupt(format!(
-            "{what} bounds ({left}, {top})–({right}, {bottom}) are outside the PSD limits"
+            "{what} bounds ({left}, {top})–({right}, {bottom}) are outside the format's limits"
         )));
     }
     Ok(Rect::new(left, top, w, h))
@@ -1235,22 +1267,25 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
         return Err(PsdError::NotPsd("bad signature".into()));
     }
     let version = rd.u16()?;
-    if version != 1 {
-        return Err(PsdError::Unsupported(format!(
-            "version {version} (PSB is not supported yet)"
-        )));
+    if version != 1 && version != 2 {
+        return Err(PsdError::Unsupported(format!("version {version}")));
     }
+    // Version 2 is PSB ("large document"): the same format with 8-byte
+    // section/channel lengths, 4-byte RLE row counts and a 300k dim cap.
+    let psb = version == 2;
     rd.skip(6)?;
     let channels = rd.u16()?;
     let height = rd.u32()?;
     let width = rd.u32()?;
     let depth = rd.u16()?;
     let mode = rd.u16()?;
-    // The PSD v1 format caps dimensions at 30,000 and channels at 56; values
-    // beyond that are corrupt and would otherwise size huge allocations.
-    if width == 0 || height == 0 || width > MAX_DIM || height > MAX_DIM {
+    // PSD v1 caps dimensions at 30,000 (PSB at 300,000) and channels at 56;
+    // values beyond that are corrupt and would otherwise size huge
+    // allocations.
+    let max_dim = if psb { MAX_DIM_PSB } else { MAX_DIM };
+    if width == 0 || height == 0 || width > max_dim || height > max_dim {
         return Err(PsdError::Corrupt(format!(
-            "canvas {width}×{height} is outside the PSD limits"
+            "canvas {width}×{height} is outside the format's limits"
         )));
     }
     if !(3..=56).contains(&channels) {
@@ -1273,11 +1308,11 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     rd.skip(res_len)?;
 
     let mut warnings = Vec::new();
-    let lm_len = rd.u32()? as usize;
+    let lm_len = rd.len_of(psb)?;
     let lm_start = rd.pos;
     let mut raw: Vec<RawLayer> = Vec::new();
     if lm_len > 0 {
-        let li_len = rd.u32()? as usize;
+        let li_len = rd.len_of(psb)?;
         if li_len > 0 {
             let li_start = rd.pos;
             let count = rd.i16()?;
@@ -1295,7 +1330,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let mut chans = Vec::with_capacity(nch);
                 for _ in 0..nch {
                     let id = rd.i16()?;
-                    let len = rd.u32()? as usize;
+                    let len = rd.len_of(psb)?;
                     chans.push((id, len));
                 }
                 if rd.bytes(4)? != b"8BIM" {
@@ -1319,7 +1354,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     let default = rd.u8()?;
                     let mflags = rd.u8()?;
                     rd.skip(mask_len - 18)?;
-                    let r = checked_rect(ml, mt, mr, mb, "mask")?;
+                    let r = checked_rect(ml, mt, mr, mb, max_dim, "mask")?;
                     mask = Some((r, Vec::new(), default, mflags & 0x02 == 0));
                 } else {
                     rd.skip(mask_len)?;
@@ -1341,7 +1376,25 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         break;
                     }
                     let k = rd.bytes(4)?.to_vec();
-                    let len = rd.u32()? as usize;
+                    // In PSB a handful of block keys carry 8-byte lengths.
+                    let wide = psb
+                        && matches!(
+                            &k[..],
+                            b"LMsk"
+                                | b"Lr16"
+                                | b"Lr32"
+                                | b"Layr"
+                                | b"Mt16"
+                                | b"Mt32"
+                                | b"Mtrn"
+                                | b"Alph"
+                                | b"FMsk"
+                                | b"lnk2"
+                                | b"FEid"
+                                | b"FXid"
+                                | b"PxSD"
+                        );
+                    let len = rd.len_of(wide)?;
                     let data = rd.bytes(len)?;
                     if len % 2 == 1 && rd.pos < extra_end {
                         rd.skip(1)?;
@@ -1379,7 +1432,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         pass_through: &key[..] == b"pass",
                         clip: clipping == 1,
                         name,
-                        bounds: checked_rect(left, top, right, bottom, "layer")?,
+                        bounds: checked_rect(left, top, right, bottom, max_dim, "layer")?,
                         channels: Vec::new(),
                         blend,
                         blend_known: known,
@@ -1409,7 +1462,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     };
                     if w > 0 && h > 0 && len >= 2 {
                         let mut sub = Rd::new(data);
-                        match decode_channel(&mut sub, w, h, depth_bytes) {
+                        match decode_channel(&mut sub, w, h, depth_bytes, psb) {
                             Ok(plane) => {
                                 if id == -2 {
                                     if let Some(m) = layer.mask.as_mut() {
@@ -1445,7 +1498,11 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
             1 => {
                 let mut counts = Vec::with_capacity(h * nch);
                 for _ in 0..h * nch {
-                    counts.push(rd.u16()? as usize);
+                    counts.push(if psb {
+                        rd.u32()? as usize
+                    } else {
+                        rd.u16()? as usize
+                    });
                 }
                 let mut planes = Vec::new();
                 for c in 0..nch {
@@ -1711,6 +1768,104 @@ mod tests {
         let path = temp(name);
         std::fs::write(&path, bytes).unwrap();
         load(&path)
+    }
+
+    #[test]
+    fn psb_files_load_with_wide_lengths_and_rle_counts() {
+        // A hand-built 4×4 PSB: version 2, 8-byte section and channel
+        // lengths, one layer whose channels are RLE with 4-byte row
+        // counts, plus a raw composite so strict readers accept the file.
+        let (w, h) = (4usize, 4usize);
+        let put_u64 = |f: &mut Vec<u8>, v: u64| f.extend_from_slice(&v.to_be_bytes());
+
+        // Channel planes: red ramps 0..255 by pixel index, green 0, blue 0,
+        // alpha 255.
+        let red: Vec<u8> = (0..w * h).map(|i| (i * 17) as u8).collect();
+        let flat = |v: u8| vec![v; w * h];
+        let rle = |plane: &[u8]| -> Vec<u8> {
+            let mut counts = Vec::new();
+            let mut data = Vec::new();
+            for y in 0..h {
+                let start = data.len();
+                packbits(&plane[y * w..(y + 1) * w], &mut data);
+                counts.extend_from_slice(&((data.len() - start) as u32).to_be_bytes());
+            }
+            let mut out = vec![0, 1]; // compression = RLE
+            out.extend(counts);
+            out.extend(data);
+            out
+        };
+        let chans: Vec<(i16, Vec<u8>)> = vec![
+            (0, rle(&red)),
+            (1, rle(&flat(0))),
+            (2, rle(&flat(0))),
+            (-1, rle(&flat(255))),
+        ];
+
+        // Layer record with 8-byte channel lengths.
+        let mut rec = Vec::new();
+        for v in [0i32, 0, h as i32, w as i32] {
+            rec.extend_from_slice(&v.to_be_bytes());
+        }
+        put_u16(&mut rec, chans.len() as u16);
+        for (id, data) in &chans {
+            put_u16(&mut rec, *id as u16);
+            put_u64(&mut rec, data.len() as u64);
+        }
+        rec.extend_from_slice(b"8BIM");
+        rec.extend_from_slice(b"norm");
+        rec.extend_from_slice(&[255, 0, 0, 0]);
+        let mut extra = Vec::new();
+        put_u32(&mut extra, 0); // no mask
+        put_u32(&mut extra, 0); // no blending ranges
+        extra.extend_from_slice(&[0, 0, 0, 0]); // empty name + pad
+        put_u32(&mut rec, extra.len() as u32);
+        rec.extend_from_slice(&extra);
+
+        let mut f = Vec::new();
+        f.extend_from_slice(b"8BPS");
+        put_u16(&mut f, 2); // version: PSB
+        f.extend_from_slice(&[0; 6]);
+        put_u16(&mut f, 3);
+        put_u32(&mut f, h as u32);
+        put_u32(&mut f, w as u32);
+        put_u16(&mut f, 8);
+        put_u16(&mut f, 3); // RGB
+        put_u32(&mut f, 0); // colour mode data
+        put_u32(&mut f, 0); // resources
+        let chan_bytes: usize = chans.iter().map(|(_, d)| d.len()).sum();
+        let li_len = 2 + rec.len() + chan_bytes;
+        put_u64(&mut f, (8 + pad_even(li_len) + 4) as u64); // layer+mask section
+        put_u64(&mut f, li_len as u64); // layer info
+        put_u16(&mut f, 1); // one record
+        f.extend_from_slice(&rec);
+        for (_, d) in &chans {
+            f.extend_from_slice(d);
+        }
+        if li_len % 2 == 1 {
+            f.push(0);
+        }
+        put_u32(&mut f, 0); // global layer mask info
+        put_u16(&mut f, 0); // composite: raw
+        for v in [None, Some(0u8), Some(0)] {
+            match v {
+                None => f.extend_from_slice(&red),
+                Some(c) => f.extend_from_slice(&flat(c)),
+            }
+        }
+        let doc = load_bytes("wide.psb", &f).unwrap().value;
+        assert_eq!((doc.width, doc.height), (4, 4));
+        assert_eq!(doc.layer_count(), 1);
+        let px = doc.layers()[0].pixels().unwrap();
+        let got = px.get_pixel(3, 2).to_straight(); // index 11 → 187
+        let want = crate::srgb_to_linear_f(187.0 / 255.0);
+        assert!((got[0] - want).abs() < 1e-3, "PSB RLE channel decodes: {got:?}");
+        assert!((px.get_pixel(0, 0).to_straight()[3] - 1.0).abs() < 1e-4);
+
+        // Unknown versions still refuse.
+        let mut bad = f.clone();
+        bad[4..6].copy_from_slice(&3u16.to_be_bytes());
+        assert!(load_bytes("v3.psb", &bad).is_err());
     }
 
     #[test]

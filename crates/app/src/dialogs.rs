@@ -33,7 +33,7 @@ impl App {
             .add_filter(
                 "Projects & images",
                 &[
-                    "lumen", "nge", "psd", "ora", "png", "jpg", "jpeg", "tif", "tiff", "webp", "exr",
+                    "lumen", "nge", "psd", "psb", "ora", "png", "jpg", "jpeg", "tif", "tiff", "webp", "exr",
                 ],
             )
             .pick_file()

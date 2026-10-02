@@ -133,10 +133,10 @@ fn main() -> Result<()> {
     }
 }
 
-/// Open a .lumen project or a .psd file.
+/// Open a .lumen project or a .psd/.psb file.
 fn load_any(path: &PathBuf) -> Result<Document> {
     let lower = path.to_string_lossy().to_ascii_lowercase();
-    if lower.ends_with(".psd") {
+    if lower.ends_with(".psd") || lower.ends_with(".psb") {
         let rep = lumenply_io::psd::load(path)?;
         for w in &rep.warnings {
             eprintln!("warning: {w}");

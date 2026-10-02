@@ -139,7 +139,8 @@ fn is_ora_path(p: &str) -> bool {
 }
 
 fn is_psd_path(p: &str) -> bool {
-    p.to_ascii_lowercase().ends_with(".psd")
+    let p = p.to_ascii_lowercase();
+    p.ends_with(".psd") || p.ends_with(".psb")
 }
 
 // ---- small enums ---------------------------------------------------------------
