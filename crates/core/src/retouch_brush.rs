@@ -43,7 +43,7 @@ pub(crate) fn filter_stroke(
     let kr = kernel_radius(brush);
     let sharpen = brush.mode == BrushMode::Sharpen;
     for d in interpolate_dabs(brush, points) {
-        let r = brush.radius * d.pressure.clamp(0.0, 1.0);
+        let r = d.radius;
         if r <= 0.0 {
             continue;
         }
@@ -212,6 +212,7 @@ mod tests {
                 spacing: 1.0,
                 jitter: 0.0,
                 mode,
+                ..Brush::default()
             },
             points: vec![StrokePoint::new(16.0, 16.0, 1.0)],
         }
@@ -321,6 +322,7 @@ mod tests {
                 spacing: 0.2,
                 jitter: 0.0,
                 mode: BrushMode::History,
+                ..Brush::default()
             },
             points: vec![StrokePoint::new(16.0, 16.0, 1.0)],
             source,

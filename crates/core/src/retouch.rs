@@ -1011,6 +1011,7 @@ mod tests {
                 spacing: 0.2,
                 jitter: 0.0,
                 mode: crate::commands::BrushMode::Paint,
+                ..Brush::default()
             },
             points: vec![
                 StrokePoint::new(20.0, 18.0, 1.0),
@@ -1080,6 +1081,7 @@ mod tests {
             spacing: 0.2,
             jitter: 0.0,
             mode: crate::commands::BrushMode::Paint,
+            ..Brush::default()
         }
     }
 
@@ -1248,6 +1250,7 @@ mod tests {
                 spacing: 0.2,
                 jitter: 0.0,
                 mode: crate::commands::BrushMode::Paint,
+                ..Brush::default()
             },
             points: vec![
                 StrokePoint::new(20.0, 18.0, 1.0),

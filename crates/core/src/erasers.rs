@@ -7,7 +7,8 @@ use lumenply_doc::{Document, LayerId};
 use lumenply_tiles::{Rect, Rgba};
 
 use crate::commands::{
-    dab_coverage, flood_region, interpolate_dabs, sampler, stroke_bounds, Brush, SampleSource, StrokePoint,
+    dab_coverage, flood_region, interpolate_dabs, sampler, stroke_bounds, Brush, Dab, SampleSource,
+    StrokePoint,
 };
 use crate::{Command, EditError, EditResult};
 
@@ -75,7 +76,7 @@ impl Command for BackgroundErase {
         let before = store.clone();
         let strength = self.brush.color[3].clamp(0.0, 1.0);
         let dabs = interpolate_dabs(&self.brush, &self.points);
-        let at = |p: &StrokePoint| (p.x.floor() as i32, p.y.floor() as i32);
+        let at = |p: &Dab| (p.x.floor() as i32, p.y.floor() as i32);
         let first = encoded(before.get_pixel(at(&dabs[0]).0, at(&dabs[0]).1));
         let protect = self
             .protect
@@ -102,7 +103,7 @@ impl Command for BackgroundErase {
             };
             // Contiguous: flood from the centre over erasable pixels of
             // the dab's box.
-            let r = (self.brush.radius * d.pressure.clamp(0.0, 1.0)).ceil() as i32 + 1;
+            let r = d.radius.ceil() as i32 + 1;
             let bx = Rect::new(at(d).0 - r, at(d).1 - r, (2 * r + 1) as u32, (2 * r + 1) as u32)
                 .intersect(&canvas);
             let reach: Option<Vec<bool>> = (self.contiguous && !bx.is_empty()).then(|| {
@@ -248,6 +249,7 @@ mod tests {
                 spacing: 0.25,
                 jitter: 0.0,
                 mode: BrushMode::Erase,
+                ..Brush::default()
             },
             points: points.iter().map(|&(x, y)| StrokePoint::new(x, y, 1.0)).collect(),
             tolerance: 0.1,

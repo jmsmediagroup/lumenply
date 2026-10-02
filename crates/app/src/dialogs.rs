@@ -483,6 +483,8 @@ impl App {
         let mut keep = true;
         let mut confirmed = false;
         let mut filter_changed = false;
+        // On a smart object the filter goes on as a smart filter.
+        let as_smart_filter = self.filters_go_smart();
         let shown = egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
@@ -1039,7 +1041,14 @@ impl App {
                                     filter_changed |= row(ui, "Threshold", threshold, 0.0..=255.0, " levels", o);
                                 }
                             }
-                            note(ui, "Previewed on the canvas; applies to the active layer.");
+                            note(
+                                ui,
+                                if as_smart_filter {
+                                    "Previewed on the canvas; added as a smart filter you can edit later."
+                                } else {
+                                    "Previewed on the canvas; applies to the active layer."
+                                },
+                            );
                         }
                         Dialog::CanvasSize(w, h, anchor) => {
                             field_row(
@@ -1109,14 +1118,9 @@ impl App {
         if let Dialog::Filter(f) = &d {
             if filter_changed || !self.filter_previewed {
                 if let Some(layer) = self.active {
-                    let mut preview = self.editor.doc().clone();
-                    if (ApplyFilter {
-                        layer,
-                        filter: f.clone(),
-                    })
-                    .apply(&mut preview)
-                    .is_ok()
-                    {
+                    // Baked into a pixel layer, or a smart filter on a
+                    // smart object (see smart_filters_ui).
+                    if let Some(preview) = self.filter_dialog_preview(layer, f) {
                         self.preview(ctx, &preview, None);
                     }
                 }
@@ -1191,10 +1195,7 @@ impl App {
                 Dialog::New(w, h) => self.open_in_new_tab(blank(*w, *h), None),
                 Dialog::Filter(f) => {
                     if let Some(layer) = self.active {
-                        self.run(&ApplyFilter {
-                            layer,
-                            filter: f.clone(),
-                        });
+                        self.apply_filter_dialog(ctx, layer, f.clone());
                     }
                 }
                 Dialog::CanvasSize(w, h, anchor) => {

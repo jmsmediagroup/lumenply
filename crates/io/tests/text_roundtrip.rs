@@ -107,3 +107,68 @@ fn psd_export_names_the_font_of_rasterised_text() {
         ]
     );
 }
+
+#[test]
+fn lumen_round_trip_keeps_paragraph_boxes_and_character_options() {
+    let mut doc = Document::new(400, 300);
+    let para = TextLayer {
+        box_size: Some([180.0, 120.0]),
+        align: TextAlign::Justify,
+        baseline_shift: -3.5,
+        all_caps: true,
+        kerning: true,
+        underline: true,
+        line_height: 1.6,
+        ..TextLayer::new(
+            "wraps inside its box when it is long",
+            20.0,
+            30.0,
+            20.0,
+            [0.0, 0.0, 0.0, 1.0],
+        )
+    };
+    let id = add_text(&mut doc, para.clone());
+    let path = temp("paragraph.lumen");
+    lumenply_io::project::save(&path, &doc).expect("save");
+    let back = lumenply_io::project::load(&path).expect("load");
+    let _ = std::fs::remove_file(&path);
+    let t = back.layer(id).unwrap().text_layer().unwrap();
+    assert_eq!(t.box_size, Some([180.0, 120.0]));
+    assert_eq!(t.align, TextAlign::Justify);
+    assert_eq!((t.baseline_shift, t.all_caps, t.line_height), (-3.5, true, 1.6));
+    assert!(t.kerning && t.underline && !t.strikethrough);
+    assert_eq!(*t, para);
+    // Wrapped glyphs come back where they were.
+    let orig = doc
+        .layer(id)
+        .unwrap()
+        .text_layer()
+        .unwrap()
+        .cache
+        .clone()
+        .unwrap();
+    assert_eq!(
+        t.cache.as_ref().unwrap().content_bounds(),
+        orig.content_bounds(),
+        "same wrapped layout after loading"
+    );
+    let b = orig.content_bounds().unwrap();
+    assert!(b.x >= 20 && b.right() <= 201, "inside the 180 px box: {b:?}");
+    assert!(b.h > 60, "several wrapped lines: {b:?}");
+}
+
+#[test]
+fn text_saved_before_paragraphs_existed_still_loads() {
+    // A text layer as older versions wrote it: no box, shift or caps keys.
+    let old = r#"{"text":"Old","x":10.0,"y":40.0,"size":24.0,"color":[0.0,0.0,0.0,1.0],
+        "bold":false,"line_height":1.2,"font":"","italic":false,"align":"center","tracking":0.0}"#;
+    let t: TextLayer = serde_json::from_str(old).expect("old text layer JSON");
+    assert_eq!(t.box_size, None);
+    assert_eq!((t.baseline_shift, t.all_caps, t.kerning), (0.0, false, false));
+    assert!(t.runs.is_empty());
+    assert_eq!(t.align, TextAlign::Center);
+    let new = r#"{"text":"J","x":0.0,"y":0.0,"size":9.0,"color":[0.0,0.0,0.0,1.0],
+        "bold":false,"line_height":1.2,"align":"justify","box_size":[50.0,20.0]}"#;
+    let j: TextLayer = serde_json::from_str(new).expect("new keys");
+    assert_eq!((j.align, j.box_size), (TextAlign::Justify, Some([50.0, 20.0])));
+}

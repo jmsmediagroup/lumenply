@@ -342,6 +342,8 @@ impl GpuCompositor {
                 // Clip chains and layer effects stay on the CPU for now.
                 !l.clip
                     && l.effects.is_empty()
+                    // Smart filters render on the CPU (ADR 0011).
+                    && !l.smart_filters.is_active()
                     && match &l.content {
                         LayerContent::Pixel(_)
                         | LayerContent::Text(_)

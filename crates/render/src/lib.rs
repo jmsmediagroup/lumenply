@@ -25,7 +25,9 @@ pub mod liquify;
 pub mod membrane;
 pub mod resample;
 pub mod shape;
+pub mod smart_filters;
 pub mod text;
+pub mod text_layout;
 pub mod transform;
 
 pub use cache::BelowCache;

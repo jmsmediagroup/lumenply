@@ -22,6 +22,8 @@ impl App {
             || self.debug_shape(ctx, tok)
             || self.debug_gradient(ctx, tok)
             || self.debug_select_mask(ctx, tok)
+            || self.debug_brush(ctx, tok)
+            || self.debug_smart_filters(ctx, tok)
             || self.debug_retouch(ctx, tok)
     }
 
@@ -365,7 +367,7 @@ impl App {
         } else if let Some((x, y)) = rest.strip_prefix("shift-click:").and_then(xy) {
             self.text_click(ctx, x, y, true);
         } else {
-            return false;
+            return self.debug_text_edit(ctx, rest);
         }
         true
     }

@@ -337,6 +337,11 @@ impl App {
 
     /// Upload a preview of `doc` for the given area (or the whole canvas).
     pub(crate) fn preview(&mut self, ctx: &egui::Context, doc: &Document, area: Option<Rect>) {
+        // Smart filters re-render over the previewed pixels, and reach
+        // past the edited area (see smart_filters_ui).
+        let fresh = crate::smart_filters_ui::refreshed_preview(doc);
+        let doc = fresh.as_ref().unwrap_or(doc);
+        let area = lumenply_core::smart_filter_cmds::widen_affected(doc, area);
         // Previews change only the active layer, so the cached backdrop
         // below it applies to the preview document too.
         let mut below = std::mem::take(&mut self.below);
@@ -1137,21 +1142,19 @@ impl App {
                 }
             }
             Tool::Gradient => self.gradient_input(ctx, resp, to_doc),
-            Tool::Text => {
-                if resp.hovered() {
-                    ctx.set_cursor_icon(egui::CursorIcon::Text);
-                }
-                if resp.clicked_by(primary) {
-                    if let Some(p) = resp.interact_pointer_pos() {
-                        let (x, y) = to_doc(p);
-                        let shift = ctx.input(|i| i.modifiers.shift);
-                        self.text_click(ctx, x, y, shift);
-                    }
-                }
-            }
+            Tool::Text => self.type_tool_input(ctx, resp, &to_doc),
             Tool::Move => {
                 if resp.hovered() {
                     ctx.set_cursor_icon(egui::CursorIcon::Move);
+                }
+                // Double-clicking text edits it, as in Photoshop.
+                if resp.double_clicked_by(primary) {
+                    let hit = resp.interact_pointer_pos().map(&to_doc).and_then(|(x, y)| {
+                        text_layer_at(self.editor.doc().layers(), x, y).map(|id| (id, x, y))
+                    });
+                    if let Some((id, x, y)) = hit {
+                        self.begin_text_edit(ctx, id, crate::text_edit::EditStart::At(x, y));
+                    }
                 }
                 if resp.drag_started_by(primary) {
                     let fill = self
@@ -1476,8 +1479,10 @@ impl App {
                     resp.hover_pos(),
                 ) {
                     let r = (self.brush.radius * self.zoom).max(1.5);
-                    painter.circle_stroke(p, r + 1.0, Stroke::new(1.0, Color32::from_black_alpha(160)));
-                    painter.circle_stroke(p, r, Stroke::new(1.0, Color32::WHITE));
+                    if !self.tip_cursor(painter, p) {
+                        painter.circle_stroke(p, r + 1.0, Stroke::new(1.0, Color32::from_black_alpha(160)));
+                        painter.circle_stroke(p, r, Stroke::new(1.0, Color32::WHITE));
+                    }
                     if self.tool == Tool::Clone {
                         if let Some((sx, sy)) = self.clone_source {
                             let origin = resp.rect.min + self.pan;
@@ -1632,8 +1637,14 @@ pub(crate) fn text_layer_at(layers: &[Layer], x: f32, y: f32) -> Option<LayerId>
             }
             continue;
         }
-        if l.text_layer().is_none() {
+        let Some(t) = l.text_layer() else {
             continue;
+        };
+        // Paragraph text: anywhere inside its box.
+        if let Some([w, h]) = t.box_size {
+            if x >= t.x && y >= t.y && x <= t.x + w && y <= t.y + h {
+                return Some(l.id);
+            }
         }
         if let Some(b) = l.raster_store().and_then(|s| s.content_bounds()) {
             let pad = 4;

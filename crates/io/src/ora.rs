@@ -197,6 +197,13 @@ fn write_layer<W: Write + std::io::Seek>(
             if matches!(layer.content, LayerContent::Smart(_)) {
                 warnings.push(format!("smart object '{}' was exported as pixels", layer.name));
             }
+            if layer.smart_filters.is_active() {
+                warnings.push(format!(
+                    "layer '{}': smart filters were baked into its pixels",
+                    layer.name
+                ));
+            }
+            // raster_store() is the filtered pixels when there are any.
             let Some(store) = layer.raster_store() else {
                 return Ok(());
             };

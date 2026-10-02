@@ -1027,6 +1027,7 @@ impl App {
                         spacing: 0.1,
                         jitter: 0.0,
                         mode: BrushMode::Paint,
+                        ..Brush::default()
                     };
                     self.run(&PaintStroke {
                         layer,
@@ -1380,6 +1381,7 @@ mod tests {
                 spacing: 0.2,
                 jitter: 0.0,
                 mode: BrushMode::Paint,
+                ..Brush::default()
             },
             points: vec![StrokePoint::new(24.0, 24.0, 1.0)],
         });

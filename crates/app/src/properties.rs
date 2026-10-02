@@ -231,6 +231,10 @@ impl App {
             _ => {}
         }
 
+        // Smart filters on this layer (smart_filters_ui), right under its
+        // blend: once added they are what gets tuned most.
+        self.smart_filters_properties(ui, id);
+
         // What this kind of layer does comes first; the (long, mostly
         // unused) effects list folds away below it.
         if let Some(t) = self.active_text() {

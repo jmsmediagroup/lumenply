@@ -27,6 +27,8 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::IoError;
 
+mod smart_filters;
+
 pub const FORMAT_VERSION: u32 = 1;
 
 #[derive(Debug, thiserror::Error)]
@@ -99,6 +101,10 @@ struct LayerRecord {
     /// Missing in files from before layer locks: unlocked.
     #[serde(default, skip_serializing_if = "lumenply_doc::LayerLocks::is_empty")]
     locks: lumenply_doc::LayerLocks,
+    /// Smart filters on the layer's own pixels (ADR 0011); missing in
+    /// older files: none.
+    #[serde(default, skip_serializing_if = "smart_filters::SmartFiltersRecord::is_empty")]
+    smart_filters: smart_filters::SmartFiltersRecord,
     #[serde(flatten)]
     content: ContentRecord,
 }
@@ -287,6 +293,7 @@ fn write_layer<W: Write + std::io::Seek>(
         mask,
         collapsed: layer.collapsed,
         locks: layer.locks,
+        smart_filters: smart_filters::write(zip, layer, opts)?,
         content,
     })
 }
@@ -489,6 +496,7 @@ fn read_layer<R: Read + std::io::Seek>(
     layer.mask = mask;
     layer.collapsed = r.collapsed;
     layer.locks = r.locks;
+    layer.smart_filters = smart_filters::read(zip, r.id, &r.smart_filters)?;
     Ok(layer)
 }
 
