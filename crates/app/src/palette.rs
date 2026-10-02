@@ -124,6 +124,18 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Lock image pixels (toggle)", "lock-pixels"),
     ("Lock position (toggle)", "lock-position"),
     ("Lock all (toggle)", "lock-all"),
+    ("Align left edges", "align-left"),
+    ("Align horizontal centres", "align-hcenter"),
+    ("Align right edges", "align-right"),
+    ("Align top edges", "align-top"),
+    ("Align vertical centres", "align-vcenter"),
+    ("Align bottom edges", "align-bottom"),
+    ("Distribute left edges", "distribute-left"),
+    ("Distribute horizontal centres", "distribute-hcenter"),
+    ("Distribute right edges", "distribute-right"),
+    ("Distribute top edges", "distribute-top"),
+    ("Distribute vertical centres", "distribute-vcenter"),
+    ("Distribute bottom edges", "distribute-bottom"),
 ];
 
 /// The id of the destructive filter dialog for a filter kind.
@@ -659,7 +671,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 73); // + four layer locks
+        assert_eq!(n, 85); // + six aligns, six distributes
     }
 
     #[test]

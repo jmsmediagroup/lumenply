@@ -442,6 +442,17 @@ impl App {
     }
 
     fn layer_menu(&mut self, ui: &mut egui::Ui) {
+        // Two columns keep the menu inside a 600 px window (egui menus
+        // can't scroll): making and arranging layers on the left,
+        // combining, aligning, locking and converting them on the right.
+        ui.horizontal_top(|ui| {
+            layer_actions::menu_column(ui, "layer-left", |ui| self.layer_menu_left(ui));
+            ui.add_space(6.0);
+            layer_actions::menu_column(ui, "layer-right", |ui| self.layer_menu_right(ui));
+        });
+    }
+
+    fn layer_menu_left(&mut self, ui: &mut egui::Ui) {
         self.act(ui, "New pixel layer", "new-layer");
         self.act(ui, "Duplicate layer", "duplicate-layer");
         self.act(ui, "Layer via copy", "layer-via-copy");
@@ -459,20 +470,26 @@ impl App {
                 }
             }
         });
-        menu_separator(ui);
+        layer_actions::column_separator(ui);
         self.act(ui, "Rename", "rename");
         self.act(ui, "Delete layer", "delete-layer");
-        menu_separator(ui);
+        layer_actions::column_separator(ui);
         self.act(ui, "Group", "group");
         self.act(ui, "Ungroup", "ungroup");
-        menu_separator(ui);
+        layer_actions::column_separator(ui);
         self.act(ui, "Move up", "layer-up");
         self.act(ui, "Move down", "layer-down");
-        menu_separator(ui);
+        layer_actions::column_separator(ui);
+        self.act(ui, "Flip layer horizontal", "flip-h");
+        self.act(ui, "Flip layer vertical", "flip-v");
+    }
+
+    fn layer_menu_right(&mut self, ui: &mut egui::Ui) {
         self.merge_menu_items(ui);
-        menu_separator(ui);
+        layer_actions::column_separator(ui);
+        self.align_menus(ui);
         self.lock_menu(ui);
-        menu_separator(ui);
+        layer_actions::column_separator(ui);
         let mask = self
             .active_layer()
             .and_then(|l| l.mask.as_ref())
@@ -493,12 +510,9 @@ impl App {
         } else {
             self.act(ui, "Clip to layer below", "clip");
         }
-        menu_separator(ui);
+        layer_actions::column_separator(ui);
         self.act(ui, "Convert to smart object", "smart-object");
         self.act(ui, "Rasterize", "rasterize");
-        menu_separator(ui);
-        self.act(ui, "Flip layer horizontal", "flip-h");
-        self.act(ui, "Flip layer vertical", "flip-v");
     }
 
     /// The layers panel's "More" menu: the active layer's actions, in the

@@ -176,6 +176,8 @@ impl App {
                             {
                                 self.begin_free_transform();
                             }
+                            ui.separator();
+                            self.align_bar(ui);
                             hint_label(ui, tier, self.tool);
                         }
                         Tool::Eyedropper => {

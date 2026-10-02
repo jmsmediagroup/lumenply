@@ -5,9 +5,98 @@
 //! result, and says why an operation can't run.
 
 use super::*;
+use lumenply_core::align::{align_block, AlignEdge, AlignLayers, AlignOp};
 use lumenply_core::layer_ops::{self as ops, MergeKind};
 use lumenply_core::locks::{effective_locks, SetLayerLocks};
 use lumenply_doc::LayerLocks;
+
+/// Align and distribute actions: (id, op, menu label, icon).
+type AlignAction = (
+    &'static str,
+    AlignOp,
+    &'static str,
+    fn(&egui::Painter, egui::Rect, Color32),
+);
+const ALIGN_ACTIONS: [AlignAction; 12] = [
+    (
+        "align-left",
+        AlignOp::Align(AlignEdge::Left),
+        "Left edges",
+        icon_left,
+    ),
+    (
+        "align-hcenter",
+        AlignOp::Align(AlignEdge::HCenter),
+        "Horizontal centres",
+        icon_hcenter,
+    ),
+    (
+        "align-right",
+        AlignOp::Align(AlignEdge::Right),
+        "Right edges",
+        icon_right,
+    ),
+    ("align-top", AlignOp::Align(AlignEdge::Top), "Top edges", icon_top),
+    (
+        "align-vcenter",
+        AlignOp::Align(AlignEdge::VCenter),
+        "Vertical centres",
+        icon_vcenter,
+    ),
+    (
+        "align-bottom",
+        AlignOp::Align(AlignEdge::Bottom),
+        "Bottom edges",
+        icon_bottom,
+    ),
+    (
+        "distribute-left",
+        AlignOp::Distribute(AlignEdge::Left),
+        "Left edges",
+        icon_left,
+    ),
+    (
+        "distribute-hcenter",
+        AlignOp::Distribute(AlignEdge::HCenter),
+        "Horizontal centres",
+        icon_hcenter,
+    ),
+    (
+        "distribute-right",
+        AlignOp::Distribute(AlignEdge::Right),
+        "Right edges",
+        icon_right,
+    ),
+    (
+        "distribute-top",
+        AlignOp::Distribute(AlignEdge::Top),
+        "Top edges",
+        icon_top,
+    ),
+    (
+        "distribute-vcenter",
+        AlignOp::Distribute(AlignEdge::VCenter),
+        "Vertical centres",
+        icon_vcenter,
+    ),
+    (
+        "distribute-bottom",
+        AlignOp::Distribute(AlignEdge::Bottom),
+        "Bottom edges",
+        icon_bottom,
+    ),
+];
+
+/// Tooltips for the Move bar's align buttons (an IconButton needs a
+/// static string).
+const ALIGN_TIPS: [&str; 6] = [
+    "Align left edges",
+    "Align horizontal centres",
+    "Align right edges",
+    "Align top edges",
+    "Align vertical centres",
+    "Align bottom edges",
+];
 
 /// What an edit would do to the active layer, for lock checks.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -189,6 +278,11 @@ impl App {
                 .is_empty()
                 .then_some("There are no layers to flatten"),
             "stamp-visible" => ops::stamp_visible_block(doc),
+            id if id.starts_with("align-") || id.starts_with("distribute-") => {
+                let (_, op, ..) = ALIGN_ACTIONS.iter().find(|a| a.0 == id)?;
+                let (layers, to) = self.align_targets();
+                align_block(doc, &layers, *op, to)
+            }
             "lock-transparency" | "lock-pixels" | "lock-position" | "lock-all" => match self.active_layer() {
                 None => Some("Select a layer first"),
                 Some(l) if l.locks.all && id != "lock-all" => Some("Lock all already covers this"),
@@ -293,6 +387,13 @@ impl App {
             "lock-pixels" => self.toggle_lock(LockKind::Pixels),
             "lock-position" => self.toggle_lock(LockKind::Position),
             "lock-all" => self.toggle_lock(LockKind::All),
+            id if id.starts_with("align-") || id.starts_with("distribute-") => {
+                let Some((_, op, ..)) = ALIGN_ACTIONS.iter().find(|a| a.0 == id) else {
+                    return false;
+                };
+                let (layers, to) = self.align_targets();
+                self.run(&AlignLayers { layers, op: *op, to });
+            }
             _ => return false,
         }
         true
@@ -325,8 +426,71 @@ impl App {
         });
     }
 
+    /// The layers Align / Distribute act on, and what a lone layer aligns
+    /// to: the selected layers (or just the active one); with one layer,
+    /// the selection's bounds when there is a selection, else the canvas.
+    pub(crate) fn align_targets(&self) -> (Vec<LayerId>, Option<Rect>) {
+        let mut layers = self.selected.clone();
+        if layers.is_empty() {
+            layers.extend(self.active);
+        }
+        let doc = self.editor.doc();
+        let to = (layers.len() == 1).then(|| {
+            doc.selection
+                .as_ref()
+                .map(|s| s.tight_bounds(doc.canvas()))
+                .filter(|r| !r.is_empty())
+                .unwrap_or(doc.canvas())
+        });
+        (layers, to)
+    }
+
+    /// Layer ▸ Align and Layer ▸ Distribute submenus.
+    pub(crate) fn align_menus(&mut self, ui: &mut egui::Ui) {
+        menu(ui, "Align", |ui| {
+            for (id, _, label, _) in &ALIGN_ACTIONS[..6] {
+                self.act(ui, label, id);
+            }
+        });
+        menu(ui, "Distribute", |ui| {
+            for (id, _, label, _) in &ALIGN_ACTIONS[6..] {
+                self.act(ui, label, id);
+            }
+        });
+    }
+
+    /// The Move tool bar's align buttons, plus a Distribute menu.
+    pub(crate) fn align_bar(&mut self, ui: &mut egui::Ui) {
+        let mut run = None;
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for ((id, _, _, icon), tip) in ALIGN_ACTIONS[..6].iter().zip(ALIGN_TIPS) {
+            let block = self.action_block(id);
+            let r = ui.add_enabled(block.is_none(), layers::IconButton::new(*icon, tip));
+            note_target(ui.ctx(), id, r.rect);
+            let r = match block {
+                Some(why) => r.on_disabled_hover_text(why),
+                None => r,
+            };
+            if r.clicked() {
+                run = Some(*id);
+            }
+        }
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let dist = ui.add(egui::Button::new("Distribute"));
+        note_target(ui.ctx(), "distribute-menu", dist.rect);
+        button_menu(&dist, |ui| {
+            for (id, _, label, _) in &ALIGN_ACTIONS[6..] {
+                self.act(ui, label, id);
+            }
+        });
+        if let Some(id) = run {
+            self.run_menu_action(id);
+        }
+    }
+
     /// The Layer menu's merge section.
     pub(crate) fn merge_menu_items(&mut self, ui: &mut egui::Ui) {
+        // (Each item is one row; the caller places separators.)
         let label = self.merge_label();
         self.act(ui, label, "merge-down");
         self.act(ui, "Merge visible", "merge-visible");
@@ -376,6 +540,94 @@ fn paint_lock_icon(p: &egui::Painter, r: egui::Rect, kind: LockKind, c: Color32)
         LockKind::Position => tools::draw_icon(p, r, Tool::Move, c),
         LockKind::All => paint_padlock(p, r, c, true),
     }
+}
+
+/// One column of a multi-column menu. Items fill the column's width (the
+/// widest item's, remembered from the previous frame, so hover rows line
+/// up) and [`column_separator`] lines span exactly the column; egui's own
+/// separator would run across the whole row.
+pub(crate) fn menu_column<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let key = egui::Id::new("menu-column").with(id);
+    let w: f32 = ui.ctx().data(|d| d.get_temp(key)).unwrap_or(0.0);
+    let r = ui.allocate_ui_with_layout(
+        egui::vec2(w, 0.0),
+        egui::Layout::top_down_justified(egui::Align::Min),
+        add,
+    );
+    let got = r.response.rect.width();
+    if (got - w).abs() > 0.5 {
+        ui.ctx().data_mut(|d| d.insert_temp(key, got));
+        ui.ctx().request_repaint();
+    }
+    r.inner
+}
+
+/// A menu separator spanning just the current [`menu_column`].
+pub(crate) fn column_separator(ui: &mut egui::Ui) {
+    let (r, _) = ui.allocate_exact_size(egui::vec2(0.0, 9.0), Sense::hover());
+    let x = ui.max_rect().x_range();
+    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+    ui.painter().hline(x, r.center().y, stroke);
+}
+
+/// An align glyph: the reference line plus a long and a short bar lined
+/// up against it.
+fn paint_align(p: &egui::Painter, r: egui::Rect, c: Color32, edge: AlignEdge) {
+    let s = Stroke::new(1.4, c);
+    let (w, h) = (r.width(), r.height());
+    let bar = 3.5;
+    // Horizontal alignments: a vertical line and two horizontal bars.
+    let horizontal = matches!(edge, AlignEdge::Left | AlignEdge::HCenter | AlignEdge::Right);
+    let at = |t: f32| match edge {
+        AlignEdge::Left | AlignEdge::Top => 0.0,
+        AlignEdge::HCenter | AlignEdge::VCenter => 0.5 - t / 2.0,
+        AlignEdge::Right | AlignEdge::Bottom => 1.0 - t,
+    };
+    let line_at = match edge {
+        AlignEdge::Left | AlignEdge::Top => 0.0,
+        AlignEdge::HCenter | AlignEdge::VCenter => 0.5,
+        AlignEdge::Right | AlignEdge::Bottom => 1.0,
+    };
+    for (len, pos) in [(0.85f32, 0.22f32), (0.5, 0.62)] {
+        let rect = if horizontal {
+            egui::Rect::from_min_size(
+                egui::pos2(r.min.x + w * at(len), r.min.y + h * pos),
+                egui::vec2(w * len, bar),
+            )
+        } else {
+            egui::Rect::from_min_size(
+                egui::pos2(r.min.x + w * pos, r.min.y + h * at(len)),
+                egui::vec2(bar, h * len),
+            )
+        };
+        p.rect_filled(rect, 1.0, c);
+    }
+    if horizontal {
+        let x = r.min.x + w * line_at;
+        p.line_segment([egui::pos2(x, r.min.y - 1.0), egui::pos2(x, r.max.y + 1.0)], s);
+    } else {
+        let y = r.min.y + h * line_at;
+        p.line_segment([egui::pos2(r.min.x - 1.0, y), egui::pos2(r.max.x + 1.0, y)], s);
+    }
+}
+
+fn icon_left(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    paint_align(p, r, c, AlignEdge::Left)
+}
+fn icon_hcenter(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    paint_align(p, r, c, AlignEdge::HCenter)
+}
+fn icon_right(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    paint_align(p, r, c, AlignEdge::Right)
+}
+fn icon_top(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    paint_align(p, r, c, AlignEdge::Top)
+}
+fn icon_vcenter(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    paint_align(p, r, c, AlignEdge::VCenter)
+}
+fn icon_bottom(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    paint_align(p, r, c, AlignEdge::Bottom)
 }
 
 /// A padlock: filled body when `solid`, outlined otherwise.
@@ -537,5 +789,43 @@ mod tests {
         app.undo();
         app.undo();
         assert!(app.editor.doc().layer(bg).unwrap().locks.is_empty());
+    }
+
+    #[test]
+    fn align_acts_on_the_selected_layers_or_one_layer_against_the_canvas() {
+        let mut app = doc_app();
+        let add = |app: &mut App, x: i32, y: i32| {
+            let id = app.editor.doc().next_id();
+            let r = Raster::filled(10, 10, lumenply_tiles::Rgba::WHITE);
+            app.run(&AddPixelLayer::from_raster("Box", r, x, y));
+            id
+        };
+        let a = add(&mut app, 5, 5);
+        let b = add(&mut app, 30, 20);
+        let bounds = |app: &App, id| {
+            lumenply_core::align::content_bounds(app.editor.doc().layer(id).unwrap()).unwrap()
+        };
+        // One layer: aligned to the 64×64 canvas.
+        app.set_active(Some(b));
+        assert_eq!(app.action_block("align-right"), None);
+        assert_eq!(
+            app.action_block("distribute-left"),
+            Some("Select three or more layers")
+        );
+        app.run_menu_action("align-right");
+        assert_eq!(bounds(&app, b), Rect::new(54, 20, 10, 10));
+        // Two selected layers: to each other.
+        app.selected = vec![a, b];
+        app.run_menu_action("align-top");
+        assert_eq!((bounds(&app, a).y, bounds(&app, b).y), (5, 5));
+        assert_eq!(app.editor.history().last().copied(), Some("Align top edges"));
+        // Nothing with content selected.
+        let empty = app.editor.doc().next_id();
+        app.add_pixel_layer();
+        assert_eq!(app.active, Some(empty));
+        assert_eq!(
+            app.action_block("align-left"),
+            Some("Select a layer with content first")
+        );
     }
 }
