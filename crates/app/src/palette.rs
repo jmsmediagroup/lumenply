@@ -55,6 +55,7 @@ impl App {
             m("Select all", "Ctrl+A", "select-all"),
             m("Deselect", "Ctrl+D", "deselect"),
             m("Invert selection", "Ctrl+Shift+I", "invert-sel"),
+            m("Select colour range...", "", "color-range"),
             m("New layer", "", "new-layer"),
             m(
                 "New layer from selection (layer via copy)",
@@ -262,6 +263,7 @@ impl App {
             }),
             "deselect" => self.run(&SetSelection { selection: None }),
             "invert-sel" => self.run(&InvertSelection),
+            "color-range" => self.dialog = Some(Dialog::ColorRange(25.0, false)),
             "new-layer" => self.add_pixel_layer(),
             "layer-via-copy" => {
                 if let Some(layer) = self.active {

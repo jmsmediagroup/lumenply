@@ -1213,6 +1213,52 @@ pub enum SampleSource {
     Merged,
 }
 
+/// Select every pixel of the composite whose colour lies within
+/// `tolerance` of `color` (straight linear RGB, max channel difference),
+/// with coverage ramping down linearly across the top half of the
+/// tolerance so edges come out soft.
+pub struct SelectColorRange {
+    pub color: [f32; 3],
+    pub tolerance: f32,
+}
+
+impl Command for SelectColorRange {
+    fn label(&self) -> String {
+        "Colour range".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        let tol = self.tolerance.clamp(0.0, 1.0);
+        if tol <= 0.0 {
+            return Err(EditError::Invalid("tolerance must be positive".into()));
+        }
+        let flat = nge_render::composite_raster(doc);
+        let mut mask = Mask::hide_all();
+        let ramp = (tol * 0.5).max(1e-4);
+        for y in 0..flat.height as i32 {
+            for x in 0..flat.width as i32 {
+                let p = flat.get(x as u32, y as u32);
+                if p.a <= 0.0 {
+                    continue;
+                }
+                let [r, g, b, _] = p.to_straight();
+                let d = (r - self.color[0])
+                    .abs()
+                    .max((g - self.color[1]).abs())
+                    .max((b - self.color[2]).abs());
+                let cover = ((tol - d) / ramp).clamp(0.0, 1.0);
+                if cover > 0.0 {
+                    mask.set_value(x, y, cover);
+                }
+            }
+        }
+        mask.prune_uniform();
+        let sel = Selection { coverage: mask };
+        doc.selection = Some(sel).filter(|s| !s.is_empty());
+        Ok(())
+    }
+}
+
 /// Grow a region from `seed` over `canvas`: every pixel whose colour is
 /// within `tolerance` (max channel difference, straight RGBA, 0..1) of the
 /// seed colour. `contiguous` restricts it to the connected area.
@@ -2702,6 +2748,59 @@ mod tests {
             .is_ok(),
             "a seed outside the canvas is a no-op"
         );
+    }
+
+    #[test]
+    fn color_range_selects_matching_pixels_with_soft_edges() {
+        let mut doc = Document::new(64, 32);
+        let id = doc.add_pixel_layer("L");
+        for y in 0..32 {
+            for x in 0..64 {
+                let c = if x < 32 {
+                    Rgba::from_straight(0.8, 0.1, 0.1, 1.0) // red
+                } else {
+                    Rgba::from_straight(0.1, 0.1, 0.8, 1.0) // blue
+                };
+                doc.layer_mut(id)
+                    .unwrap()
+                    .pixels_mut()
+                    .unwrap()
+                    .set_pixel(x, y, c);
+            }
+        }
+        SelectColorRange {
+            color: [0.8, 0.1, 0.1],
+            tolerance: 0.3,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let sel = doc.selection.as_ref().unwrap();
+        assert!((sel.value(10, 10) - 1.0).abs() < 1e-5, "red fully selected");
+        assert!(sel.value(50, 10) <= 0.0 + 1e-5, "blue not selected");
+
+        // A colour at the tolerance boundary gets graded coverage.
+        doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+            0,
+            0,
+            Rgba::from_straight(0.8 - 0.22, 0.1, 0.1, 1.0),
+        );
+        SelectColorRange {
+            color: [0.8, 0.1, 0.1],
+            tolerance: 0.3,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let v = doc.selection.as_ref().unwrap().value(0, 0);
+        assert!(v > 0.2 && v < 0.8, "soft edge: {v}");
+
+        // No match clears the selection rather than leaving an empty one.
+        SelectColorRange {
+            color: [0.0, 1.0, 0.0],
+            tolerance: 0.05,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert!(doc.selection.is_none());
     }
 
     #[test]

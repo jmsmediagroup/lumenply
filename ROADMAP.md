@@ -137,8 +137,9 @@ None of these could be tested in the container.
 - [ ] Text: font picker (system fonts), italic, alignment, kerning/tracking, text on canvas
 - [x] Animated marching ants (boundary dashes march; huge outlines fall back
       to the static texture)
-- [ ] Quick-mask mode; select by colour range dialog (wand already offers
-      non-contiguous selection)
+- [x] Select by colour range (Select menu + palette: fuzziness slider with live
+      marching-ants preview, soft graded edges, cancel undoes)
+- [ ] Quick-mask mode
 - [ ] AI tools (local ONNX): subject select, object removal, upscaling — see project overview
 
 ## 6. Usability

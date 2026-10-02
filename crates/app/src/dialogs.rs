@@ -11,6 +11,8 @@ pub(crate) enum Dialog {
     /// An autosave backup from a previous session was found at startup.
     Recover,
     Preferences(session::Prefs),
+    /// Colour-range selection: (tolerance %, whether a preview ran).
+    ColorRange(f32, bool),
 }
 
 impl App {
@@ -278,6 +280,7 @@ impl App {
             Dialog::ConfirmClose => "Unsaved changes",
             Dialog::Recover => "Recover autosaved document",
             Dialog::Preferences(_) => "Preferences",
+            Dialog::ColorRange(..) => "Colour range",
             Dialog::Filter(f) => f.name(),
             Dialog::CanvasSize(..) => "Canvas size",
             Dialog::ImageSize(..) => "Image size",
@@ -291,6 +294,22 @@ impl App {
             .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 match &mut d {
+                    Dialog::ColorRange(tol, previewed) => {
+                        ui.label("Selects everything close to the brush colour.");
+                        let changed = ui
+                            .add(egui::Slider::new(tol, 1.0..=100.0).suffix("%").text("Fuzziness"))
+                            .changed();
+                        if changed || !*previewed {
+                            *previewed = true;
+                            self.run_coalescing(
+                                &SelectColorRange {
+                                    color: self.brush_rgb.map(nge_io::srgb_to_linear_f),
+                                    tolerance: *tol / 100.0,
+                                },
+                                "color-range",
+                            );
+                        }
+                    }
                     Dialog::Preferences(p) => {
                         let mut steps = p.undo_steps as f32;
                         if ui
@@ -553,6 +572,7 @@ impl App {
         if confirmed {
             match &d {
                 Dialog::ConfirmClose | Dialog::Recover => {}
+                Dialog::ColorRange(..) => {}
                 Dialog::Preferences(p) => {
                     self.prefs = p.clone();
                     self.prefs.apply(&mut self.editor);
@@ -590,6 +610,13 @@ impl App {
         if keep {
             self.dialog = Some(d);
         } else {
+            if let Dialog::ColorRange(_, true) = d {
+                self.editor.end_coalescing();
+                if !confirmed {
+                    // Cancel: the previewed selection was one coalesced step.
+                    self.undo();
+                }
+            }
             if matches!(d, Dialog::Filter(_)) {
                 // Drop the preview whether confirmed or cancelled.
                 self.mark(None);

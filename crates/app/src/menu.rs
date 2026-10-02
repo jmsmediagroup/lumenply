@@ -344,6 +344,15 @@ impl App {
                         }
                     });
                     ui.menu_button("Select", |ui| {
+                        if ui
+                            .button("Colour range...")
+                            .on_hover_text("Select everything close to the brush colour")
+                            .clicked()
+                        {
+                            self.dialog = Some(Dialog::ColorRange(25.0, false));
+                            ui.close_menu();
+                        }
+                        ui.separator();
                         if ui.button("All   Ctrl+A").clicked() {
                             self.run(&SetSelection {
                                 selection: Some(Selection::all()),
