@@ -21,6 +21,7 @@ use lumenply_doc::{
 use lumenply_io::project;
 use lumenply_tiles::{Affine, Raster, Rect};
 
+mod brand;
 mod canvas;
 mod dialogs;
 mod histogram;
@@ -45,6 +46,11 @@ fn main() -> Result<(), eframe::Error> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_icon(std::sync::Arc::new(egui::IconData {
+                rgba: brand::icon_rgba(256),
+                width: 256,
+                height: 256,
+            }))
             .with_inner_size([1600.0, 1000.0])
             .with_min_inner_size([900.0, 600.0])
             .with_title("Lumenply"),
@@ -228,6 +234,9 @@ struct App {
     sel_points: Vec<(i32, i32)>,
     /// Layer row being dragged to a new position in the panel.
     layer_drag: Option<LayerId>,
+    /// Startup splash: visible until this instant (None = done/skipped).
+    splash_until: Option<std::time::Instant>,
+    splash_tex: Option<egui::TextureHandle>,
     /// Last window title pushed to the OS, to avoid resending each frame.
     last_title: String,
     /// Debug: save a screenshot of the window here after a few frames,
@@ -347,6 +356,20 @@ impl App {
             quick_mask: false,
             sel_points: Vec::new(),
             layer_drag: None,
+            splash_until: {
+                // LUMENPLY_SPLASH_MS overrides (0 disables); screenshot
+                // runs skip the splash unless the override asks for it.
+                let ms = std::env::var("LUMENPLY_SPLASH_MS")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(if args.iter().any(|a| a == "--screenshot") {
+                        0
+                    } else {
+                        1400
+                    });
+                (ms > 0).then(|| std::time::Instant::now() + std::time::Duration::from_millis(ms))
+            },
+            splash_tex: None,
             last_title: String::new(),
             shot: args
                 .iter()
@@ -890,6 +913,7 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.last_title = title;
         }
+        self.splash_ui(ctx);
         self.debug_screenshot(ctx);
     }
 

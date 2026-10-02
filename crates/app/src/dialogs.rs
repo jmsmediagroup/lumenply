@@ -13,6 +13,7 @@ pub(crate) enum Dialog {
     Preferences(session::Prefs, Option<String>),
     /// Colour-range selection: (tolerance %, whether a preview ran).
     ColorRange(f32, bool),
+    About,
 }
 
 impl App {
@@ -293,6 +294,7 @@ impl App {
             Dialog::Recover => "Recover autosaved document",
             Dialog::Preferences(..) => "Preferences",
             Dialog::ColorRange(..) => "Colour range",
+            Dialog::About => "About",
             Dialog::Filter(f) => f.name(),
             Dialog::CanvasSize(..) => "Canvas size",
             Dialog::ImageSize(..) => "Image size",
@@ -306,6 +308,31 @@ impl App {
             .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 match &mut d {
+                    Dialog::About => {
+                        ui.vertical_centered(|ui| {
+                            let (r, _) = ui.allocate_exact_size(Vec2::splat(96.0), Sense::hover());
+                            ui.painter().rect_filled(r, 22.0, GROUND);
+                            brand::paint_mark(ui.painter(), r.shrink(14.0), TEXT, ACCENT, GROUND);
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new("Lumenply")
+                                    .family(egui::FontFamily::Name("semibold".into()))
+                                    .size(26.0)
+                                    .color(TEXT),
+                            );
+                            ui.label(
+                                RichText::new(format!("Public beta {}", env!("CARGO_PKG_VERSION")))
+                                    .monospace()
+                                    .color(MUTED),
+                            );
+                            ui.add_space(4.0);
+                            ui.label(RichText::new("Free photo editor — GPL-3.0").color(MUTED));
+                            ui.add_space(6.0);
+                            if ui.button("Close").clicked() {
+                                keep = false;
+                            }
+                        });
+                    }
                     Dialog::ColorRange(tol, previewed) => {
                         ui.label("Selects everything close to the brush colour.");
                         let changed = ui
@@ -606,7 +633,7 @@ impl App {
                         ui.label(RichText::new("Resamples every layer bilinearly.").weak());
                     }
                 }
-                if !matches!(d, Dialog::ConfirmClose | Dialog::Recover) {
+                if !matches!(d, Dialog::ConfirmClose | Dialog::Recover | Dialog::About) {
                     ui.horizontal(|ui| {
                         if ui.button("OK").clicked() {
                             confirmed = true;
@@ -638,7 +665,7 @@ impl App {
 
         if confirmed {
             match &d {
-                Dialog::ConfirmClose | Dialog::Recover => {}
+                Dialog::ConfirmClose | Dialog::Recover | Dialog::About => {}
                 Dialog::ColorRange(..) => {}
                 Dialog::Preferences(p, _) => {
                     self.prefs = p.clone();

@@ -171,6 +171,14 @@ impl App {
             .frame(bar_frame())
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
+                    // The mark, top-left; click for About.
+                    let (chip, resp) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), Sense::click());
+                    ui.painter().rect_filled(chip, 7.0, GROUND);
+                    brand::paint_mark(ui.painter(), chip.shrink(4.0), TEXT, ACCENT, GROUND);
+                    if resp.on_hover_text("About Lumenply").clicked() {
+                        self.dialog = Some(Dialog::About);
+                    }
+                    ui.add_space(2.0);
                     ui.menu_button("File", |ui| {
                         if ui.button("New...").clicked() {
                             self.dialog = Some(Dialog::New(1200, 800));
