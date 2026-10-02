@@ -471,6 +471,8 @@ impl GpuCompositor {
                 // Clip chains and layer effects stay on the CPU for now.
                 !l.clip
                     && l.effects.is_empty()
+                    // Fill opacity below 100% renders on the CPU reference path.
+                    && l.fill_opacity >= 1.0
                     // Smart filters render on the CPU (ADR 0011).
                     && !l.smart_filters.is_active()
                     && l.blend != lumenply_doc::BlendMode::Dissolve

@@ -19,6 +19,7 @@ pub mod develop;
 pub mod fill;
 pub mod filters;
 mod filters_more;
+mod fx;
 pub mod gpu;
 pub mod gradient_draw;
 pub mod inpaint;
@@ -296,16 +297,20 @@ pub fn render_tile_over(
                 None => base_src,
             };
             let base_alpha: Vec<f32> = unit.pixels().iter().map(|p| p.a).collect();
+            // A base below 100% fill: members gather on their own tile,
+            // clipped to the base's full coverage, over the faded base.
+            let mut members_only = (layer.fill_opacity < 1.0).then(Tile::new);
             for member in &layers[idx + 1..chain_end] {
                 if !member.visible || member.opacity <= 0.0 {
                     continue;
                 }
+                let target = members_only.as_mut().unwrap_or(&mut unit);
                 let mmask = member.mask.as_ref().filter(|m| m.enabled);
                 match &member.content {
                     LayerContent::Adjustment(adj) => {
                         // adjust_in_place skips zero-alpha pixels, so the
                         // base's coverage gates it automatically.
-                        adjust_in_place(&mut unit, adj, member.blend, member.opacity, mmask, coord);
+                        adjust_in_place(target, adj, member.blend, member.opacity, mmask, coord);
                     }
                     _ => {
                         let Some(src) = source_tile(member, coord, canvas) else {
@@ -316,29 +321,53 @@ pub fn render_tile_over(
                             None => src,
                         };
                         if member.effects.is_empty() {
-                            blend_tile_at(&mut unit, &masked, member.blend, member.opacity, coord);
+                            blend_tile_at(
+                                target,
+                                &masked,
+                                member.blend,
+                                member.opacity * member.fill_opacity,
+                                coord,
+                            );
                         } else {
                             // A member's effects render inside the unit; the
                             // alpha force-back below clips them to the base.
-                            render_effects_under(&mut unit, member, coord, canvas);
-                            blend_tile_at(&mut unit, &masked, member.blend, member.opacity, coord);
-                            render_overlays_over(&mut unit, member, coord, canvas);
-                            render_bevel_over(&mut unit, member, coord, canvas);
-                            render_inner_over(&mut unit, member, coord, canvas);
-                            render_stroke_over(&mut unit, member, coord, canvas);
+                            render_effects_under(target, member, coord, canvas);
+                            blend_tile_at(
+                                target,
+                                &masked,
+                                member.blend,
+                                member.opacity * member.fill_opacity,
+                                coord,
+                            );
+                            render_overlays_over(target, member, coord, canvas);
+                            render_bevel_over(target, member, coord, canvas);
+                            render_inner_over(target, member, coord, canvas);
+                            render_stroke_over(target, member, coord, canvas);
                         }
                     }
                 }
             }
-            // Clipped content never changes coverage: restore the base's
-            // alpha, keeping the blended straight colour.
-            for (i, p) in unit.pixels_mut().iter_mut().enumerate() {
-                let ba = base_alpha[i];
-                if ba <= 0.0 || p.a <= 0.0 {
-                    *p = Rgba::TRANSPARENT;
-                } else if (p.a - ba).abs() > 1e-7 {
-                    let k = ba / p.a;
-                    *p = Rgba::new(p.r * k, p.g * k, p.b * k, ba);
+            if let Some(mut over) = members_only {
+                let f = layer.fill_opacity.clamp(0.0, 1.0);
+                for p in unit.pixels_mut() {
+                    *p = Rgba::new(p.r * f, p.g * f, p.b * f, p.a * f);
+                }
+                for (i, p) in over.pixels_mut().iter_mut().enumerate() {
+                    let k = base_alpha[i];
+                    *p = Rgba::new(p.r * k, p.g * k, p.b * k, p.a * k);
+                }
+                blend_tile(&mut unit, &over, BlendMode::Normal, 1.0);
+            } else {
+                // Clipped content never changes coverage: restore the base's
+                // alpha, keeping the blended straight colour.
+                for (i, p) in unit.pixels_mut().iter_mut().enumerate() {
+                    let ba = base_alpha[i];
+                    if ba <= 0.0 || p.a <= 0.0 {
+                        *p = Rgba::TRANSPARENT;
+                    } else if (p.a - ba).abs() > 1e-7 {
+                        let k = ba / p.a;
+                        *p = Rgba::new(p.r * k, p.g * k, p.b * k, ba);
+                    }
                 }
             }
             let d = dst.get_or_insert_with(Tile::new);
@@ -403,7 +432,7 @@ pub fn render_tile_over(
                 if layer.pass_through && !has_filter && layer.effects.is_empty() {
                     let before = dst.clone();
                     let after = render_tile_over(before.clone(), children, coord, canvas);
-                    dst = mix_tiles(before, after, layer.opacity, mask, coord);
+                    dst = mix_tiles(before, after, layer.opacity * layer.fill_opacity, mask, coord);
                     continue;
                 }
                 match render_tile(children, coord, canvas) {
@@ -441,7 +470,7 @@ pub fn render_tile_over(
             };
             let d = dst.get_or_insert_with(Tile::new);
             render_effects_under(d, layer, coord, canvas);
-            blend_tile_at(d, &masked, layer.blend, layer.opacity, coord);
+            blend_tile_at(d, &masked, layer.blend, layer.opacity * layer.fill_opacity, coord);
             render_overlays_over(d, layer, coord, canvas);
             render_bevel_over(d, layer, coord, canvas);
             render_inner_over(d, layer, coord, canvas);
@@ -452,9 +481,9 @@ pub fn render_tile_over(
         match mask {
             Some(m) => {
                 let masked = apply_mask(src.clone(), m, coord);
-                blend_tile_at(d, &masked, layer.blend, layer.opacity, coord);
+                blend_tile_at(d, &masked, layer.blend, layer.opacity * layer.fill_opacity, coord);
             }
-            None => blend_tile_at(d, src, layer.blend, layer.opacity, coord),
+            None => blend_tile_at(d, src, layer.blend, layer.opacity * layer.fill_opacity, coord),
         }
     }
     dst
@@ -540,22 +569,28 @@ fn render_effects_under(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas:
         offset: (f32, f32),
         color: [f32; 3],
         opacity: f32,
+        blend: BlendMode,
+        knockout: bool,
     }
     let mut passes: Vec<FxPass> = Vec::new();
     if let Some(sfx) = &fx.drop_shadow {
         passes.push(FxPass {
-            field: blur_field(&cov, w, h, sfx.blur),
+            field: blur_field(&fx::grow(&cov, w, h, sfx.spread), w, h, sfx.blur),
             offset: (sfx.dx, sfx.dy),
             color: sfx.color,
             opacity: sfx.opacity,
+            blend: sfx.blend,
+            knockout: sfx.knockout,
         });
     }
     if let Some(g) = &fx.outer_glow {
         passes.push(FxPass {
-            field: blur_field(&cov, w, h, g.blur),
+            field: blur_field(&fx::grow(&cov, w, h, g.spread), w, h, g.blur),
             offset: (0.0, 0.0),
             color: g.color,
             opacity: g.opacity,
+            blend: g.blend,
+            knockout: false,
         });
     }
     for FxPass {
@@ -563,6 +598,8 @@ fn render_effects_under(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas:
         offset: (dx, dy),
         color,
         opacity,
+        blend,
+        knockout,
     } in passes
     {
         let mut tile = Tile::new();
@@ -571,14 +608,18 @@ fn render_effects_under(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas:
             for col in 0..TILE_SIZE {
                 let gx = col as i32 + pad - dx.round() as i32;
                 let gy = row as i32 + pad - dy.round() as i32;
-                let a = at(&field, gx, gy) * opacity;
+                let mut a = at(&field, gx, gy) * opacity;
+                if knockout {
+                    // Hidden under the layer's own coverage.
+                    a *= 1.0 - cov[(row + pad as usize) * w + col + pad as usize];
+                }
                 if a > 0.0 {
                     px[row * TILE_SIZE + col] =
                         Rgba::from_straight(color[0], color[1], color[2], a.clamp(0.0, 1.0));
                 }
             }
         }
-        blend_tile(dst, &tile, BlendMode::Normal, layer.opacity);
+        blend_tile(dst, &tile, blend, layer.opacity);
     }
 }
 
@@ -594,28 +635,49 @@ fn render_overlays_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas:
     let area = Rect::new(ox, oy, TILE_SIZE as u32, TILE_SIZE as u32);
     let cov = coverage_raster(layer, area, canvas);
     let w = area.w as usize;
-    let paint = |dst: &mut Tile, color_at: &dyn Fn(i32, i32) -> ([f32; 3], f32), opacity: f32| {
-        let mut tile = Tile::new();
-        let px = tile.pixels_mut();
-        for row in 0..TILE_SIZE {
-            for col in 0..TILE_SIZE {
-                let clip = cov[row * w + col];
-                if clip <= 0.0 {
-                    continue;
-                }
-                let (c, tint) = color_at(ox + col as i32, oy + row as i32);
-                let a = (opacity * tint * clip).clamp(0.0, 1.0);
-                if a > 0.0 {
-                    px[row * TILE_SIZE + col] = Rgba::from_straight(c[0], c[1], c[2], a);
+    let paint =
+        |dst: &mut Tile, color_at: &dyn Fn(i32, i32) -> ([f32; 3], f32), opacity: f32, blend: BlendMode| {
+            let mut tile = Tile::new();
+            let px = tile.pixels_mut();
+            for row in 0..TILE_SIZE {
+                for col in 0..TILE_SIZE {
+                    let clip = cov[row * w + col];
+                    if clip <= 0.0 {
+                        continue;
+                    }
+                    let (c, tint) = color_at(ox + col as i32, oy + row as i32);
+                    let a = (opacity * tint * clip).clamp(0.0, 1.0);
+                    if a > 0.0 {
+                        px[row * TILE_SIZE + col] = Rgba::from_straight(c[0], c[1], c[2], a);
+                    }
                 }
             }
-        }
-        blend_tile(dst, &tile, BlendMode::Normal, layer.opacity);
-    };
-    if let Some(co) = &fx.color_overlay {
-        paint(dst, &|_, _| (co.color, 1.0), co.opacity);
-    }
+            blend_tile(dst, &tile, blend, layer.opacity);
+        };
+    // Photoshop stacks colour over gradient overlay.
     if let Some(go) = &fx.gradient_overlay {
+        let bounds = match layer.raster_store().and_then(|s| s.content_bounds()) {
+            Some(b) => b,
+            None => canvas,
+        };
+        if let Some(fill) = &go.fill {
+            // The full gradient model, laid over the content bounds.
+            let sampler = fill.sampler(bounds);
+            paint(
+                dst,
+                &|x, y| {
+                    let p = sampler.sample(x, y);
+                    if p.a <= 0.0 {
+                        return ([0.0; 3], 0.0);
+                    }
+                    ([p.r / p.a, p.g / p.a, p.b / p.a], p.a)
+                },
+                go.opacity,
+                go.blend,
+            );
+        }
+    }
+    if let Some(go) = fx.gradient_overlay.as_ref().filter(|g| g.fill.is_none()) {
         let bounds = match layer.raster_store().and_then(|s| s.content_bounds()) {
             Some(b) => b,
             None => canvas,
@@ -650,7 +712,11 @@ fn render_overlays_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas:
                 )
             },
             go.opacity,
+            go.blend,
         );
+    }
+    if let Some(co) = &fx.color_overlay {
+        paint(dst, &|_, _| (co.color, 1.0), co.opacity, co.blend);
     }
 }
 
@@ -701,7 +767,12 @@ fn render_bevel_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: Re
             // normal points along -grad; light from `angle` hits it when
             // the two align.
             let s = -(dx * lx + dy * ly) * gain;
-            let a = (s.abs().min(1.0) * b.opacity * clip).clamp(0.0, 1.0);
+            let flank = if s > 0.0 {
+                b.opacity
+            } else {
+                b.shadow_opacity.unwrap_or(b.opacity)
+            };
+            let a = (s.abs().min(1.0) * flank * clip).clamp(0.0, 1.0);
             if a <= 0.0 {
                 continue;
             }
@@ -743,22 +814,26 @@ fn render_inner_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: Re
         offset: (f32, f32),
         color: [f32; 3],
         opacity: f32,
+        blend: BlendMode,
     }
     let mut passes: Vec<FxPass> = Vec::new();
+    // Choke grows the outside (the inverse coverage) before the blur.
     if let Some(s) = &fx.inner_shadow {
         passes.push(FxPass {
-            field: blur_field(&inv, w, h, s.blur),
+            field: blur_field(&fx::grow(&inv, w, h, s.spread), w, h, s.blur),
             offset: (s.dx, s.dy),
             color: s.color,
             opacity: s.opacity,
+            blend: s.blend,
         });
     }
     if let Some(g) = &fx.inner_glow {
         passes.push(FxPass {
-            field: blur_field(&inv, w, h, g.blur),
+            field: blur_field(&fx::grow(&inv, w, h, g.spread), w, h, g.blur),
             offset: (0.0, 0.0),
             color: g.color,
             opacity: g.opacity,
+            blend: g.blend,
         });
     }
     for FxPass {
@@ -766,6 +841,7 @@ fn render_inner_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: Re
         offset: (dx, dy),
         color,
         opacity,
+        blend,
     } in passes
     {
         let mut tile = Tile::new();
@@ -785,12 +861,12 @@ fn render_inner_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: Re
                 }
             }
         }
-        blend_tile(dst, &tile, BlendMode::Normal, layer.opacity);
+        blend_tile(dst, &tile, blend, layer.opacity);
     }
 }
 
-/// The outline stroke, blended over the layer: a ring grown outward from
-/// the coverage edge by a chamfer distance transform.
+/// The outline stroke, blended over the layer: a ring outside, inside or
+/// centred on the coverage edge, from a chamfer distance transform.
 fn render_stroke_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: Rect) {
     let Some(stroke) = &layer.effects.stroke else {
         return;
@@ -809,64 +885,19 @@ fn render_stroke_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: R
     );
     let cov = coverage_raster(layer, area, canvas);
     let (w, h) = (area.w as usize, area.h as usize);
-    // Two-pass 3-4 chamfer distance (in pixels / 3) to coverage >= 0.5.
-    const BIG: f32 = 1e6;
-    let mut d: Vec<f32> = cov.iter().map(|&a| if a >= 0.5 { 0.0 } else { BIG }).collect();
-    for y in 0..h {
-        for x in 0..w {
-            let i = y * w + x;
-            let mut best = d[i];
-            if x > 0 {
-                best = best.min(d[i - 1] + 3.0);
-            }
-            if y > 0 {
-                best = best.min(d[i - w] + 3.0);
-                if x > 0 {
-                    best = best.min(d[i - w - 1] + 4.0);
-                }
-                if x + 1 < w {
-                    best = best.min(d[i - w + 1] + 4.0);
-                }
-            }
-            d[i] = best;
-        }
-    }
-    for y in (0..h).rev() {
-        for x in (0..w).rev() {
-            let i = y * w + x;
-            let mut best = d[i];
-            if x + 1 < w {
-                best = best.min(d[i + 1] + 3.0);
-            }
-            if y + 1 < h {
-                best = best.min(d[i + w] + 3.0);
-                if x > 0 {
-                    best = best.min(d[i + w - 1] + 4.0);
-                }
-                if x + 1 < w {
-                    best = best.min(d[i + w + 1] + 4.0);
-                }
-            }
-            d[i] = best;
-        }
-    }
+    let ring = fx::stroke_ring(&cov, w, h, size, stroke.position);
     let mut tile = Tile::new();
     let px = tile.pixels_mut();
     for row in 0..TILE_SIZE {
         for col in 0..TILE_SIZE {
-            let i = (row + pad as usize) * w + col + pad as usize;
-            let dist = d[i] / 3.0;
-            if dist <= 0.0 {
-                continue; // inside the coverage: the stroke grows outward
-            }
-            let ring = (size + 0.5 - dist).clamp(0.0, 1.0) * stroke.opacity;
-            if ring > 0.0 {
+            let a = ring[(row + pad as usize) * w + col + pad as usize] * stroke.opacity;
+            if a > 0.0 {
                 px[row * TILE_SIZE + col] =
-                    Rgba::from_straight(stroke.color[0], stroke.color[1], stroke.color[2], ring);
+                    Rgba::from_straight(stroke.color[0], stroke.color[1], stroke.color[2], a);
             }
         }
     }
-    blend_tile(dst, &tile, BlendMode::Normal, layer.opacity);
+    blend_tile(dst, &tile, stroke.blend, layer.opacity);
 }
 
 /// A layer's own content for one tile — pixels, the text cache, or an
@@ -1182,11 +1213,13 @@ mod tests {
                 blur: 2.0,
                 color: [0.0, 0.0, 0.0],
                 opacity: 1.0,
+                ..ShadowFx::default()
             }),
             stroke: Some(StrokeFx {
                 size: 3.0,
                 color: [1.0, 0.0, 0.0],
                 opacity: 1.0,
+                ..StrokeFx::default()
             }),
             ..LayerEffects::default()
         };
@@ -1272,6 +1305,7 @@ mod tests {
                 size: 2.0,
                 color: [0.0, 1.0, 0.0],
                 opacity: 1.0,
+                ..StrokeFx::default()
             }),
             drop_shadow: Some(ShadowFx {
                 dx: 0.0,
@@ -1279,6 +1313,7 @@ mod tests {
                 blur: 1.0,
                 color: [0.0, 0.0, 0.0],
                 opacity: 1.0,
+                ..ShadowFx::default()
             }),
             ..LayerEffects::default()
         };
@@ -1310,6 +1345,7 @@ mod tests {
                 size: 2.0,
                 color: [0.0, 0.2, 1.0],
                 opacity: 1.0,
+                ..StrokeFx::default()
             }),
             ..LayerEffects::default()
         };
@@ -1340,6 +1376,7 @@ mod tests {
                 blur: 1.0,
                 color: [0.0, 0.0, 0.0],
                 opacity: 1.0,
+                ..ShadowFx::default()
             }),
             ..LayerEffects::default()
         };
@@ -1371,6 +1408,7 @@ mod tests {
                 highlight: [1.0, 1.0, 1.0],
                 shadow: [0.0, 0.0, 0.0],
                 opacity: 1.0,
+                ..BevelFx::default()
             }),
             ..LayerEffects::default()
         };
@@ -1412,6 +1450,7 @@ mod tests {
             color_overlay: Some(ColorOverlayFx {
                 color: [0.8, 0.1, 0.3],
                 opacity: 1.0,
+                ..ColorOverlayFx::default()
             }),
             ..LayerEffects::default()
         };
@@ -1427,6 +1466,7 @@ mod tests {
         doc.layer_mut(id).unwrap().effects.color_overlay = Some(ColorOverlayFx {
             color: [0.8, 0.1, 0.3],
             opacity: 0.5,
+            ..ColorOverlayFx::default()
         });
         let out = composite_raster(&doc);
         let mixed = straight(out.get(50, 30));
@@ -1440,6 +1480,7 @@ mod tests {
                 end: [0.0, 0.0, 1.0],
                 angle: 0.0,
                 opacity: 1.0,
+                ..GradientOverlayFx::default()
             }),
             ..LayerEffects::default()
         };
@@ -1465,6 +1506,7 @@ mod tests {
             end: [0.0, 0.0, 1.0],
             angle: 90.0,
             opacity: 1.0,
+            ..GradientOverlayFx::default()
         });
         let out = composite_raster(&doc);
         assert!(straight(out.get(50, 21))[2] > 0.9, "top is the end colour");
@@ -1490,6 +1532,7 @@ mod tests {
                 blur: 4.0,
                 color: [1.0, 0.0, 0.0],
                 opacity: 1.0,
+                ..GlowFx::default()
             }),
             ..LayerEffects::default()
         };
@@ -1517,6 +1560,7 @@ mod tests {
                 blur: 2.0,
                 color: [0.0, 0.0, 0.0],
                 opacity: 1.0,
+                ..ShadowFx::default()
             }),
             ..LayerEffects::default()
         };

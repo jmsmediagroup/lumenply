@@ -20,6 +20,7 @@ use lumenply_tiles::{Raster, Rect, TileStore};
 use crate::{linear_to_srgb, IoError};
 
 mod color_modes;
+mod effects;
 mod extra;
 mod masks;
 mod shape;
@@ -1277,6 +1278,7 @@ fn collect_records(
                     mask_enabled,
                     {
                         blocks.extend(lock_blocks(l));
+                        blocks.extend(effects::layer_blocks(l));
                         blocks
                     },
                 ));
@@ -1323,6 +1325,7 @@ fn collect_records(
                             },
                         )],
                         lock_blocks(l),
+                        effects::layer_blocks(l),
                     ]
                     .concat(),
                 ));
@@ -1378,14 +1381,7 @@ pub fn save_16(path: impl AsRef<Path>, doc: &Document) -> Result<Report<()>, Psd
 
 fn save_depth(path: impl AsRef<Path>, doc: &Document, deep: bool) -> Result<Report<()>, PsdError> {
     let mut warnings = Vec::new();
-    doc.for_each_layer(|l| {
-        if !l.effects.is_empty() {
-            warnings.push(format!(
-                "layer '{}': layer effects are not written to PSD yet",
-                l.name
-            ));
-        }
-    });
+    // Layer effects and Fill travel as `lfx2` / `iOpa` (see `effects`).
     let canvas = doc.canvas();
     let (w, h) = (doc.width as usize, doc.height as usize);
 
@@ -1523,6 +1519,17 @@ struct RawLayer {
     /// Colour planes of a 32-bit file, as floats (`channels` keeps the
     /// transparency).
     float_channels: Vec<(i16, Vec<f32>)>,
+    /// Layer effects (`lmfx` over `lfx2`) and Fill opacity (`iOpa`).
+    effects: lumenply_doc::LayerEffects,
+    fill_opacity: f32,
+}
+
+impl RawLayer {
+    /// Carry the layer-style state over to a built layer.
+    fn style(&self, l: &mut Layer) {
+        l.effects = self.effects.clone();
+        l.fill_opacity = self.fill_opacity;
+    }
 }
 
 /// Largest dimension the PSD v1 format allows for the canvas, a layer or a
@@ -1588,6 +1595,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     let resources = rd.bytes(res_len)?;
     cm.read_sections(mode_data, resources);
     let guides = crate::psd_guides::read_guides(resources);
+    let light = effects::global_light(resources);
     let alpha_names = crate::psd_channels::read_names(resources);
 
     let mut warnings: Vec<String> = cm.warning().into_iter().collect();
@@ -1657,6 +1665,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let mut fill = None;
                 let (mut vector_mask, mut pattern) = (false, false);
                 let (mut vmsk, mut vstk): (Option<Vec<u8>>, Option<Vec<u8>>) = (None, None);
+                // `lmfx` (several effects per kind) supersedes `lfx2`.
+                let (mut lfx2, mut lmfx): (Option<Vec<u8>>, Option<Vec<u8>>) = (None, None);
+                let mut fill_opacity = 1.0f32;
                 while rd.pos + 12 <= extra_end {
                     let sig = rd.bytes(4)?;
                     if sig != b"8BIM" && sig != b"8B64" {
@@ -1724,6 +1735,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                             vmsk = Some(data.to_vec());
                         }
                         b"vstk" => vstk = Some(data.to_vec()),
+                        b"lfx2" | b"lfxs" => lfx2 = Some(data.to_vec()),
+                        b"lmfx" => lmfx = Some(data.to_vec()),
+                        b"iOpa" => fill_opacity = effects::parse_fill_opacity(data).unwrap_or(1.0),
                         // Shape content in newer files: pixels come clipped.
                         b"vscg" => layer_masks.shaped = true,
                         // Pattern fills keep their rendered pixels.
@@ -1782,6 +1796,10 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 if pattern {
                     warnings.push(format!("pattern fill layer '{name}' was imported as pixels"));
                 }
+                let fx = lmfx
+                    .or(lfx2)
+                    .and_then(|b| effects::parse_effects(&b, light, &name, &mut warnings))
+                    .unwrap_or_default();
                 let (blend, known) = blend_from_key(&key);
                 heads.push((
                     RawLayer {
@@ -1802,6 +1820,8 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         fill,
                         shape: shape_layer,
                         float_channels: Vec::new(),
+                        effects: fx,
+                        fill_opacity,
                     },
                     chans,
                 ));
@@ -1911,6 +1931,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 g.collapsed = rl.section == 2;
                 g.mask = build_mask(&rl, width, height);
                 g.locks = rl.locks;
+                rl.style(&mut g);
                 if !rl.blend_known {
                     warnings.push(format!(
                         "group '{}': unsupported blend mode, using normal",
@@ -1945,6 +1966,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     // Rendered below with the fills, once every layer is in.
                     let id = doc.alloc_id();
                     let mut l = Layer::shape(id, sh);
+                    rl.style(&mut l);
                     l.name = rl.name.clone();
                     l.blend = rl.blend;
                     l.clip = rl.clip;
@@ -1959,6 +1981,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     // The cache renders below, once every layer is in.
                     let id = doc.alloc_id();
                     let mut l = Layer::fill(id, fill);
+                    rl.style(&mut l);
                     l.name = rl.name.clone();
                     l.blend = rl.blend;
                     l.clip = rl.clip;
@@ -1970,6 +1993,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 }
                 let id = doc.alloc_id();
                 let mut l = Layer::pixel(id, rl.name.clone());
+                rl.style(&mut l);
                 l.locks = rl.locks;
                 l.blend = rl.blend;
                 l.clip = rl.clip;

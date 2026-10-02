@@ -171,6 +171,18 @@ impl App {
         };
         let mut opacity = layer.opacity * 100.0;
         let before = opacity;
+        // Photoshop's Fill: the layer's own content, not its effects.
+        let has_fill = matches!(
+            layer.content,
+            LayerContent::Pixel(_)
+                | LayerContent::Text(_)
+                | LayerContent::Smart(_)
+                | LayerContent::Group(_)
+                | LayerContent::Fill(_)
+                | LayerContent::Shape(_)
+        );
+        let mut fill_pct = layer.fill_opacity * 100.0;
+        let fill_before = fill_pct;
         ui.add_space(2.0);
         let finished = slider_row(ui, "Opacity", &mut opacity, 0.0..=100.0, "%");
         if opacity != before {
@@ -184,6 +196,21 @@ impl App {
         }
         if finished {
             self.editor.end_coalescing();
+        }
+        if has_fill {
+            let finished = slider_row(ui, "Fill", &mut fill_pct, 0.0..=100.0, "%");
+            if fill_pct != fill_before {
+                self.run_coalescing(
+                    &lumenply_core::fill_opacity::SetFillOpacity {
+                        layer: id,
+                        fill: fill_pct / 100.0,
+                    },
+                    &format!("fill-opacity-{id}"),
+                );
+            }
+            if finished {
+                self.editor.end_coalescing();
+            }
         }
 
         // Groups offer Pass Through above the regular modes: the children
@@ -684,16 +711,24 @@ impl App {
             if let Some(go) = &mut fx.gradient_overlay {
                 let c1 = color_btn(ui, &mut go.start);
                 let c2 = color_btn(ui, &mut go.end);
+                if c1 || c2 {
+                    // Editing the end colours turns an imported multi-stop
+                    // gradient back into the two-colour one shown here.
+                    go.fill = None;
+                }
                 changed |= c1 || c2;
                 finished |= c1 || c2;
             }
         });
-        if let Some(mut go) = fx.gradient_overlay {
+        if let Some(mut go) = fx.gradient_overlay.clone() {
             let f = slider_row(ui, "Angle", &mut go.angle, 0.0..=360.0, "°");
             finished |= f;
+            if let Some(lumenply_doc::Fill::Gradient { angle, .. }) = &mut go.fill {
+                *angle = go.angle;
+            }
             let f2 = slider_row_scaled(ui, "Opacity", &mut go.opacity, 0.0..=1.0, 100.0, "%");
             finished |= f2;
-            if go != fx.gradient_overlay.unwrap() {
+            if Some(&go) != fx.gradient_overlay.as_ref() {
                 changed = true;
             }
             fx.gradient_overlay = Some(go);
@@ -715,6 +750,16 @@ impl App {
         if let Some(mut st) = fx.stroke {
             let f = slider_row(ui, "Size", &mut st.size, 0.5..=40.0, " px");
             finished |= f;
+            ui.horizontal(|ui| {
+                row_label(ui, "Position", LABEL_W);
+                use lumenply_doc::StrokeAlign as A;
+                let opts = [
+                    (A::Outside, "Outside"),
+                    (A::Center, "Center"),
+                    (A::Inside, "Inside"),
+                ];
+                finished |= segmented(ui, &mut st.position, &opts);
+            });
             let f2 = slider_row_scaled(ui, "Opacity", &mut st.opacity, 0.0..=1.0, 100.0, "%");
             finished |= f2;
             if st != fx.stroke.unwrap() {

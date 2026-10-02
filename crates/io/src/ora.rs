@@ -127,6 +127,14 @@ pub fn save(path: impl AsRef<Path>, doc: &Document) -> Result<Report<()>, OraErr
                 l.name
             ));
         }
+        // Without effects, fill and opacity fade the same pixels, so fill
+        // folds into the written opacity.
+        if l.fill_opacity < 1.0 {
+            warnings.push(format!(
+                "layer '{}': fill opacity was folded into the layer opacity",
+                l.name
+            ));
+        }
     });
     let file = std::fs::File::create(path)?;
     let mut zip = ZipWriter::new(std::io::BufWriter::new(file));
@@ -181,7 +189,7 @@ fn write_layer<W: Write + std::io::Seek>(
                 "{indent}<stack name=\"{}\" visibility=\"{vis}\" opacity=\"{:.4}\" \
                  composite-op=\"{}\" isolation=\"{}\">\n",
                 xml_escape(&layer.name),
-                layer.opacity,
+                layer.opacity * layer.fill_opacity,
                 ora_op(layer, warnings),
                 if layer.pass_through { "auto" } else { "isolate" },
             ));
@@ -264,7 +272,7 @@ fn write_layer<W: Write + std::io::Seek>(
                 xml_escape(&layer.name),
                 bounds.x,
                 bounds.y,
-                layer.opacity,
+                layer.opacity * layer.fill_opacity,
                 ora_op(layer, warnings),
             ));
         }
@@ -484,6 +492,29 @@ mod tests {
         let dir = std::env::temp_dir().join("nge-ora-test");
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(name)
+    }
+
+    #[test]
+    fn fill_opacity_folds_into_the_written_opacity() {
+        let mut doc = Document::new(8, 8);
+        let id = doc.add_pixel_layer("Faded");
+        {
+            let l = doc.layer_mut(id).unwrap();
+            l.pixels_mut()
+                .unwrap()
+                .set_pixel(1, 1, Rgba::from_straight(1.0, 0.0, 0.0, 1.0));
+            l.opacity = 0.5;
+            l.fill_opacity = 0.4;
+        }
+        let path = temp("fill.ora");
+        let rep = save(&path, &doc).unwrap();
+        assert_eq!(rep.warnings.len(), 1, "{:?}", rep.warnings);
+        assert!(rep.warnings[0].contains("fill opacity"));
+        let back = load(&path).unwrap().value;
+        // 50% opacity × 40% fill = 20%, at full fill.
+        assert!((back.layers()[0].opacity - 0.2).abs() < 1e-3);
+        assert_eq!(back.layers()[0].fill_opacity, 1.0);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

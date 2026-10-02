@@ -801,6 +801,7 @@ mod tests {
                     blur: 2.0,
                     color: [0.0, 0.0, 0.0],
                     opacity: 0.8,
+                    ..ShadowFx::default()
                 }),
                 ..LayerEffects::default()
             },
