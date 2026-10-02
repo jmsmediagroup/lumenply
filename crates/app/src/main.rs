@@ -568,6 +568,7 @@ impl App {
         self.move_offset = (0, 0);
         self.crop.frame = None;
         self.aids = guides::ViewAids::default();
+        self.retouch.reset();
         if self.xform.take().is_some() {
             self.mark(None);
         }
@@ -937,6 +938,9 @@ impl App {
                 offset: self.clone_offset,
                 sample,
             });
+        }
+        if self.tool == Tool::Brush && brush.mode == BrushMode::History && !self.editing_mask {
+            return Box::new(self.history_stroke(layer, brush, points));
         }
         if self.editing_mask {
             Box::new(PaintMask { layer, brush, points })

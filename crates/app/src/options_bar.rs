@@ -233,18 +233,21 @@ impl App {
                                 return;
                             }
                             if self.tool == Tool::Brush {
-                                const MODES: [(BrushMode, &str); 6] = [
+                                const MODES: [(BrushMode, &str); 9] = [
                                     (BrushMode::Paint, "Paint"),
                                     (BrushMode::Dodge, "Dodge"),
                                     (BrushMode::Burn, "Burn"),
                                     (BrushMode::Smudge, "Smudge"),
                                     (BrushMode::Saturate, "Sat+"),
                                     (BrushMode::Desaturate, "Sat−"),
+                                    (BrushMode::Blur, "Blur"),
+                                    (BrushMode::Sharpen, "Sharpen"),
+                                    (BrushMode::History, "History"),
                                 ];
                                 if tier == Tier::Wide {
                                     segmented(ui, &mut self.brush.mode, &MODES);
                                 } else {
-                                    // Narrow: the six modes fold into a menu.
+                                    // Narrow: the modes fold into a menu.
                                     let current = MODES
                                         .iter()
                                         .find(|(m, _)| *m == self.brush.mode)
@@ -260,6 +263,9 @@ impl App {
                                         .response;
                                     a11y_name(&r, "Brush mode");
                                     r.on_hover_text("Brush mode");
+                                }
+                                if self.brush.mode == BrushMode::History {
+                                    self.history_source_ui(ui);
                                 }
                                 ui.separator();
                                 self.brush_presets_ui(ui, tier);

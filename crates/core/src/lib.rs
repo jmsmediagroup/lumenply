@@ -18,6 +18,7 @@ pub mod liquify;
 pub mod locks;
 pub mod quick_select;
 mod retouch;
+mod retouch_brush;
 mod select_ops;
 pub mod snap;
 
@@ -359,6 +360,18 @@ impl Editor {
 
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
+    }
+
+    /// The document as it was after `steps` history steps: 0 is the oldest
+    /// state kept (the opened image unless the history limit dropped it),
+    /// `history().len()` the current one, beyond that the redo steps.
+    pub fn state(&self, steps: usize) -> Option<&Document> {
+        let n = self.undo.len();
+        match steps.cmp(&n) {
+            std::cmp::Ordering::Less => Some(&self.undo[steps].doc),
+            std::cmp::Ordering::Equal => Some(&self.doc),
+            std::cmp::Ordering::Greater => self.redo.iter().rev().nth(steps - n - 1).map(|s| &s.doc),
+        }
     }
 
     /// Labels of the undo stack, oldest first.

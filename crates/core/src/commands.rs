@@ -20,6 +20,7 @@ pub use crate::guides::{AddGuide, ClearGuides, MoveGuide, RemoveGuide};
 
 pub use crate::fill_cmds::{AddFillLayer, SetFill};
 pub use crate::retouch::{PatchHeal, RedEye};
+pub use crate::retouch_brush::HistoryStroke;
 
 /// Add an empty pixel layer (or one filled from a raster) on top of the stack.
 pub struct AddPixelLayer {
@@ -2606,6 +2607,15 @@ pub enum BrushMode {
     Saturate,
     /// Drain saturation; `color[3]` acts as strength.
     Desaturate,
+    /// Soften what is there (a small box blur per dab); `color[3]` acts as
+    /// strength.
+    Blur,
+    /// Crisp up what is there (unsharp mask per dab); `color[3]` acts as
+    /// strength.
+    Sharpen,
+    /// Paint from a past state (the history brush). A `PaintStroke` cannot
+    /// carry the state, so it refuses this mode: use [`HistoryStroke`].
+    History,
 }
 
 /// A round brush. Pressure scales the radius; `hardness` 1.0 is a crisp
@@ -2701,6 +2711,9 @@ impl Command for PaintStroke {
             BrushMode::Smudge => "Smudge".into(),
             BrushMode::Saturate => "Sponge (saturate)".into(),
             BrushMode::Desaturate => "Sponge (desaturate)".into(),
+            BrushMode::Blur => "Blur".into(),
+            BrushMode::Sharpen => "Sharpen".into(),
+            BrushMode::History => "History brush".into(),
         }
     }
 
@@ -2718,6 +2731,18 @@ impl Command for PaintStroke {
         let store = layer.pixels_mut().ok_or(EditError::NotPixel(self.layer))?;
         let [cr, cg, cb, ca] = self.brush.color;
         let mode = self.brush.mode;
+        match mode {
+            BrushMode::Blur | BrushMode::Sharpen => {
+                crate::retouch_brush::filter_stroke(store, &self.brush, &self.points, canvas, sel.as_ref());
+                return Ok(());
+            }
+            BrushMode::History => {
+                return Err(EditError::Invalid(
+                    "the history brush needs a source state".into(),
+                ))
+            }
+            _ => {}
+        }
         if mode == BrushMode::Smudge {
             // Each dab stamps the pixels from under the previous dab,
             // sampled from a snapshot so a dab never reads its own writes.
@@ -2800,7 +2825,9 @@ impl Command for PaintStroke {
                         let sat = |c: f32| dec((y + (c - y) * scale).clamp(0.0, 1.0));
                         Rgba::from_straight(sat(er), sat(eg), sat(eb), a)
                     }
-                    BrushMode::Smudge => unreachable!("handled above"),
+                    BrushMode::Smudge | BrushMode::Blur | BrushMode::Sharpen | BrushMode::History => {
+                        unreachable!("handled above")
+                    }
                 };
                 store.set_pixel(px, py, out);
             });
@@ -2903,7 +2930,7 @@ pub fn smooth_stroke(points: &[StrokePoint]) -> Vec<StrokePoint> {
 
 /// Dab centres along a polyline, spaced by the pressure-scaled radius so
 /// thin stroke ends stay continuous.
-fn interpolate_dabs(brush: &Brush, points: &[StrokePoint]) -> Vec<StrokePoint> {
+pub(crate) fn interpolate_dabs(brush: &Brush, points: &[StrokePoint]) -> Vec<StrokePoint> {
     let smoothed = smooth_stroke(points);
     let points = &smoothed[..];
     let mut dabs = vec![points[0]];
@@ -2956,7 +2983,7 @@ fn hash01(n: u32, salt: u32) -> f32 {
 
 /// Call `f(x, y, coverage)` for every canvas pixel a dab touches, with the
 /// selection already applied to the coverage.
-fn dab_coverage(
+pub(crate) fn dab_coverage(
     brush: &Brush,
     p: StrokePoint,
     canvas: Rect,

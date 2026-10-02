@@ -70,6 +70,28 @@ pub(crate) struct Retouch {
     pub(crate) darken: f32,
     /// Debug: centre the view on this document point at this zoom.
     pub(crate) focus: Option<(f32, f32, f32)>,
+    /// The history brush paints from this state; `None` = the oldest kept
+    /// ("Open").
+    pub(crate) history_source: Option<HistorySource>,
+}
+
+/// A history state picked as the history brush's source: its step index
+/// (for display) and the document as it was then, kept even if the step
+/// later falls off the history.
+#[derive(Clone)]
+pub(crate) struct HistorySource {
+    pub(crate) step: usize,
+    pub(crate) label: String,
+    pub(crate) doc: Document,
+}
+
+impl Retouch {
+    /// Forget per-document state (the document was replaced).
+    pub(crate) fn reset(&mut self) {
+        self.patch_drag = None;
+        self.eye_from = None;
+        self.history_source = None;
+    }
 }
 
 impl Default for Retouch {
@@ -83,6 +105,7 @@ impl Default for Retouch {
             pupil: 50.0,
             darken: 50.0,
             focus: None,
+            history_source: None,
         }
     }
 }
@@ -128,6 +151,78 @@ fn mode_control<T: PartialEq + Copy>(
 }
 
 impl App {
+    /// History step the history brush paints from (0 = "Open").
+    pub(crate) fn history_source_step(&self) -> usize {
+        self.retouch.history_source.as_ref().map_or(0, |s| s.step)
+    }
+
+    /// Make history step `step` the history brush's source.
+    pub(crate) fn set_history_source(&mut self, step: usize) {
+        let labels: Vec<String> = std::iter::once("Open".to_string())
+            .chain(self.editor.history().iter().map(|s| s.to_string()))
+            .chain(self.editor.redo_history().iter().map(|s| s.to_string()))
+            .collect();
+        if let (Some(doc), Some(label)) = (self.editor.state(step), labels.get(step)) {
+            self.retouch.history_source = Some(HistorySource {
+                step,
+                label: label.clone(),
+                doc: doc.clone(),
+            });
+            self.status = format!("History brush source: step {step} ({label})");
+        }
+    }
+
+    /// A history-brush stroke on `layer`, painting from the source state.
+    pub(crate) fn history_stroke(
+        &self,
+        layer: LayerId,
+        brush: Brush,
+        points: Vec<StrokePoint>,
+    ) -> HistoryStroke {
+        let doc = match &self.retouch.history_source {
+            Some(s) => Some(&s.doc),
+            None => self.editor.state(0),
+        };
+        let source = doc.and_then(|d| d.layer(layer)).and_then(|l| l.pixels()).cloned();
+        HistoryStroke {
+            layer,
+            brush,
+            points,
+            source,
+        }
+    }
+
+    /// The history brush's source picker for the Brush bar.
+    pub(crate) fn history_source_ui(&mut self, ui: &mut egui::Ui) {
+        let current = match &self.retouch.history_source {
+            Some(s) => format!("{} · {}", s.step, s.label),
+            None => "Open".to_string(),
+        };
+        let labels: Vec<String> = std::iter::once("Open".to_string())
+            .chain(self.editor.history().iter().map(|s| s.to_string()))
+            .collect();
+        let mut pick = None;
+        ui.label(RichText::new("From").color(MUTED));
+        let r = egui::ComboBox::from_id_salt("history-source")
+            .selected_text(current)
+            .width(140.0)
+            .show_ui(ui, |ui| {
+                popup_style(ui);
+                let at = self.history_source_step();
+                for (i, label) in labels.iter().enumerate() {
+                    if ui.selectable_label(i == at, format!("{i} · {label}")).clicked() {
+                        pick = Some(i);
+                    }
+                }
+            })
+            .response;
+        a11y_name(&r, "History brush source");
+        r.on_hover_text("The history state the brush paints back (also: right-click a History card)");
+        if let Some(i) = pick {
+            self.set_history_source(i);
+        }
+    }
+
     /// The sample source for retouching commands on `layer`.
     fn retouch_sample(&self, layer: LayerId) -> SampleSource {
         if self.sample_merged {
@@ -472,7 +567,11 @@ impl App {
     /// `retouch:patch-ca=DX:DY` patch the selection from that offset;
     /// `retouch:drag=DX:DY` shows a patch drag in progress;
     /// `retouch:dot=X:Y:R` paints a red disc (a stand-in red eye);
-    /// `retouch:redeye=X:Y:W:H` fixes red eye in that box.
+    /// `retouch:redeye=X:Y:W:H` fixes red eye in that box;
+    /// `retouch:brush=blur` (paint / blur / sharpen / history) picks a brush
+    /// mode, `retouch:radius=R` the brush radius, `retouch:source=N` the
+    /// history brush's source step; `retouch:stroke=X0:Y0:X1:Y1` runs the
+    /// current tool's stroke along that line.
     pub(crate) fn debug_retouch(&mut self, ctx: &egui::Context, tok: &str) -> bool {
         let Some(rest) = tok.strip_prefix("retouch:") else {
             return false;
@@ -492,6 +591,39 @@ impl App {
                 self.tool = Tool::Eraser;
                 if let Some(&(m, _)) = EraserMode::ALL.iter().find(|(_, l)| slug(l) == arg) {
                     self.retouch.eraser_mode = m;
+                }
+            }
+            ("brush", _) => {
+                self.tool = Tool::Brush;
+                let modes = [
+                    (BrushMode::Paint, "paint"),
+                    (BrushMode::Blur, "blur"),
+                    (BrushMode::Sharpen, "sharpen"),
+                    (BrushMode::History, "history"),
+                ];
+                if let Some(&(m, _)) = modes.iter().find(|(_, l)| *l == arg) {
+                    self.brush.mode = m;
+                }
+            }
+            ("radius", &[r]) => self.brush.radius = r,
+            ("source", &[n]) => self.set_history_source(n as usize),
+            ("stroke", &[x0, y0, x1, y1]) => {
+                if let Some(layer) = layer {
+                    let points: Vec<StrokePoint> = (0..=16)
+                        .map(|i| {
+                            let t = i as f32 / 16.0;
+                            StrokePoint::new(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, 1.0)
+                        })
+                        .collect();
+                    let t = std::time::Instant::now();
+                    let cmd = self.stroke_command(layer, points);
+                    self.run(cmd.as_ref());
+                    eprintln!(
+                        "{} took {:.3} s ({})",
+                        cmd.label(),
+                        t.elapsed().as_secs_f32(),
+                        self.status
+                    );
                 }
             }
             ("view", &[x, y, z]) => self.retouch.focus = Some((x, y, z)),
@@ -559,18 +691,70 @@ mod tests {
     use crate::a11y_tests::{ctx, launch, nameless};
 
     /// A small document whose only layer is a pixel layer.
+    /// Opened (no history yet) like a file: the "Open" state has the layer.
     fn small_app() -> App {
         let mut app = launch(&[]);
-        let mut ed = Editor::new(Document::new(48, 48));
-        ed.execute(&AddPixelLayer::from_raster(
-            "bg",
-            Raster::filled(48, 48, lumenply_tiles::Rgba::new(0.2, 0.3, 0.4, 1.0)),
-            0,
-            0,
-        ))
-        .unwrap();
-        app.open_in_new_tab(ed, None);
+        let mut doc = Document::new(48, 48);
+        let id = doc.add_pixel_layer("bg");
+        let fill = Raster::filled(48, 48, lumenply_tiles::Rgba::new(0.2, 0.3, 0.4, 1.0));
+        *doc.layer_mut(id).unwrap().pixels_mut().unwrap() =
+            lumenply_tiles::TileStore::from_raster(&fill, 0, 0);
+        app.open_in_new_tab(Editor::new(doc), None);
         app
+    }
+
+    #[test]
+    fn the_history_brush_paints_from_the_picked_step() {
+        let mut app = small_app();
+        let ctx = ctx();
+        let layer = app.active.expect("the layer is active");
+        app.run(&Fill {
+            layer,
+            color: [1.0, 0.0, 0.0, 1.0],
+        });
+        app.run(&Fill {
+            layer,
+            color: [0.0, 0.0, 1.0, 1.0],
+        });
+        app.tool = Tool::Brush;
+        app.brush.mode = BrushMode::History;
+        app.brush.hardness = 1.0;
+        app.brush.radius = 4.0;
+        app.brush.color[3] = 1.0;
+        assert_eq!(
+            nameless(&mut app, &ctx),
+            Vec::<String>::new(),
+            "history brush bar"
+        );
+        let at = |app: &App| {
+            app.editor
+                .doc()
+                .layer(layer)
+                .unwrap()
+                .pixels()
+                .unwrap()
+                .get_pixel(24, 24)
+        };
+        // By default it paints the opened image back.
+        let cmd = app.stroke_command(layer, vec![StrokePoint::new(24.0, 24.0, 1.0)]);
+        assert_eq!(cmd.label(), "History brush");
+        app.run(cmd.as_ref());
+        let p = at(&app);
+        assert!((p.r - 0.2).abs() < 1e-3 && (p.b - 0.4).abs() < 1e-3, "{p:?}");
+        // Step 1 is the red fill.
+        app.set_history_source(1);
+        assert_eq!(app.history_source_step(), 1);
+        let cmd = app.stroke_command(layer, vec![StrokePoint::new(24.0, 24.0, 1.0)]);
+        app.run(cmd.as_ref());
+        let p = at(&app);
+        assert!((p.r - 1.0).abs() < 1e-3 && p.b.abs() < 1e-3, "{p:?}");
+        // Blur and sharpen are plain paint strokes.
+        app.brush.mode = BrushMode::Blur;
+        let cmd = app.stroke_command(layer, vec![StrokePoint::new(24.0, 24.0, 1.0)]);
+        assert_eq!(cmd.label(), "Blur");
+        // Another document drops the source.
+        app.retouch.reset();
+        assert_eq!(app.history_source_step(), 0);
     }
 
     #[test]
