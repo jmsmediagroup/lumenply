@@ -1160,7 +1160,9 @@ impl App {
             self.bg_rgb = [1.0; 3];
         }
         if let Some(t) = tool {
-            self.tool = t;
+            // Shift+J / Shift+E step through the Heal and Eraser modes.
+            let shift = ctx.input(|i| i.modifiers.shift);
+            self.select_tool_key(t, shift);
         }
         if bigger {
             self.brush.radius = (self.brush.radius * 1.25).min(200.0);

@@ -37,7 +37,9 @@ pub fn tolerance_ramp(d: f32, tolerance: f32) -> f32 {
 /// colour is sampled under the first dab's centre (`continuous` false) or
 /// under every dab's centre; colours are read from the layer as it was
 /// before the stroke. `contiguous` limits each dab to pixels connected to
-/// its centre. Strength is `brush.color[3]`.
+/// its centre. `protect` (straight linear RGB, Photoshop's "Protect
+/// foreground color") keeps every pixel within the tolerance of that
+/// colour. Strength is `brush.color[3]`.
 pub struct BackgroundErase {
     pub layer: LayerId,
     pub brush: Brush,
@@ -45,6 +47,7 @@ pub struct BackgroundErase {
     pub tolerance: f32,
     pub continuous: bool,
     pub contiguous: bool,
+    pub protect: Option<[f32; 3]>,
 }
 
 impl Command for BackgroundErase {
@@ -74,6 +77,10 @@ impl Command for BackgroundErase {
         let dabs = interpolate_dabs(&self.brush, &self.points);
         let at = |p: &StrokePoint| (p.x.floor() as i32, p.y.floor() as i32);
         let first = encoded(before.get_pixel(at(&dabs[0]).0, at(&dabs[0]).1));
+        let protect = self
+            .protect
+            .map(|[r, g, b]| [srgb_encode(r), srgb_encode(g), srgb_encode(b)]);
+        let dist = |c: [f32; 3], t: [f32; 3]| (0..3).map(|i| (c[i] - t[i]).abs()).fold(0.0, f32::max);
         for d in &dabs {
             let (target, ta) = if self.continuous {
                 encoded(before.get_pixel(at(d).0, at(d).1))
@@ -88,8 +95,10 @@ impl Command for BackgroundErase {
                 if a <= 0.0 {
                     return 0.0;
                 }
-                let dist = (0..3).map(|i| (c[i] - target[i]).abs()).fold(0.0, f32::max);
-                tolerance_ramp(dist, self.tolerance)
+                if protect.is_some_and(|p| dist(c, p) <= self.tolerance.clamp(0.0, 1.0)) {
+                    return 0.0;
+                }
+                tolerance_ramp(dist(c, target), self.tolerance)
             };
             // Contiguous: flood from the centre over erasable pixels of
             // the dab's box.
@@ -244,6 +253,7 @@ mod tests {
             tolerance: 0.1,
             continuous,
             contiguous,
+            protect: None,
         }
     }
 
@@ -285,6 +295,20 @@ mod tests {
         );
         assert_eq!(alpha(&doc, id, 18, 16), 1.0, "red is protected");
         assert_eq!(alpha(&doc, id, 2, 16), 1.0, "outside the dab");
+    }
+
+    #[test]
+    fn a_protected_colour_survives_the_background_eraser() {
+        // (12, 12) is 0.07 off the sampled green: erased unless protected.
+        // The protected colour is 0.07 from it but 0.14 from the green.
+        let near = g(0.27, 0.6, 0.2);
+        let (mut doc, id) = doc_with(|x, y| ((x, y) == (12, 12)).then_some(near));
+        let mut e = erase(id, &[(12.0, 16.0)], 8.0, false, false);
+        let [r, gg, b, _] = g(0.34, 0.6, 0.2).to_straight();
+        e.protect = Some([r, gg, b]);
+        e.apply(&mut doc).unwrap();
+        assert_eq!(alpha(&doc, id, 12, 12), 1.0, "protected");
+        assert_eq!(alpha(&doc, id, 12, 16), 0.0, "the sampled green still goes");
     }
 
     #[test]

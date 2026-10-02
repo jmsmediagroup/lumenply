@@ -83,6 +83,8 @@ pub(crate) struct Retouch {
     pub(crate) bg_tolerance: f32,
     pub(crate) bg_continuous: bool,
     pub(crate) bg_contiguous: bool,
+    /// Background eraser: keep the foreground (brush) colour.
+    pub(crate) bg_protect: bool,
     /// Spot healing synthesises the stroke's area with PatchMatch on
     /// release (the live preview stays the fast diffusion heal).
     pub(crate) spot_aware: bool,
@@ -124,6 +126,7 @@ impl Default for Retouch {
             bg_tolerance: 25.0,
             bg_continuous: true,
             bg_contiguous: true,
+            bg_protect: false,
             spot_aware: true,
         }
     }
@@ -385,6 +388,8 @@ impl App {
                         }
                         check(ui, &mut self.retouch.bg_contiguous, "Contiguous")
                             .on_hover_text("Erase only what connects to the brush centre");
+                        check(ui, &mut self.retouch.bg_protect, "Protect FG")
+                            .on_hover_text("Never erase colours close to the foreground colour");
                         ui.separator();
                         false
                     }
@@ -411,6 +416,24 @@ impl App {
             }
             _ => false,
         }
+    }
+
+    /// A tool's key was pressed. With Shift on the Heal or Eraser tool
+    /// already active, step to its next mode, as Shift+J and Shift+E cycle
+    /// tool groups in Photoshop.
+    pub(crate) fn select_tool_key(&mut self, tool: Tool, shift: bool) {
+        if shift && tool == self.tool {
+            fn next<T: PartialEq + Copy>(cur: T, all: &[(T, &str)]) -> T {
+                let i = all.iter().position(|(m, _)| *m == cur).unwrap_or(0);
+                all[(i + 1) % all.len()].0
+            }
+            match tool {
+                Tool::Heal => self.retouch.heal_mode = next(self.retouch.heal_mode, &HealMode::ALL),
+                Tool::Eraser => self.retouch.eraser_mode = next(self.retouch.eraser_mode, &EraserMode::ALL),
+                _ => {}
+            }
+        }
+        self.tool = tool;
     }
 
     /// The palette's retouching-mode actions (`tool-patch`, ...): pick the
@@ -449,6 +472,10 @@ impl App {
             tolerance: self.retouch.bg_tolerance / 100.0,
             continuous: self.retouch.bg_continuous,
             contiguous: self.retouch.bg_contiguous,
+            protect: self.retouch.bg_protect.then(|| {
+                let [r, g, b, _] = linear_rgba(self.brush_rgb, 1.0);
+                [r, g, b]
+            }),
         }
     }
 
@@ -1057,6 +1084,33 @@ mod tests {
         assert_eq!(label(&app), "Spot heal");
         app.clone_source = Some((30.0, 30.0));
         assert_eq!(label(&app), "Healing brush");
+    }
+
+    #[test]
+    fn shift_with_the_tool_key_cycles_its_modes() {
+        let mut app = small_app();
+        app.select_tool_key(Tool::Heal, true);
+        assert_eq!(
+            app.retouch.heal_mode,
+            HealMode::Spot,
+            "first press only picks the tool"
+        );
+        for want in [
+            HealMode::Healing,
+            HealMode::Patch,
+            HealMode::RedEye,
+            HealMode::Spot,
+        ] {
+            app.select_tool_key(Tool::Heal, true);
+            assert_eq!(app.retouch.heal_mode, want);
+        }
+        app.select_tool_key(Tool::Heal, false);
+        assert_eq!(app.retouch.heal_mode, HealMode::Spot, "plain J keeps the mode");
+        app.select_tool_key(Tool::Eraser, false);
+        app.select_tool_key(Tool::Eraser, true);
+        assert_eq!(app.retouch.eraser_mode, EraserMode::Background);
+        app.select_tool_key(Tool::Brush, true);
+        assert_eq!((app.tool, app.brush.mode), (Tool::Brush, BrushMode::Paint));
     }
 
     #[test]

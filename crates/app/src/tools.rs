@@ -88,10 +88,10 @@ impl Tool {
         match self {
             Tool::Move => "Move (V)",
             Tool::Brush => "Brush (B)",
-            Tool::Eraser => "Eraser (E)",
+            Tool::Eraser => "Eraser (E) — Shift+E cycles Eraser, Background and Magic",
             Tool::Clone => "Clone Stamp (S) — Alt+click or 'Pick source' to set the source",
             Tool::Heal => {
-                "Healing Brush (J) — paints surroundings over blemishes; Alt+click sets a texture source"
+                "Healing Brush (J) — Shift+J cycles Spot, Healing, Patch and Red Eye; Alt+click sets a texture source"
             }
             Tool::Pen => {
                 "Pen (P) — click for corners, drag for curves; click the first point to close; Enter finishes"
