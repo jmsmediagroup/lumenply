@@ -96,10 +96,100 @@ impl Command for DeleteSavedSelection {
     }
 }
 
+/// Rename saved selection `index` (the Channels panel's double-click).
+/// The name is trimmed and made unique among the other saved selections.
+pub struct RenameSavedSelection {
+    pub index: usize,
+    pub name: String,
+}
+
+impl Command for RenameSavedSelection {
+    fn label(&self) -> String {
+        "Rename channel".into()
+    }
+
+    fn affected(&self, _doc: &Document) -> Option<Rect> {
+        Some(Rect::default())
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        if self.index >= doc.saved_selections.len() {
+            return Err(EditError::Invalid(format!("no saved selection {}", self.index)));
+        }
+        let name = self.name.trim();
+        if name.is_empty() {
+            return Err(EditError::Invalid("the channel needs a name".into()));
+        }
+        // Unique among the others: renaming "Sky" to "Sky" keeps it.
+        let others: Vec<SavedSelection> = doc
+            .saved_selections
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != self.index)
+            .map(|(_, s)| SavedSelection {
+                name: s.name.clone(),
+                mask: lumenply_doc::Mask::hide_all(),
+            })
+            .collect();
+        doc.saved_selections[self.index].name = unique_name(name, &others);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Editor;
+
+    #[test]
+    fn renaming_a_channel_trims_keeps_it_unique_and_undoes() {
+        let mut doc = Document::new(10, 10);
+        doc.selection = Some(Selection::rect(Rect::new(0, 0, 5, 5)));
+        let mut ed = Editor::new(doc);
+        ed.execute(&SaveSelection { name: "Sky".into() }).unwrap();
+        ed.execute(&SaveSelection { name: "Tree".into() }).unwrap();
+        let names = |ed: &Editor| -> Vec<String> {
+            ed.doc().saved_selections.iter().map(|s| s.name.clone()).collect()
+        };
+        ed.execute(&RenameSavedSelection {
+            index: 1,
+            name: "  Hair  ".into(),
+        })
+        .unwrap();
+        assert_eq!(names(&ed), ["Sky", "Hair"]);
+        // Taking another channel's name gets a number, its own name doesn't.
+        ed.execute(&RenameSavedSelection {
+            index: 1,
+            name: "Sky".into(),
+        })
+        .unwrap();
+        assert_eq!(names(&ed), ["Sky", "Sky 2"]);
+        ed.execute(&RenameSavedSelection {
+            index: 0,
+            name: "Sky".into(),
+        })
+        .unwrap();
+        assert_eq!(names(&ed), ["Sky", "Sky 2"]);
+        // The mask itself is untouched.
+        assert_eq!(ed.doc().saved_selections[1].mask.value(2, 2), 1.0);
+        assert_eq!(ed.doc().saved_selections[1].mask.value(7, 7), 0.0);
+        assert_eq!(ed.history().len(), 5);
+        ed.undo();
+        ed.undo();
+        assert_eq!(names(&ed), ["Sky", "Hair"]);
+        assert!(ed
+            .execute(&RenameSavedSelection {
+                index: 0,
+                name: "   ".into()
+            })
+            .is_err());
+        assert!(ed
+            .execute(&RenameSavedSelection {
+                index: 9,
+                name: "x".into()
+            })
+            .is_err());
+    }
 
     fn at(ed: &Editor, x: i32, y: i32) -> f32 {
         ed.doc().selection.as_ref().map_or(0.0, |s| s.value(x, y))
