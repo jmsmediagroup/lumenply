@@ -247,6 +247,15 @@ impl App {
         }
         row(ui, "Style", |ui| {
             finished |= style_toggles(ui, &mut t.bold, &mut t.italic, Some(&mut t.all_caps));
+            ui.add_space(4.0);
+            let r = chip(ui, t.kerning, RichText::new("VA").size(11.0), 28.0).on_hover_text(
+                "Kerning: the font's own pair spacing and exact advances (Photoshop's Metrics)",
+            );
+            a11y_name(&r, "Kerning");
+            if r.clicked() {
+                t.kerning = !t.kerning;
+                finished = true;
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 finished |= text_color_button(ui, &mut t.color);
             });

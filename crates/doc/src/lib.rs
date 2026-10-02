@@ -511,6 +511,11 @@ pub struct TextLayer {
     /// Show every letter as a capital (the stored text keeps its case).
     #[serde(default)]
     pub all_caps: bool,
+    /// Photoshop's "Metrics" kerning: the font's kerning pairs and its
+    /// exact fractional advances. Off (older documents) keeps whole-pixel
+    /// advances without pairs.
+    #[serde(default)]
+    pub kerning: bool,
     /// Per-character colour, size, bold and italic (see [`text_runs`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runs: Vec<text_runs::TextRun>,
@@ -548,6 +553,7 @@ impl PartialEq for TextLayer {
             && self.box_size == o.box_size
             && self.baseline_shift == o.baseline_shift
             && self.all_caps == o.all_caps
+            && self.kerning == o.kerning
             && self.runs == o.runs
     }
 }
@@ -569,6 +575,7 @@ impl TextLayer {
             box_size: None,
             baseline_shift: 0.0,
             all_caps: false,
+            kerning: false,
             runs: Vec::new(),
             cache: None,
         }

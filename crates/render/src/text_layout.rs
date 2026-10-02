@@ -205,11 +205,13 @@ pub fn layout(t: &TextLayer) -> TextLayout {
             };
             let f = &faces[fi];
             let (font, fsize, bold_px) = (f.font.clone(), f.size, f.bold_px);
+            // Metrics kerning keeps the font's fractional advances.
+            let whole = |a: f32| if t.kerning { a } else { a.ceil() };
             let track = tracking / 1000.0 * fsize;
             let mut first = true;
             let mut push = |d: char, first: bool| {
                 let (glyph, advance, ink_right, ink) = if d == '\t' {
-                    let space = font.metrics(' ', fsize).advance_width.ceil();
+                    let space = whole(font.metrics(' ', fsize).advance_width);
                     (font.lookup_glyph_index(' '), space * 4.0, 0.0, false)
                 } else if d.is_control() {
                     (0, 0.0, 0.0, false)
@@ -219,7 +221,7 @@ pub fn layout(t: &TextLayer) -> TextLayout {
                     let ink = m.width > 0 && m.height > 0;
                     (
                         g,
-                        m.advance_width.ceil(),
+                        whole(m.advance_width),
                         m.xmin as f32 + m.width as f32 + bold_px,
                         ink,
                     )
@@ -243,6 +245,21 @@ pub fn layout(t: &TextLayer) -> TextLayout {
                 }
             } else {
                 push(c, true);
+            }
+        }
+
+        // Metrics kerning: each pair of neighbours in one face closes up
+        // (or opens) by the font's kerning for that pair.
+        if t.kerning {
+            for i in 1..items.len() {
+                let (l, r) = (&items[i - 1], &items[i]);
+                if l.face != r.face || l.glyph == 0 || r.glyph == 0 {
+                    continue;
+                }
+                let f = &faces[l.face];
+                if let Some(k) = f.font.horizontal_kern_indexed(l.glyph, r.glyph, f.size) {
+                    items[i - 1].advance += k;
+                }
             }
         }
 
@@ -1067,6 +1084,45 @@ mod tests {
         assert!(b[0] > 0.99 && b[1] < 0.01, "b is red: {b:?}");
         let a = ink(1.0, adv('a', 20.0) - 1.0);
         assert!(a[0] < 0.01, "a stays black: {a:?}");
+    }
+
+    #[test]
+    fn metrics_kerning_closes_pairs_and_keeps_fractional_advances() {
+        let plain = TextLayer::new("To", 0.0, 50.0, 48.0, BLACK);
+        let kerned = TextLayer {
+            kerning: true,
+            ..plain.clone()
+        };
+        let f = resolve(&plain).font.clone();
+        let t_adv = f.metrics('T', 48.0).advance_width;
+        let pair = f.horizontal_kern('T', 'o', 48.0).expect("DejaVu kerns To");
+        assert!(pair < -5.0, "a real kerning pair: {pair}");
+        // Off: whole-pixel advance, no pair. On: exact advance plus pair.
+        assert_eq!(layout(&plain).caret(1).x, t_adv.ceil());
+        assert!((layout(&kerned).caret(1).x - (t_adv + pair)).abs() < 1e-4);
+        // The rendered "o" moves left by about the pair.
+        let ink_x = |t: &TextLayer| {
+            let s = crate::text::rasterize(t);
+            let b = s.content_bounds().unwrap();
+            // Rightmost ink column: the end of the "o".
+            b.right()
+        };
+        let shift = ink_x(&plain) - ink_x(&kerned);
+        assert!(
+            (shift as f32 - (t_adv.ceil() - t_adv - pair)).abs() <= 1.0,
+            "{shift}"
+        );
+        // Faces do not kern across a style change.
+        let mut mixed = kerned.clone();
+        mixed.apply_style(
+            1,
+            2,
+            lumenply_doc::text_runs::CharStyle {
+                color: Some([1.0, 0.0, 0.0, 1.0]),
+                ..Default::default()
+            },
+        );
+        assert!((layout(&mixed).caret(1).x - t_adv).abs() < 1e-4);
     }
 
     #[test]

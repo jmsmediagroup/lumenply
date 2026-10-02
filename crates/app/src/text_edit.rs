@@ -482,6 +482,8 @@ impl App {
         t.font = self.text_font.clone();
         t.align = self.text_align;
         t.box_size = box_size;
+        // New text kerns like Photoshop's default ("Metrics").
+        t.kerning = true;
         if box_size.is_none() && t.align == TextAlign::Justify {
             t.align = TextAlign::Left;
         }

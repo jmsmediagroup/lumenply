@@ -116,6 +116,7 @@ fn lumen_round_trip_keeps_paragraph_boxes_and_character_options() {
         align: TextAlign::Justify,
         baseline_shift: -3.5,
         all_caps: true,
+        kerning: true,
         line_height: 1.6,
         ..TextLayer::new(
             "wraps inside its box when it is long",
@@ -134,6 +135,7 @@ fn lumen_round_trip_keeps_paragraph_boxes_and_character_options() {
     assert_eq!(t.box_size, Some([180.0, 120.0]));
     assert_eq!(t.align, TextAlign::Justify);
     assert_eq!((t.baseline_shift, t.all_caps, t.line_height), (-3.5, true, 1.6));
+    assert!(t.kerning);
     assert_eq!(*t, para);
     // Wrapped glyphs come back where they were.
     let orig = doc
@@ -161,7 +163,8 @@ fn text_saved_before_paragraphs_existed_still_loads() {
         "bold":false,"line_height":1.2,"font":"","italic":false,"align":"center","tracking":0.0}"#;
     let t: TextLayer = serde_json::from_str(old).expect("old text layer JSON");
     assert_eq!(t.box_size, None);
-    assert_eq!((t.baseline_shift, t.all_caps), (0.0, false));
+    assert_eq!((t.baseline_shift, t.all_caps, t.kerning), (0.0, false, false));
+    assert!(t.runs.is_empty());
     assert_eq!(t.align, TextAlign::Center);
     let new = r#"{"text":"J","x":0.0,"y":0.0,"size":9.0,"color":[0.0,0.0,0.0,1.0],
         "bold":false,"line_height":1.2,"align":"justify","box_size":[50.0,20.0]}"#;
