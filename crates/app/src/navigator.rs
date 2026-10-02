@@ -218,7 +218,7 @@ impl App {
             });
         if close {
             self.prefs.panels.navigator = false;
-            self.prefs.save();
+            self.save_panel_prefs();
         }
         if let Some(c) = pan_to {
             self.pan = pan_to_centre(canvas.size(), c, self.zoom);

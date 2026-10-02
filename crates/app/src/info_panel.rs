@@ -135,7 +135,7 @@ impl App {
             });
         if close {
             self.prefs.panels.info = false;
-            self.prefs.save();
+            self.save_panel_prefs();
         }
         out.response.rect.height()
     }

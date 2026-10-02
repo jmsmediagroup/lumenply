@@ -313,10 +313,18 @@ impl App {
         }
     }
 
+    /// Persist the panel choices. Unit tests share one prefs file and run
+    /// in parallel: a tab saved by one would leak into the others.
+    pub(crate) fn save_panel_prefs(&self) {
+        if !cfg!(test) {
+            self.prefs.save();
+        }
+    }
+
     pub(crate) fn set_dock_tab(&mut self, tab: DockTab) {
         if self.prefs.panels.tab != tab {
             self.prefs.panels.tab = tab;
-            self.prefs.save();
+            self.save_panel_prefs();
         }
     }
 
@@ -517,11 +525,11 @@ impl App {
             "channel-blue" => self.set_channel_view(ChannelView::Blue),
             "navigator" => {
                 self.prefs.panels.navigator = !self.prefs.panels.navigator;
-                self.prefs.save();
+                self.save_panel_prefs();
             }
             "info-panel" => {
                 self.prefs.panels.info = !self.prefs.panels.info;
-                self.prefs.save();
+                self.save_panel_prefs();
             }
             "make-work-path" => {
                 self.run(&lumenply_core::path_ops::SelectionToWorkPath { tolerance: 2.0 });
