@@ -6,6 +6,7 @@
 //! EXR and PSD each get their own module here as the roadmap reaches them.
 //! The native project format lives in [`project`].
 
+pub mod abr;
 pub mod ora;
 pub mod project;
 pub mod psd;

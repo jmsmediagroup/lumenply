@@ -107,6 +107,9 @@ pub(crate) struct Prefs {
     /// Gradients saved from the Gradient tool's popover.
     #[serde(default)]
     pub gradient_presets: Vec<crate::gradient_ui::GradientPreset>,
+    /// The brush as it was at the last exit (tip, shape, dynamics),
+    /// restored at launch.
+    pub current_brush: Option<Box<BrushPreset>>,
 }
 
 /// One saved brush setup (the shape parameters; colour stays with the
@@ -120,6 +123,14 @@ pub(crate) struct BrushPreset {
     pub spacing: f32,
     pub jitter: f32,
     pub opacity: f32,
+    /// Tip id: "" is the round tip, `builtin:<name>` a generated one,
+    /// `abr-<hash>` an imported one (brush_panel.rs).
+    pub tip: String,
+    /// Tip angle in degrees, counter-clockwise.
+    pub angle: f32,
+    /// Tip roundness, 0.01–1.
+    pub roundness: f32,
+    pub dynamics: crate::brush_panel::PresetDynamics,
 }
 
 impl Default for BrushPreset {
@@ -131,6 +142,10 @@ impl Default for BrushPreset {
             spacing: 0.2,
             jitter: 0.0,
             opacity: 1.0,
+            tip: String::new(),
+            angle: 0.0,
+            roundness: 1.0,
+            dynamics: Default::default(),
         }
     }
 }
@@ -155,6 +170,7 @@ impl Default for Prefs {
             grid_spacing: 100.0,
             grid_subdivisions: 4,
             gradient_presets: Vec::new(),
+            current_brush: None,
         }
     }
 }
@@ -380,6 +396,7 @@ mod tests {
             spacing: 0.15,
             jitter: 0.4,
             opacity: 0.7,
+            ..BrushPreset::default()
         });
         let json = serde_json::to_string(&p).unwrap();
         let back: Prefs = serde_json::from_str(&json).unwrap();

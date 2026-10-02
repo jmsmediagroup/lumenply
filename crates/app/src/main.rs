@@ -24,6 +24,7 @@ use lumenply_tiles::{Affine, Raster, Rect};
 
 mod adjust_ui;
 mod brand;
+mod brush_panel;
 mod camera_raw;
 mod canvas;
 mod clipboard;
@@ -417,6 +418,8 @@ struct App {
     shape: shape_tool::ShapeTool,
     /// The Gradient tool's options, popover and drag (gradient_ui.rs).
     gradient: gradient_ui::GradientTool,
+    /// Brush tips for the picker: built-in and imported (brush_panel.rs).
+    brushes: brush_panel::BrushLibrary,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -475,6 +478,7 @@ impl App {
                 spacing: 0.12,
                 jitter: 0.0,
                 mode: BrushMode::Paint,
+                ..Brush::default()
             },
             brush_rgb: [0.10, 0.18, 0.55],
             bg_rgb: [1.0, 1.0, 1.0],
@@ -581,6 +585,7 @@ impl App {
             aids: guides::ViewAids::default(),
             shape: Default::default(),
             gradient: Default::default(),
+            brushes: brush_panel::BrushLibrary::load(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -593,6 +598,7 @@ impl App {
         for p in &launch.places {
             app.place_image(p);
         }
+        app.restore_brush();
         if session::autosave_file().is_some_and(|p| p.exists()) {
             app.dialog = Some(Dialog::Recover);
         }
@@ -898,8 +904,11 @@ impl App {
     }
 
     fn make_brush(&self) -> Brush {
-        let mut b = self.brush;
+        let mut b = self.brush.clone();
         b.color = linear_rgba(self.brush_rgb, self.brush.color[3].max(0.0));
+        // Colour dynamics mix toward the background colour.
+        let [br, bg, bb, _] = linear_rgba(self.bg_rgb, 1.0);
+        b.dynamics.background = [br, bg, bb];
         b.mode = match self.tool {
             Tool::Eraser => BrushMode::Erase,
             // The Brush tool keeps its chosen mode (Paint / Dodge / Burn).
@@ -1326,6 +1335,7 @@ impl eframe::App for App {
         // An intentional exit needs no crash recovery; a stale backup would
         // only raise a misleading prompt next launch.
         session::remove_autosave();
+        self.remember_brush();
     }
 }
 

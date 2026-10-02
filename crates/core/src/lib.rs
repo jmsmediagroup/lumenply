@@ -7,6 +7,7 @@
 //! CLI behave identically.
 
 pub mod align;
+pub mod brush_tip;
 pub mod canvas_ops;
 pub mod channels;
 pub mod commands;
@@ -404,6 +405,7 @@ mod tests {
                 spacing: 0.25,
                 jitter: 0.0,
                 mode: BrushMode::Paint,
+                ..Brush::default()
             },
             points: vec![StrokePoint::new(10.0, 10.0, 1.0)],
         };

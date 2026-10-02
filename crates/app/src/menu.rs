@@ -358,6 +358,7 @@ impl App {
         self.act(ui, "Open demo document", "demo");
         menu_separator(ui);
         self.act(ui, "Place image as layer...", "place");
+        self.act(ui, "Import brushes...", "import-brushes");
         menu_separator(ui);
         self.act(ui, "Save", "save");
         self.act(ui, "Save as...", "saveas");
@@ -410,6 +411,7 @@ impl App {
         self.act(ui, "Fill...", "fill-dialog");
         self.act(ui, "Content-Aware Fill...", "content-aware");
         self.act(ui, "Clear", "clear");
+        self.act(ui, "Define brush tip", "define-brush");
         menu_separator(ui);
         self.act(ui, "Preferences...", "prefs");
     }

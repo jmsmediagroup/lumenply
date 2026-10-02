@@ -172,6 +172,8 @@ const ACTIONS: &[(&str, &str)] = &[
     ("New fill layer: gradient", "fill-gradient"),
     ("New shape layer from path", "shape-from-path"),
     ("Select and Mask...", "select-mask"),
+    ("Import brushes (.abr)...", "import-brushes"),
+    ("Define brush tip from selection", "define-brush"),
 ];
 
 impl App {
@@ -658,6 +660,8 @@ impl App {
             "open" => self.pick_open(),
             "demo" => self.open_demo(),
             "place" => self.pick_place(),
+            "import-brushes" => self.pick_import_brushes(),
+            "define-brush" => self.define_brush_tip(),
             "save" => self.save_live(),
             "saveas" => self.pick_save(),
             "export-png" => self.pick_export_png(),
@@ -875,7 +879,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 119); // + Select and Mask
+        assert_eq!(n, 121); // + import brushes, define brush tip
     }
 
     #[test]
