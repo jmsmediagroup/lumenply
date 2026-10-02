@@ -782,6 +782,71 @@ impl Command for TransformLayer {
     }
 }
 
+/// Warp a pixel layer so its painted bounds land on `quad` (top-left,
+/// top-right, bottom-right, bottom-left). The mask warps through the same
+/// homography, so it stays registered with the pixels.
+pub struct PerspectiveLayer {
+    pub layer: LayerId,
+    pub quad: [(f32, f32); 4],
+}
+
+impl Command for PerspectiveLayer {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn label(&self) -> String {
+        "Perspective".into()
+    }
+
+    fn affected(&self, doc: &Document) -> Option<Rect> {
+        let old = doc
+            .layer(self.layer)
+            .and_then(|l| l.pixels())
+            .and_then(|s| s.content_bounds())?;
+        let xs = self.quad.iter().map(|p| p.0);
+        let ys = self.quad.iter().map(|p| p.1);
+        let x0 = xs.clone().fold(f32::INFINITY, f32::min).floor() as i32 - 1;
+        let x1 = xs.fold(f32::NEG_INFINITY, f32::max).ceil() as i32 + 1;
+        let y0 = ys.clone().fold(f32::INFINITY, f32::min).floor() as i32 - 1;
+        let y1 = ys.fold(f32::NEG_INFINITY, f32::max).ceil() as i32 + 1;
+        if x1 <= x0 || y1 <= y0 {
+            return Some(old);
+        }
+        let new = Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32);
+        Some(old.union(&new).intersect(&doc.canvas()))
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        if self.quad.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
+            return Err(EditError::Invalid("perspective corners must be finite".into()));
+        }
+        let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
+        let store = match &mut l.content {
+            LayerContent::Pixel(store) => store,
+            LayerContent::Text(_) => {
+                return Err(EditError::Invalid(
+                    "rasterize the text layer before a perspective warp".into(),
+                ))
+            }
+            _ => return Err(EditError::NotPixel(self.layer)),
+        };
+        let bounds = store
+            .content_bounds()
+            .ok_or_else(|| EditError::Invalid("the layer has no pixels to warp".into()))?;
+        let h = lumenply_render::Homography::rect_to_quad(bounds, self.quad)
+            .ok_or_else(|| EditError::Invalid("the corners form a degenerate quad".into()))?;
+        if h.inverse().is_none() {
+            return Err(EditError::Invalid("the corners form a degenerate quad".into()));
+        }
+        *store = lumenply_render::perspective_store_h(store, &h);
+        if let Some(m) = l.mask.as_mut() {
+            *m = lumenply_render::perspective_mask(m, &h);
+        }
+        Ok(())
+    }
+}
+
 /// Mirror a pixel layer about the vertical or horizontal axis of its bounds.
 pub struct FlipLayer {
     pub layer: LayerId,
@@ -3486,6 +3551,70 @@ mod tests {
             color: [0.0; 4]
         }
         .apply(&mut Document::new(8, 8))
+        .is_err());
+    }
+
+    #[test]
+    fn perspective_layer_keystones_pixels_and_mask_together() {
+        let mut doc = Document::new(64, 64);
+        let id = doc.add_pixel_layer("L");
+        for y in 10..50 {
+            for x in 10..50 {
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(0.0, 0.6, 0.9, 1.0),
+                );
+            }
+        }
+        // Mask hides the left half of the square.
+        let mut mask = Mask::reveal_all();
+        for y in 10..50 {
+            for x in 10..30 {
+                mask.set_value(x, y, 0.0);
+            }
+        }
+        doc.layer_mut(id).unwrap().mask = Some(mask);
+
+        // Narrow the top edge to its middle half.
+        let cmd = PerspectiveLayer {
+            layer: id,
+            quad: [(20.0, 10.0), (40.0, 10.0), (50.0, 50.0), (10.0, 50.0)],
+        };
+        let aff = cmd.affected(&doc).unwrap();
+        cmd.apply(&mut doc).unwrap();
+        let l = doc.layer(id).unwrap();
+        let px = l.pixels().unwrap();
+        assert!(px.get_pixel(30, 12).a > 0.9, "top centre kept");
+        assert!(px.get_pixel(14, 12).a < 0.05, "top corner cut by the keystone");
+        assert!(px.get_pixel(12, 47).a > 0.9, "bottom keeps its width");
+        assert!(
+            aff.contains(30, 12) && aff.contains(12, 47),
+            "affected covers the warp"
+        );
+        // The mask edge (x = 30 in the source, the square's midline) stays
+        // on the warped midline: hidden left of it, shown right of it.
+        let m = l.mask.as_ref().unwrap();
+        assert!(m.value(25, 30) < 0.1, "left stays hidden after the warp");
+        assert!(m.value(38, 30) > 0.9, "right stays revealed");
+
+        // Text layers refuse with a clear message; degenerate quads error.
+        let tid = doc.alloc_id();
+        doc.add_layer(Layer::text(
+            tid,
+            lumenply_doc::TextLayer::new("x", 0.0, 10.0, 12.0, [0.0, 0.0, 0.0, 1.0]),
+        ));
+        assert!(PerspectiveLayer {
+            layer: tid,
+            quad: [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+        }
+        .apply(&mut doc)
+        .is_err());
+        assert!(PerspectiveLayer {
+            layer: id,
+            quad: [(0.0, 0.0); 4]
+        }
+        .apply(&mut doc)
         .is_err());
     }
 

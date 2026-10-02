@@ -137,6 +137,8 @@ impl App {
             dx: 0.0,
             dy: 0.0,
             base: (1.0, 1.0, 0.0, 0.0, 0.0),
+            quad: None,
+            qbase: [(0.0, 0.0); 4],
             last_preview: b,
         });
         self.status =
@@ -145,12 +147,25 @@ impl App {
 
     pub(crate) fn commit_free_transform(&mut self) {
         if let Some(x) = self.xform.take() {
-            let t = x.affine();
-            if t.integer_translation() != Some((0, 0)) {
-                self.run(&TransformLayer {
-                    layer: x.layer,
-                    transform: t,
-                });
+            if let Some(quad) = x.quad {
+                let b = x.bounds;
+                let identity = [
+                    (b.x as f32, b.y as f32),
+                    (b.right() as f32, b.y as f32),
+                    (b.right() as f32, b.bottom() as f32),
+                    (b.x as f32, b.bottom() as f32),
+                ];
+                if quad != identity {
+                    self.run(&PerspectiveLayer { layer: x.layer, quad });
+                }
+            } else {
+                let t = x.affine();
+                if t.integer_translation() != Some((0, 0)) {
+                    self.run(&TransformLayer {
+                        layer: x.layer,
+                        transform: t,
+                    });
+                }
             }
             self.mark(None);
         }

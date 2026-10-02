@@ -144,7 +144,10 @@ None of these could be tested in the container.
       the pen options bar, saved in .lumen, every change undoable)
 - [x] Skew and non-uniform scale in free transform (edge handles stretch one
       axis, mirror across the centre; W/H/Rotate/Skew fields in the options bar)
-- [ ] Perspective and warp transforms (non-affine; needs a mesh resampler)
+- [~] Perspective transform: homography resampler (rect → quad, bilinear,
+      mask warps through the same mapping), PerspectiveLayer command, and a
+      Perspective toggle in free transform (corners drag freely, edges
+      carry both corners). Warp (mesh) still open
 - [~] Brush engine: spacing jitter, dodge/burn, smudge (drags pixels along
       the stroke from a per-dab snapshot) and sponge (Sat+/Sat− scale chroma
       around gamma luminance) are in. Still to do: presets, textures
@@ -172,8 +175,9 @@ None of these could be tested in the container.
 - [x] More filters: noise (position-seeded), motion blur, median, high pass —
       destructive or live, with dialog previews and palette entries
 - [~] Text: font picker (system fonts via fontdb, .ttc face index honoured),
-      italic (real face or synthetic oblique), alignment (left/centre/right).
-      Still to do: kerning/tracking controls, on-canvas text editing
+      italic (real face or synthetic oblique), alignment (left/centre/right),
+      tracking in em/1000 (pair kerning comes from the font via fontdue).
+      Still to do: on-canvas text editing
 - [x] Animated marching ants (boundary dashes march; huge outlines fall back
       to the static texture)
 - [x] Select by colour range (Select menu + palette: fuzziness slider with live

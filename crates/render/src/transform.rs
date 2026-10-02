@@ -151,6 +151,228 @@ fn resample_tile(src: &TileStore, inv: &Affine, coord: TileCoord, src_bounds: Re
     any.then_some(tile)
 }
 
+/// A 3×3 projective transform (homography), row-major.
+#[derive(Clone, Copy, Debug)]
+pub struct Homography {
+    pub m: [f32; 9],
+}
+
+impl Homography {
+    /// Map the corners of `src` onto `quad`, given as (top-left,
+    /// top-right, bottom-right, bottom-left). `None` for degenerate quads.
+    pub fn rect_to_quad(src: Rect, quad: [(f32, f32); 4]) -> Option<Homography> {
+        // Unit square → quad (classic closed form), then compose with the
+        // rect → unit-square scale.
+        let [(x0, y0), (x1, y1), (x2, y2), (x3, y3)] = quad;
+        let (dx1, dy1) = (x1 - x2, y1 - y2);
+        let (dx2, dy2) = (x3 - x2, y3 - y2);
+        let (dx3, dy3) = (x0 - x1 + x2 - x3, y0 - y1 + y2 - y3);
+        let (a, b, c, d, e, f, g, h);
+        if dx3.abs() < 1e-6 && dy3.abs() < 1e-6 {
+            // Affine case.
+            a = x1 - x0;
+            b = x2 - x1;
+            c = x0;
+            d = y1 - y0;
+            e = y2 - y1;
+            f = y0;
+            g = 0.0;
+            h = 0.0;
+        } else {
+            let den = dx1 * dy2 - dx2 * dy1;
+            if den.abs() < 1e-9 {
+                return None;
+            }
+            g = (dx3 * dy2 - dx2 * dy3) / den;
+            h = (dx1 * dy3 - dx3 * dy1) / den;
+            a = x1 - x0 + g * x1;
+            b = x3 - x0 + h * x3;
+            c = x0;
+            d = y1 - y0 + g * y1;
+            e = y3 - y0 + h * y3;
+            f = y0;
+        }
+        let unit = Homography {
+            m: [a, b, c, d, e, f, g, h, 1.0],
+        };
+        if src.w == 0 || src.h == 0 {
+            return None;
+        }
+        let (sx, sy) = (1.0 / src.w as f32, 1.0 / src.h as f32);
+        let norm = Homography {
+            m: [
+                sx,
+                0.0,
+                -(src.x as f32) * sx,
+                0.0,
+                sy,
+                -(src.y as f32) * sy,
+                0.0,
+                0.0,
+                1.0,
+            ],
+        };
+        Some(unit.compose(&norm))
+    }
+
+    /// `self` after `other` (matrix product `self · other`).
+    pub fn compose(&self, other: &Homography) -> Homography {
+        let (a, b) = (&self.m, &other.m);
+        let mut m = [0f32; 9];
+        for r in 0..3 {
+            for c in 0..3 {
+                m[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
+            }
+        }
+        Homography { m }
+    }
+
+    pub fn inverse(&self) -> Option<Homography> {
+        let m = &self.m;
+        let det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6])
+            + m[2] * (m[3] * m[7] - m[4] * m[6]);
+        if det.abs() < 1e-12 {
+            return None;
+        }
+        let inv = |i: usize, j: usize, k: usize, l: usize| (m[i] * m[j] - m[k] * m[l]) / det;
+        Some(Homography {
+            m: [
+                inv(4, 8, 5, 7),
+                inv(2, 7, 1, 8),
+                inv(1, 5, 2, 4),
+                inv(5, 6, 3, 8),
+                inv(0, 8, 2, 6),
+                inv(2, 3, 0, 5),
+                inv(3, 7, 4, 6),
+                inv(1, 6, 0, 7),
+                inv(0, 4, 1, 3),
+            ],
+        })
+    }
+
+    /// Apply with the perspective division; `None` behind the horizon.
+    #[inline]
+    pub fn apply(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        let m = &self.m;
+        let w = m[6] * x + m[7] * y + m[8];
+        if w.abs() < 1e-6 {
+            return None;
+        }
+        Some(((m[0] * x + m[1] * y + m[2]) / w, (m[3] * x + m[4] * y + m[5]) / w))
+    }
+}
+
+/// Resample a store so its content bounds land on `quad` (tl, tr, br, bl),
+/// bilinearly. Returns an empty store for degenerate quads.
+pub fn perspective_store(src: &TileStore, quad: [(f32, f32); 4]) -> TileStore {
+    let Some(src_bounds) = src.content_bounds() else {
+        return TileStore::new();
+    };
+    match Homography::rect_to_quad(src_bounds, quad) {
+        Some(h) => perspective_store_h(src, &h),
+        None => TileStore::new(),
+    }
+}
+
+/// Resample a store through an explicit homography (used so a layer's mask
+/// warps through the same mapping as its pixels).
+pub fn perspective_store_h(src: &TileStore, h: &Homography) -> TileStore {
+    let Some(src_bounds) = src.content_bounds() else {
+        return TileStore::new();
+    };
+    let Some(inv) = h.inverse() else {
+        return TileStore::new();
+    };
+    // Destination bounds: the mapped source corners' bounding box.
+    let corners = [
+        (src_bounds.x as f32, src_bounds.y as f32),
+        (src_bounds.right() as f32, src_bounds.y as f32),
+        (src_bounds.right() as f32, src_bounds.bottom() as f32),
+        (src_bounds.x as f32, src_bounds.bottom() as f32),
+    ];
+    let (mut x0, mut y0, mut x1, mut y1) =
+        (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for (cx, cy) in corners {
+        let Some((mx, my)) = h.apply(cx, cy) else {
+            return TileStore::new();
+        };
+        x0 = x0.min(mx);
+        y0 = y0.min(my);
+        x1 = x1.max(mx);
+        y1 = y1.max(my);
+    }
+    if !(x0.is_finite() && y0.is_finite() && x1 > x0 && y1 > y0) {
+        return TileStore::new();
+    }
+    let dst_bounds = Rect::new(
+        x0.floor() as i32 - 1,
+        y0.floor() as i32 - 1,
+        (x1 - x0).ceil() as u32 + 2,
+        (y1 - y0).ceil() as u32 + 2,
+    );
+    let reach = Rect::new(
+        src_bounds.x - 1,
+        src_bounds.y - 1,
+        src_bounds.w + 2,
+        src_bounds.h + 2,
+    );
+    let tiles: Vec<(TileCoord, Option<Tile>)> = dst_bounds
+        .tiles()
+        .into_par_iter()
+        .map(|c| {
+            let (ox, oy) = c.origin();
+            let mut tile = Tile::new();
+            let mut any = false;
+            for row in 0..TILE_SIZE {
+                let py = oy + row as i32;
+                for col in 0..TILE_SIZE {
+                    let px = ox + col as i32;
+                    if !dst_bounds.contains(px, py) {
+                        continue;
+                    }
+                    let Some((sx, sy)) = inv.apply(px as f32 + 0.5, py as f32 + 0.5) else {
+                        continue;
+                    };
+                    if !reach.contains(sx.floor() as i32, sy.floor() as i32) {
+                        continue;
+                    }
+                    let p = sample_bilinear(src, sx - 0.5, sy - 0.5);
+                    if p.a > 0.0 {
+                        any = true;
+                        tile.set(col, row, p);
+                    }
+                }
+            }
+            (c, any.then_some(tile))
+        })
+        .collect();
+    let mut out = TileStore::new();
+    for (c, tile) in tiles {
+        if let Some(t) = tile {
+            out.insert(c, Arc::new(t));
+        }
+    }
+    out
+}
+
+/// Perspective-warp a mask's coverage (same complement trick as
+/// [`transform_mask`]), through the layer's homography so mask and pixels
+/// stay registered.
+pub fn perspective_mask(mask: &lumenply_doc::Mask, h: &Homography) -> lumenply_doc::Mask {
+    let tiles = if mask.default == 0.0 {
+        perspective_store_h(&mask.tiles, h)
+    } else {
+        complement(&perspective_store_h(&complement(&mask.tiles), h))
+    };
+    let mut out = lumenply_doc::Mask {
+        tiles,
+        default: mask.default,
+        enabled: mask.enabled,
+    };
+    out.prune_uniform();
+    out
+}
+
 /// Bilinear sample at a continuous source position (pixel centres at
 /// integer coordinates).
 #[inline]
@@ -186,6 +408,75 @@ mod tests {
     /// rect after any transform, and keep revealing everywhere else. The
     /// plain store transform would prune the zero tiles (hidden = a 0) and
     /// treat everything outside them as 0 too.
+    #[test]
+    fn homography_maps_corners_and_identity_quad_is_identity() {
+        let src = Rect::new(10, 20, 40, 30);
+        let quad = [(100.0, 50.0), (180.0, 60.0), (170.0, 140.0), (95.0, 120.0)];
+        let h = Homography::rect_to_quad(src, quad).unwrap();
+        let corners = [
+            (10.0, 20.0, quad[0]),
+            (50.0, 20.0, quad[1]),
+            (50.0, 50.0, quad[2]),
+            (10.0, 50.0, quad[3]),
+        ];
+        for (x, y, (ex, ey)) in corners {
+            let (mx, my) = h.apply(x, y).unwrap();
+            assert!(
+                (mx - ex).abs() < 1e-3 && (my - ey).abs() < 1e-3,
+                "corner ({x},{y}) → ({mx},{my}), expected ({ex},{ey})"
+            );
+        }
+        // Inverse round-trips an interior point.
+        let inv = h.inverse().unwrap();
+        let (mx, my) = h.apply(30.0, 35.0).unwrap();
+        let (bx, by) = inv.apply(mx, my).unwrap();
+        assert!((bx - 30.0).abs() < 1e-3 && (by - 35.0).abs() < 1e-3);
+
+        // The identity quad resamples to (almost) the same pixels.
+        let store = checker(32, 32);
+        let b = store.content_bounds().unwrap();
+        let same = [
+            (b.x as f32, b.y as f32),
+            (b.right() as f32, b.y as f32),
+            (b.right() as f32, b.bottom() as f32),
+            (b.x as f32, b.bottom() as f32),
+        ];
+        let out = perspective_store(&store, same);
+        for y in 0..32 {
+            for x in 0..32 {
+                let (a, c) = (store.get_pixel(x, y), out.get_pixel(x, y));
+                assert!((a.r - c.r).abs() < 1e-3 && (a.a - c.a).abs() < 1e-3, "at {x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn perspective_squeezes_the_far_edge() {
+        // A solid 40×40 square warped so the top edge narrows to half:
+        // classic "lean back" keystone.
+        let mut r = Raster::new(40, 40);
+        for y in 0..40 {
+            for x in 0..40 {
+                r.set(x, y, Rgba::from_straight(1.0, 0.0, 0.0, 1.0));
+            }
+        }
+        let store = TileStore::from_raster(&r, 0, 0);
+        let quad = [(10.0, 0.0), (30.0, 0.0), (40.0, 40.0), (0.0, 40.0)];
+        let out = perspective_store(&store, quad);
+        // Top row: filled strictly between x=10 and x=30, empty outside.
+        assert!(out.get_pixel(20, 1).a > 0.9, "top centre filled");
+        assert!(out.get_pixel(5, 1).a < 0.05, "top left outside the keystone");
+        assert!(out.get_pixel(35, 1).a < 0.05, "top right outside the keystone");
+        // Bottom row spans the full width.
+        assert!(out.get_pixel(2, 38).a > 0.9 && out.get_pixel(38, 38).a > 0.9);
+        // The warped content stays inside the quad's bounding box.
+        let b = out.content_bounds().unwrap();
+        assert!(
+            b.x >= -2 && b.right() <= 42 && b.y >= -2 && b.bottom() <= 42,
+            "{b:?}"
+        );
+    }
+
     #[test]
     fn mask_transform_respects_the_default() {
         let mut m = Mask::reveal_all();

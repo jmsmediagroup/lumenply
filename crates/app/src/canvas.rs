@@ -60,6 +60,11 @@ pub(crate) struct Xform {
     pub(crate) dy: f32,
     // (sx, sy, angle, dx, dy) at the start of the current drag
     pub(crate) base: (f32, f32, f32, f32, f32),
+    /// Perspective mode: each corner moves freely; the affine fields are
+    /// frozen into these four points while it is on.
+    pub(crate) quad: Option<[(f32, f32); 4]>,
+    /// The quad at the start of the current drag.
+    pub(crate) qbase: [(f32, f32); 4],
     pub(crate) last_preview: Rect,
 }
 
@@ -82,6 +87,9 @@ impl Xform {
 
     /// Transformed corners, in document space.
     pub(crate) fn corners(&self) -> [(f32, f32); 4] {
+        if let Some(q) = self.quad {
+            return q;
+        }
         let a = self.affine();
         let b = self.bounds;
         [
@@ -93,6 +101,16 @@ impl Xform {
     }
 
     pub(crate) fn bbox(&self) -> Rect {
+        if self.quad.is_some() {
+            let cs = self.corners();
+            let xs = cs.iter().map(|p| p.0);
+            let ys = cs.iter().map(|p| p.1);
+            let x0 = xs.clone().fold(f32::INFINITY, f32::min).floor() as i32;
+            let x1 = xs.fold(f32::NEG_INFINITY, f32::max).ceil() as i32;
+            let y0 = ys.clone().fold(f32::INFINITY, f32::min).floor() as i32;
+            let y1 = ys.fold(f32::NEG_INFINITY, f32::max).ceil() as i32;
+            return Rect::new(x0, y0, (x1 - x0).max(1) as u32, (y1 - y0).max(1) as u32);
+        }
         self.affine().transform_rect(self.bounds)
     }
 }
@@ -554,11 +572,34 @@ impl App {
                 self.drag = Some(DragKind::Xform(hit(q)));
                 self.drag_start = Some(q);
                 x.base = (x.sx, x.sy, x.angle, x.dx, x.dy);
+                if let Some(quad) = x.quad {
+                    x.qbase = quad;
+                }
             }
         }
         let mut changed = false;
         if let (Some(DragKind::Xform(h)), true) = (self.drag, resp.dragged_by(primary)) {
-            if let (Some(a), Some(b)) = (self.drag_start, resp.interact_pointer_pos()) {
+            let qbase = x.qbase;
+            if let (Some(a), Some(b), Some(quad)) =
+                (self.drag_start, resp.interact_pointer_pos(), x.quad.as_mut())
+            {
+                // Perspective: corners move freely, edges carry both of
+                // their corners, inside moves the whole quad.
+                let (ax, ay) = to_doc(a);
+                let (bx, by) = to_doc(b);
+                let (ddx, ddy) = (bx - ax, by - ay);
+                let mut shift = |idx: &[usize]| {
+                    for &i in idx {
+                        quad[i] = (qbase[i].0 + ddx, qbase[i].1 + ddy);
+                    }
+                };
+                match h {
+                    Handle::Corner(i) => shift(&[i]),
+                    Handle::Edge(i) => shift(&[i, (i + 1) % 4]),
+                    Handle::Inside | Handle::Rotate => shift(&[0, 1, 2, 3]),
+                }
+                changed = true;
+            } else if let (Some(a), Some(b)) = (self.drag_start, resp.interact_pointer_pos()) {
                 match h {
                     Handle::Corner(_) => {
                         // Corners scale both axes by the same ratio.
@@ -617,11 +658,18 @@ impl App {
     /// drag or options-bar fields).
     pub(crate) fn preview_xform(&mut self, ctx: &egui::Context, x: &mut Xform) {
         let mut preview = self.editor.doc().clone();
-        let cmd = TransformLayer {
-            layer: x.layer,
-            transform: x.affine(),
+        let ok = match x.quad {
+            Some(quad) => PerspectiveLayer { layer: x.layer, quad }
+                .apply(&mut preview)
+                .is_ok(),
+            None => TransformLayer {
+                layer: x.layer,
+                transform: x.affine(),
+            }
+            .apply(&mut preview)
+            .is_ok(),
         };
-        if cmd.apply(&mut preview).is_ok() {
+        if ok {
             let area = x.last_preview.union(&x.bbox());
             let pad = Rect::new(area.x - 2, area.y - 2, area.w + 4, area.h + 4);
             self.preview(ctx, &preview, Some(pad));

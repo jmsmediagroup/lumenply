@@ -22,7 +22,10 @@ pub mod transform;
 pub use cache::BelowCache;
 pub use filters::{apply_filter, filter_raster, Filter};
 pub use gpu::GpuCompositor;
-pub use transform::{sample_bilinear, transform_mask, transform_store};
+pub use transform::{
+    perspective_mask, perspective_store, perspective_store_h, sample_bilinear, transform_mask,
+    transform_store, Homography,
+};
 
 use lumenply_doc::{Adjustment, BlendMode, Document, Layer, LayerContent, Mask};
 use lumenply_tiles::{Raster, Rect, Rgba, Tile, TileCoord, TileStore, TILE_PIXELS, TILE_SIZE};

@@ -14,39 +14,53 @@ impl App {
                         ui.label(RichText::new("Free Transform").strong());
                         ui.separator();
                         // Editable numbers; the canvas handles drive the
-                        // same fields.
-                        let mut sx = x.sx * 100.0;
-                        let mut sy = x.sy * 100.0;
-                        let mut rot = x.angle.to_degrees();
-                        let mut skew = x.shear.atan().to_degrees();
-                        ui.label(RichText::new("W").color(MUTED));
-                        let c1 = ui
-                            .add(egui::DragValue::new(&mut sx).speed(1.0).suffix("%"))
-                            .changed();
-                        ui.label(RichText::new("H").color(MUTED));
-                        let c2 = ui
-                            .add(egui::DragValue::new(&mut sy).speed(1.0).suffix("%"))
-                            .changed();
-                        ui.label(RichText::new("Rotate").color(MUTED));
-                        let c3 = ui
-                            .add(egui::DragValue::new(&mut rot).speed(0.5).suffix("°"))
-                            .changed();
-                        ui.label(RichText::new("Skew").color(MUTED));
-                        let c4 = ui
-                            .add(
-                                egui::DragValue::new(&mut skew)
-                                    .speed(0.5)
-                                    .range(-80.0..=80.0)
-                                    .suffix("°"),
-                            )
-                            .changed();
-                        if c1 || c2 || c3 || c4 {
-                            x.sx = (sx / 100.0).clamp(-50.0, 50.0);
-                            x.sy = (sy / 100.0).clamp(-50.0, 50.0);
-                            x.angle = rot.to_radians();
-                            x.shear = skew.to_radians().tan();
+                        // same fields. In perspective mode the corners are
+                        // free points, so the numbers go quiet.
+                        let persp = x.quad.is_some();
+                        ui.add_enabled_ui(!persp, |ui| {
+                            let mut sx = x.sx * 100.0;
+                            let mut sy = x.sy * 100.0;
+                            let mut rot = x.angle.to_degrees();
+                            let mut skew = x.shear.atan().to_degrees();
+                            ui.label(RichText::new("W").color(MUTED));
+                            let c1 = ui
+                                .add(egui::DragValue::new(&mut sx).speed(1.0).suffix("%"))
+                                .changed();
+                            ui.label(RichText::new("H").color(MUTED));
+                            let c2 = ui
+                                .add(egui::DragValue::new(&mut sy).speed(1.0).suffix("%"))
+                                .changed();
+                            ui.label(RichText::new("Rotate").color(MUTED));
+                            let c3 = ui
+                                .add(egui::DragValue::new(&mut rot).speed(0.5).suffix("°"))
+                                .changed();
+                            ui.label(RichText::new("Skew").color(MUTED));
+                            let c4 = ui
+                                .add(
+                                    egui::DragValue::new(&mut skew)
+                                        .speed(0.5)
+                                        .range(-80.0..=80.0)
+                                        .suffix("°"),
+                                )
+                                .changed();
+                            if c1 || c2 || c3 || c4 {
+                                x.sx = (sx / 100.0).clamp(-50.0, 50.0);
+                                x.sy = (sy / 100.0).clamp(-50.0, 50.0);
+                                x.angle = rot.to_radians();
+                                x.shear = skew.to_radians().tan();
+                                self.preview_xform(ctx, &mut x);
+                                self.xform = Some(x.clone());
+                            }
+                        });
+                        let mut persp = persp;
+                        if ui
+                            .checkbox(&mut persp, "Perspective")
+                            .on_hover_text("Drag each corner freely; edges carry both of their corners")
+                            .changed()
+                        {
+                            x.quad = persp.then(|| x.corners());
                             self.preview_xform(ctx, &mut x);
-                            self.xform = Some(x);
+                            self.xform = Some(x.clone());
                         }
                         ui.separator();
                         if ui.button("Apply   Enter").clicked() {
