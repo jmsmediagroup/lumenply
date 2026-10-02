@@ -163,27 +163,7 @@ impl App {
                                 ui.selectable_value(&mut self.select_op, CombineOp::Intersect, "Intersect");
                             }
                         }
-                        Tool::Text => {
-                            if let (Some(id), Some(t)) = (self.active, self.active_text()) {
-                                self.text_controls(ui, id, t, false);
-                                if ui.button("Rasterize").clicked() {
-                                    self.run(&RasterizeLayer { layer: id });
-                                }
-                            } else {
-                                ui.add(
-                                    egui::Slider::new(&mut self.text_size, 6.0..=400.0)
-                                        .logarithmic(true)
-                                        .suffix(" px")
-                                        .text("Size"),
-                                );
-                                ui.checkbox(&mut self.text_bold, "Bold");
-                                ui.checkbox(&mut self.text_italic, "Italic");
-                                let mut font = std::mem::take(&mut self.text_font);
-                                crate::font_picker(ui, &mut font);
-                                self.text_font = font;
-                                ui.label(RichText::new("Click on the canvas to add text").weak());
-                            }
-                        }
+                        Tool::Text => self.text_options_bar(ui),
                         Tool::Gradient => {
                             ui.selectable_value(&mut self.gradient_kind, GradientKind::Linear, "Linear");
                             ui.selectable_value(&mut self.gradient_kind, GradientKind::Radial, "Radial");

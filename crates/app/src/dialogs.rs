@@ -233,6 +233,7 @@ impl App {
                 self.open_in_new_tab(Editor::new(doc), Some(PathBuf::from(path)));
                 self.recent = session::push_recent(path);
                 self.status = format!("Opened {path}");
+                self.note_missing_fonts();
             }
             Err(e) => self.status = format!("Could not open {path}: {e}"),
         }

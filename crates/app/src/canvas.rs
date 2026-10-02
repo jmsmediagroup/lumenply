@@ -1109,28 +1109,8 @@ impl App {
                 if resp.clicked_by(primary) {
                     if let Some(p) = resp.interact_pointer_pos() {
                         let (x, y) = to_doc(p);
-                        // A click on existing text edits it instead of
-                        // stacking a new layer on top.
-                        if let Some(id) = text_layer_at(self.editor.doc().layers(), x, y) {
-                            self.set_active(Some(id));
-                            self.fix_active();
-                            ctx.memory_mut(|m| m.request_focus(egui::Id::new("text-edit-field")));
-                            self.status = "Editing the text layer under the cursor".into();
-                            return;
-                        }
-                        let mut t =
-                            TextLayer::new("Text", x, y, self.text_size, linear_rgba(self.brush_rgb, 1.0));
-                        t.bold = self.text_bold;
-                        t.italic = self.text_italic;
-                        t.font = self.text_font.clone();
-                        let new_id = self.editor.doc().next_id();
-                        self.run(&AddTextLayer {
-                            text: t,
-                            above: self.active,
-                        });
-                        self.set_active(Some(new_id));
-                        self.fix_active();
-                        self.status = "Text added; edit it in the options bar or Properties".into();
+                        let shift = ctx.input(|i| i.modifiers.shift);
+                        self.text_click(ctx, x, y, shift);
                     }
                 }
             }
@@ -1562,14 +1542,15 @@ impl App {
                     }
                 }
             }
-            Tool::Hand | Tool::Move | Tool::Eyedropper | Tool::Bucket | Tool::Wand | Tool::Text => {}
+            Tool::Text => self.paint_text_overlay(painter, resp),
+            Tool::Hand | Tool::Move | Tool::Eyedropper | Tool::Bucket | Tool::Wand => {}
         }
     }
 }
 
 /// Topmost visible text layer whose rendered glyphs sit under (x, y),
 /// searched through groups; the bounds get a small grab margin.
-fn text_layer_at(layers: &[Layer], x: f32, y: f32) -> Option<LayerId> {
+pub(crate) fn text_layer_at(layers: &[Layer], x: f32, y: f32) -> Option<LayerId> {
     for l in layers.iter().rev() {
         if !l.visible {
             continue;

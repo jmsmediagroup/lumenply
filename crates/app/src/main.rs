@@ -35,6 +35,7 @@ mod palette;
 mod properties;
 mod session;
 mod status;
+mod text_ui;
 mod theme;
 mod tools;
 
@@ -221,6 +222,9 @@ struct App {
     text_bold: bool,
     text_italic: bool,
     text_font: String,
+    text_align: TextAlign,
+    /// "New text" pressed: the next Text-tool click starts a new layer.
+    text_new_armed: bool,
     /// Clone source point (document space), and whether the next click picks it.
     clone_source: Option<(f32, f32)>,
     clone_picking: bool,
@@ -413,6 +417,8 @@ impl App {
             text_bold: false,
             text_italic: false,
             text_font: String::new(),
+            text_align: TextAlign::Left,
+            text_new_armed: false,
             clone_source: None,
             clone_picking: true,
             clone_offset: (0, 0),
@@ -496,6 +502,7 @@ impl App {
         // edits from here on count as unsaved changes.
         app.saved_rev = app.editor.history().len();
         app.select_top();
+        app.note_missing_fonts();
         if session::autosave_file().is_some_and(|p| p.exists()) {
             app.dialog = Some(Dialog::Recover);
         }
@@ -767,77 +774,6 @@ impl App {
 
     fn active_is_text(&self) -> bool {
         self.active_text().is_some()
-    }
-
-    /// Shared editor for a text layer's content and style. Returns true
-    /// when an edit finished (for undo coalescing).
-    fn text_controls(&mut self, ui: &mut egui::Ui, id: LayerId, mut t: TextLayer, multiline: bool) {
-        let before = t.clone();
-        let mut finished = false;
-        let r = if multiline {
-            ui.add(
-                egui::TextEdit::multiline(&mut t.text)
-                    .desired_rows(3)
-                    .desired_width(f32::INFINITY),
-            )
-        } else {
-            // The fixed id lets a canvas click on existing text focus this
-            // field directly (see Tool::Text in canvas.rs).
-            ui.add(
-                egui::TextEdit::singleline(&mut t.text)
-                    .id(egui::Id::new("text-edit-field"))
-                    .desired_width(260.0),
-            )
-        };
-        finished |= r.lost_focus();
-        let rs = ui.add(
-            egui::Slider::new(&mut t.size, 6.0..=400.0)
-                .logarithmic(true)
-                .suffix(" px")
-                .text("Size"),
-        );
-        finished |= rs.drag_stopped() || (rs.changed() && !rs.dragged());
-        let rt = ui.add(egui::Slider::new(&mut t.tracking, -200.0..=800.0).text("Tracking"));
-        finished |= rt.drag_stopped() || (rt.changed() && !rt.dragged());
-        ui.horizontal(|ui| {
-            if ui.checkbox(&mut t.bold, "Bold").changed() {
-                finished = true;
-            }
-            if ui.checkbox(&mut t.italic, "Italic").changed() {
-                finished = true;
-            }
-            ui.separator();
-            for (align, label, tip) in [
-                (TextAlign::Left, "⬅", "Align left"),
-                (TextAlign::Center, "⏺", "Align centre"),
-                (TextAlign::Right, "➡", "Align right"),
-            ] {
-                if ui
-                    .selectable_value(&mut t.align, align, label)
-                    .on_hover_text(tip)
-                    .changed()
-                {
-                    finished = true;
-                }
-            }
-        });
-        if font_picker(ui, &mut t.font) {
-            finished = true;
-        }
-        let mut rgb = [
-            lumenply_io::linear_to_srgb(t.color[0]) as f32 / 255.0,
-            lumenply_io::linear_to_srgb(t.color[1]) as f32 / 255.0,
-            lumenply_io::linear_to_srgb(t.color[2]) as f32 / 255.0,
-        ];
-        if egui::color_picker::color_edit_button_rgb(ui, &mut rgb).changed() {
-            t.color = linear_rgba(rgb, t.color[3]);
-        }
-        if t != before {
-            self.run_coalescing(&SetText { layer: id, text: t }, &format!("text-{id}"));
-        }
-        if finished {
-            self.editor.end_coalescing();
-        }
     }
 
     fn active_has_mask(&self) -> bool {
@@ -1232,37 +1168,6 @@ fn linear_rgba(rgb: [f32; 3], alpha: f32) -> [f32; 4] {
         srgb_to_linear_f(rgb[2]),
         alpha,
     ]
-}
-
-/// Font family picker: the bundled default plus every installed family.
-/// Returns true when the choice changed. The empty string means the
-/// bundled DejaVu Sans, so documents render identically on any machine.
-fn font_picker(ui: &mut egui::Ui, font: &mut String) -> bool {
-    let mut changed = false;
-    let shown = if font.is_empty() {
-        "Default (DejaVu Sans)"
-    } else {
-        font.as_str()
-    };
-    egui::ComboBox::from_id_salt("text-font-family")
-        .selected_text(shown)
-        .width(200.0)
-        .show_ui(ui, |ui| {
-            if ui
-                .selectable_label(font.is_empty(), "Default (DejaVu Sans)")
-                .clicked()
-            {
-                font.clear();
-                changed = true;
-            }
-            for fam in lumenply_render::text::system_font_families() {
-                if ui.selectable_label(font == fam, fam).clicked() {
-                    *font = fam.clone();
-                    changed = true;
-                }
-            }
-        });
-    changed
 }
 
 fn file_name(path: &str) -> String {

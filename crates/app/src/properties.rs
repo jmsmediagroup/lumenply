@@ -194,6 +194,10 @@ impl App {
             _ => {}
         }
 
+        // A text layer leads with its text, above the effects.
+        if let Some(t) = self.active_text() {
+            self.text_properties(ui, id, t);
+        }
         if can_fx {
             self.effects_ui(ui, id, effects);
         }
@@ -201,13 +205,6 @@ impl App {
             ui.add_space(4.0);
             ui.label(RichText::new(adj.name()).small().strong());
             self.adjustment_ui(ui, id, adj);
-        } else if let Some(t) = self.active_text() {
-            ui.add_space(4.0);
-            ui.label(RichText::new("Text").small().strong());
-            self.text_controls(ui, id, t, true);
-            if ui.button("Rasterize").clicked() {
-                self.run(&RasterizeLayer { layer: id });
-            }
         } else if let Some(mut f) = filt {
             ui.add_space(4.0);
             ui.label(RichText::new(format!("{} (live)", f.name())).small().strong());
