@@ -273,7 +273,8 @@ pub(crate) fn lens_blur(src: &Raster, radius: f32, highlights: f32) -> Raster {
             let mut gain = 1.0;
             if boost > 0.0 && p.a > 0.0 {
                 let m = (p.r.max(p.g).max(p.b) / p.a).min(1.0);
-                let k = ((m - 0.6) / 0.4).clamp(0.0, 1.0);
+                // Only near-white (specular) pixels: from 0.8 linear up.
+                let k = ((m - 0.8) / 0.2).clamp(0.0, 1.0);
                 gain += 6.0 * boost * k * k;
             }
             [p.r * gain, p.g * gain, p.b * gain, p.a]

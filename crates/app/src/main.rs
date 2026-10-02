@@ -1397,7 +1397,7 @@ fn filter_presets() -> Vec<(&'static str, Filter)> {
             "Lens Blur",
             Filter::LensBlur {
                 radius: 10.0,
-                highlights: 0.5,
+                highlights: 0.3,
             },
         ),
         (
