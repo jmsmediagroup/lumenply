@@ -75,6 +75,9 @@ pub(crate) struct BrushLibrary {
     pub tips: Vec<TipEntry>,
     /// Id of the tip on the brush ("" = the round tip).
     pub selected: String,
+    /// Tips removed this session, so saving the index drops them even
+    /// when another window has rewritten it meanwhile.
+    removed: Vec<String>,
 }
 
 /// One imported tip in `brushes/index.json`.
@@ -148,6 +151,7 @@ impl BrushLibrary {
         BrushLibrary {
             tips,
             selected: String::new(),
+            removed: Vec::new(),
         }
     }
 
@@ -202,22 +206,26 @@ impl BrushLibrary {
         Some(tex)
     }
 
+    /// Write `brushes/index.json`: what is on disk (another window may
+    /// have added tips since this one loaded it), minus the tips removed
+    /// here, plus the ones added here.
     fn save_index(&self) {
         let Some(dir) = brushes_dir() else {
             return;
         };
-        let list: Vec<IndexEntry> = self
-            .tips
-            .iter()
-            .filter(|t| !t.id.starts_with("builtin:"))
-            .map(|t| IndexEntry {
-                id: t.id.clone(),
-                name: t.name.clone(),
-                file: format!("{}.png", t.id),
-                spacing: t.spacing,
-                size: t.size,
-            })
-            .collect();
+        let mut list = read_index();
+        list.retain(|e| !self.removed.contains(&e.id));
+        for t in self.tips.iter().filter(|t| !t.id.starts_with("builtin:")) {
+            if !list.iter().any(|e| e.id == t.id) {
+                list.push(IndexEntry {
+                    id: t.id.clone(),
+                    name: t.name.clone(),
+                    file: format!("{}.png", t.id),
+                    spacing: t.spacing,
+                    size: t.size,
+                });
+            }
+        }
         let _ = std::fs::create_dir_all(&dir);
         if let Ok(json) = serde_json::to_string_pretty(&list) {
             let _ = std::fs::write(dir.join("index.json"), json);
@@ -425,11 +433,10 @@ impl App {
                 return;
             }
         };
-        let Some(dir) = brushes_dir() else {
+        if brushes_dir().is_none() {
             self.status = "Could not import brushes: no folder to keep them in".into();
             return;
-        };
-        let _ = std::fs::create_dir_all(&dir);
+        }
         let (mut tips, mut presets, mut known) = (0, 0, 0);
         let mut failed = set.warnings.len();
         let mut first = None;
@@ -438,37 +445,21 @@ impl App {
                 AbrShape::Sampled {
                     width, height, gray, ..
                 } => {
-                    let id = format!("abr-{:016x}", tip_hash(width, height, &gray));
-                    if self.brushes.index_of(&id).is_some() {
-                        known += 1;
-                        first.get_or_insert(id);
-                        continue;
-                    }
-                    let tip = match BrushTip::from_gray16(b.name.clone(), width, height, &gray) {
-                        Ok(t) => t,
-                        Err(_) => {
-                            failed += 1;
-                            continue;
+                    // ABR spacing is a fraction of the diameter; the size is
+                    // the preset's own when the set gives one.
+                    let spacing = b.spacing.map_or(0.5, |s| (s * 2.0).clamp(0.02, 2.0));
+                    let size = b.diameter.unwrap_or(width.max(height) as f32);
+                    match self.install_tip("abr", b.name, width, height, gray, spacing, size) {
+                        Ok((id, new)) => {
+                            if new {
+                                tips += 1;
+                            } else {
+                                known += 1;
+                            }
+                            first.get_or_insert(id);
                         }
-                    };
-                    let png = dir.join(format!("{id}.png"));
-                    let saved =
-                        image::ImageBuffer::<image::Luma<u16>, Vec<u16>>::from_raw(width, height, gray)
-                            .is_some_and(|img| img.save(&png).is_ok());
-                    if !saved {
-                        failed += 1;
-                        continue;
+                        Err(_) => failed += 1,
                     }
-                    let mut e = TipEntry::new(id.clone(), b.name);
-                    // ABR spacing is a fraction of the diameter.
-                    e.spacing = Some(b.spacing.map_or(0.5, |s| (s * 2.0).clamp(0.02, 2.0)));
-                    // The preset's own size when the set gives one.
-                    e.size = Some(b.diameter.unwrap_or(width.max(height) as f32));
-                    e.file = Some(png);
-                    e.thumb_gray = Some(tip.thumbnail(THUMB));
-                    self.brushes.tips.push(e);
-                    first.get_or_insert(id);
-                    tips += 1;
                 }
                 AbrShape::Computed {
                     diameter,
@@ -518,12 +509,115 @@ impl App {
         );
     }
 
+    /// Save a tip (16-bit coverage) into the brushes folder and the
+    /// picker under `<prefix>-<content hash>`; the caller saves the index.
+    /// Returns its id and whether it is new (an identical tip already
+    /// installed is reused), or why it couldn't be kept.
+    #[allow(clippy::too_many_arguments)]
+    fn install_tip(
+        &mut self,
+        prefix: &str,
+        name: String,
+        width: u32,
+        height: u32,
+        gray: Vec<u16>,
+        spacing: f32,
+        size: f32,
+    ) -> Result<(String, bool), String> {
+        let id = format!("{prefix}-{:016x}", tip_hash(width, height, &gray));
+        if self.brushes.index_of(&id).is_some() {
+            return Ok((id, false));
+        }
+        let dir = brushes_dir().ok_or("no folder to keep brush tips in")?;
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let tip = BrushTip::from_gray16(name.clone(), width, height, &gray)?;
+        let png = dir.join(format!("{id}.png"));
+        image::ImageBuffer::<image::Luma<u16>, Vec<u16>>::from_raw(width, height, gray)
+            .ok_or("the tip's size and pixels disagree")?
+            .save(&png)
+            .map_err(|e| e.to_string())?;
+        let mut e = TipEntry::new(id.clone(), name);
+        e.spacing = Some(spacing);
+        e.size = Some(size);
+        e.file = Some(png);
+        e.thumb_gray = Some(tip.thumbnail(THUMB));
+        self.brushes.tips.push(e);
+        Ok((id, true))
+    }
+
+    /// Edit ▸ Define brush tip, as Photoshop's Define Brush Preset: the
+    /// visible image inside the selection (or the whole canvas) becomes a
+    /// sampled tip — dark pixels paint, light and transparent ones don't —
+    /// trimmed to what it covers, and goes on the brush.
+    pub(crate) fn define_brush_tip(&mut self) {
+        const MAX_SIDE: u32 = 2500;
+        let doc = self.editor.doc();
+        let canvas = doc.canvas();
+        let sel = doc.selection.clone();
+        let area = sel.as_ref().map_or(canvas, |s| s.tight_bounds(canvas));
+        if area.is_empty() {
+            self.status = "Select the part of the image to make a tip from".into();
+            return;
+        }
+        // Only the selected area is composited.
+        let flat = lumenply_render::composite_rect(doc, area).to_raster(area);
+        let enc = lumenply_doc::adjust::srgb_encode;
+        let (w, h) = (area.w as usize, area.h as usize);
+        let mut cov = vec![0f32; w * h];
+        let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+        for y in 0..h {
+            for x in 0..w {
+                let (cx, cy) = (area.x + x as i32, area.y + y as i32);
+                let [r, g, b, a] = flat.get(x as u32, y as u32).to_straight();
+                let luma = 0.2126 * enc(r) + 0.7152 * enc(g) + 0.0722 * enc(b);
+                let c = ((1.0 - luma) * a * sel.as_ref().map_or(1.0, |s| s.value(cx, cy))).clamp(0.0, 1.0);
+                cov[y * w + x] = c;
+                if c >= 1.0 / 255.0 {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+                }
+            }
+        }
+        if x1 <= x0 || y1 <= y0 {
+            self.status = "Nothing to make a tip from: the selection is light or empty".into();
+            return;
+        }
+        let (tw, th) = ((x1 - x0) as u32, (y1 - y0) as u32);
+        if tw > MAX_SIDE || th > MAX_SIDE {
+            self.status = format!("A brush tip can be at most {MAX_SIDE} px on a side; this is {tw}×{th}");
+            return;
+        }
+        let mut gray = Vec::with_capacity((tw * th) as usize);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                gray.push((cov[y * w + x] * 65535.0 + 0.5) as u16);
+            }
+        }
+        let n = self
+            .brushes
+            .tips
+            .iter()
+            .filter(|t| t.id.starts_with("custom-"))
+            .count()
+            + 1;
+        let name = format!("Custom tip {n}");
+        match self.install_tip("custom", name, tw, th, gray, 0.5, tw.max(th) as f32) {
+            Ok((id, _)) => {
+                self.brushes.save_index();
+                self.select_tip(&id);
+                let name = self.brush.tip.as_ref().map_or("", |t| t.name()).to_string();
+                self.status = format!("Defined the brush tip \"{name}\" ({tw}×{th} px)");
+            }
+            Err(e) => self.status = format!("Could not define a brush tip: {e}"),
+        }
+    }
+
     /// Remove an imported tip from the picker and the brushes folder.
     fn delete_tip(&mut self, id: &str) {
         let Some(i) = self.brushes.index_of(id).filter(|_| !id.starts_with("builtin:")) else {
             return;
         };
         let e = self.brushes.tips.remove(i);
+        self.brushes.removed.push(e.id.clone());
         if let Some(f) = e.file {
             let _ = std::fs::remove_file(f);
         }
@@ -1008,6 +1102,7 @@ impl App {
                 }
             }
             "layer" => self.add_pixel_layer(),
+            "define" => self.define_brush_tip(),
             "color" => {
                 let hex = u32::from_str_radix(arg.trim_start_matches('#'), 16).unwrap_or(0);
                 self.brush_rgb = [
@@ -1180,6 +1275,57 @@ mod tests {
         assert!(next.brush.dynamics.scatter_across);
         assert_eq!(next.brush.dynamics.texture_depth, 0.4);
         assert_eq!(next.status, "Ready");
+    }
+
+    #[test]
+    fn define_brush_tip_turns_dark_pixels_in_the_selection_into_a_tip() {
+        let mut app = launch();
+        app.open_in_new_tab(blank(64, 64), None);
+        let layer = app.editor.doc().layers()[0].id;
+        // A black 6×4 block on white, a grey pixel beside it.
+        app.run(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(20, 30, 6, 4))),
+        });
+        app.run(&Fill {
+            layer,
+            color: [0.0, 0.0, 0.0, 1.0],
+        });
+        app.run(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(26, 30, 1, 1))),
+        });
+        // sRGB mid grey: luminance 0.5 encoded, so half coverage.
+        let mid = lumenply_doc::adjust::srgb_decode(0.5);
+        app.run(&Fill {
+            layer,
+            color: [mid, mid, mid, 1.0],
+        });
+        // Select generously around both: the white margin is trimmed.
+        app.run(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(10, 20, 30, 30))),
+        });
+        app.define_brush_tip();
+        let tip = app.brush.tip.clone().expect("the new tip is on the brush");
+        assert_eq!((tip.width(), tip.height()), (7, 4), "{}", app.status);
+        assert_eq!(tip.coverage(0, 0), 1.0);
+        assert_eq!(tip.coverage(5, 3), 1.0);
+        assert!((tip.coverage(6, 0) - 0.5).abs() < 0.01, "{}", tip.coverage(6, 0));
+        assert_eq!(tip.coverage(6, 1), 0.0);
+        assert!(app.brushes.selected.starts_with("custom-"));
+        assert!(app.status.starts_with("Defined the brush tip"), "{}", app.status);
+        // The tip's own size and half-diameter spacing come with it.
+        assert_eq!((app.brush.radius, app.brush.spacing), (3.5, 0.5));
+        // A white-only selection has nothing to paint with.
+        app.run(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(40, 40, 8, 8))),
+        });
+        app.define_brush_tip();
+        assert!(
+            app.status.starts_with("Nothing to make a tip from"),
+            "{}",
+            app.status
+        );
+        let id = app.brushes.selected.clone();
+        app.delete_tip(&id);
     }
 
     #[test]

@@ -156,6 +156,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("New fill layer: solid color", "fill-solid"),
     ("New fill layer: gradient", "fill-gradient"),
     ("Import brushes (.abr)...", "import-brushes"),
+    ("Define brush tip from selection", "define-brush"),
 ];
 
 /// The id of the destructive filter dialog for a filter kind.
@@ -553,6 +554,7 @@ impl App {
             "demo" => self.open_demo(),
             "place" => self.pick_place(),
             "import-brushes" => self.pick_import_brushes(),
+            "define-brush" => self.define_brush_tip(),
             "save" => match self.path.clone() {
                 Some(p) => self.save_path(&p.to_string_lossy()),
                 None => self.pick_save(),
@@ -740,7 +742,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 104); // + liquify, layer ops, locks, align, select modify, fill, view aids, fill layers, brushes
+        assert_eq!(n, 105); // + liquify, layer ops, locks, align, select modify, fill, view aids, fill layers, brushes
     }
 
     #[test]

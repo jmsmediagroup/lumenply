@@ -403,6 +403,7 @@ impl App {
         self.act(ui, "Fill...", "fill-dialog");
         self.act(ui, "Content-Aware Fill...", "content-aware");
         self.act(ui, "Clear", "clear");
+        self.act(ui, "Define brush tip", "define-brush");
         menu_separator(ui);
         self.act(ui, "Preferences...", "prefs");
     }

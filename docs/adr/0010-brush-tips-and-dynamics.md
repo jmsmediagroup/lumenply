@@ -46,7 +46,10 @@ dynamics are ignored. Unreadable brushes are skipped with a warning.
 **Storage**: imported tips are app data, not document data. Each is a
 16-bit grayscale PNG `brushes/abr-<FNV-1a of size+pixels>.png` beside
 `prefs.json`, listed in `brushes/index.json` (id, name, file, spacing,
-size); the content hash makes re-imports idempotent. Built-in tips are
+size); the content hash makes re-imports idempotent. Edit ▸ Define
+brush tip makes `custom-<hash>` tips the same way from the selected
+visible pixels (dark paints, as in Photoshop). The index is merged on
+save, so two windows don't drop each other's tips. Built-in tips are
 generated at run time (`builtin:<name>`). Presets in `prefs.json` refer
 to tips by id; a missing tip falls back to round.
 
