@@ -38,6 +38,7 @@ mod history;
 mod layer_actions;
 mod layers;
 mod liquify;
+mod macos_open;
 mod menu;
 mod options_bar;
 mod palette;
@@ -101,6 +102,7 @@ fn main() -> Result<(), eframe::Error> {
             .with_active(!args.iter().any(|a| a == "--screenshot")),
         ..Default::default()
     };
+    macos_open::install();
     eframe::run_native(
         "Lumenply",
         options,
@@ -442,6 +444,7 @@ impl App {
     fn new(cc: &eframe::CreationContext<'_>, args: &[String]) -> Self {
         theme::install(&cc.egui_ctx);
         pen::install();
+        macos_open::set_waker(&cc.egui_ctx);
         Self::launch(args)
     }
 
@@ -1342,6 +1345,10 @@ impl App {
             self.export_as_ui(ctx);
             self.debug_screenshot(ctx);
             return;
+        }
+        // Files opened from Finder (or the Dock) while running or at launch.
+        for path in macos_open::take_pending() {
+            self.open_path(&path);
         }
         self.handle_file_drop(ctx);
         // Intercept closing the window while there are unsaved changes.

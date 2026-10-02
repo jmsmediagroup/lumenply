@@ -385,9 +385,11 @@ None of these could be tested in the container.
 - [~] Packaging: `scripts/bundle-macos.sh` builds Lumenply.app (release
       binary, .icns rendered by the app's own `--write-icon` on Apple's icon
       grid, Info.plist with file types: .lumen/.nge owner, PSD/PSB, ORA,
-      images, camera RAW). Still open: code signing + notarisation, opening
-      files from Finder into a running app (eframe 0.29 drops the Apple
-      Event), Windows installer, Flatpak, nightly CI builds
+      images, camera RAW). Files opened from Finder (double-click, Open With,
+      Dock drop) arrive through an `application:openURLs:` method added at
+      launch (macos_open.rs), cold launch verified with `open -a`. Still
+      open: code signing + notarisation, Windows installer, Flatpak,
+      nightly CI builds
 - [x] Project name: **Lumenply** (brand assets in img/; crates, CLI, titles,
       `.lumen` extension and `~/.lumenply` all renamed; legacy `.nge` loads)
 - [~] Full GPLv3 text now in `LICENSE`. A preliminary web search (Oct 2025)
@@ -423,7 +425,5 @@ None of these could be tested in the container.
 - Dust & Scratches radius is capped at 8 (per-pixel median).
 
 - Text layers cannot be scaled or rotated without rasterizing.
-- Opening files from Finder (double-click, Open With, Dock drop) does nothing:
-  eframe 0.29 does not deliver those events.
 - egui menus cannot scroll; the quick-add "More..." list is tall (~500 px).
 
