@@ -1506,6 +1506,265 @@ impl Command for CloneStroke {
     }
 }
 
+/// Heal a stroke: repaint each dab with colour diffused in from just
+/// outside it (a small Jacobi solve), so blemishes melt into their
+/// surroundings — including across gradients, where cloning would seam.
+/// With `texture` set, the high-frequency detail of a clone-style source
+/// (destination + `offset`) is layered back on top, which is the classic
+/// healing brush; without it this is spot healing.
+pub struct HealStroke {
+    pub layer: LayerId,
+    pub brush: Brush,
+    pub points: Vec<StrokePoint>,
+    /// Source position = destination + offset (texture mode only).
+    pub offset: (i32, i32),
+    pub sample: SampleSource,
+    pub texture: bool,
+}
+
+impl Command for HealStroke {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn label(&self) -> String {
+        if self.texture {
+            "Healing brush".into()
+        } else {
+            "Spot heal".into()
+        }
+    }
+
+    fn affected(&self, doc: &Document) -> Option<Rect> {
+        Some(stroke_bounds(&self.brush, &self.points, doc.canvas()))
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        if self.points.is_empty() {
+            return Err(EditError::Invalid("stroke has no points".into()));
+        }
+        let canvas = doc.canvas();
+        let sel = doc.selection.clone();
+        let source: Option<Raster> = if self.texture {
+            let sample = sampler(doc, self.sample)?;
+            let mut r = Raster::new(canvas.w, canvas.h);
+            for y in 0..canvas.h as i32 {
+                for x in 0..canvas.w as i32 {
+                    r.set(x as u32, y as u32, sample(x, y));
+                }
+            }
+            Some(r)
+        } else {
+            None
+        };
+        let layer = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
+        let store = layer.pixels_mut().ok_or(EditError::NotPixel(self.layer))?;
+        let strength = self.brush.color[3].clamp(0.0, 1.0);
+        for d in interpolate_dabs(&self.brush, &self.points) {
+            heal_dab(
+                store,
+                &self.brush,
+                d,
+                canvas,
+                sel.as_ref(),
+                source.as_ref(),
+                self.offset,
+                strength,
+            );
+        }
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn heal_dab(
+    store: &mut nge_tiles::TileStore,
+    brush: &Brush,
+    p: StrokePoint,
+    canvas: Rect,
+    sel: Option<&Selection>,
+    source: Option<&Raster>,
+    offset: (i32, i32),
+    strength: f32,
+) {
+    let r = brush.radius * p.pressure.clamp(0.0, 1.0);
+    if r <= 0.0 {
+        return;
+    }
+    let pad = r.ceil() as i32 + 2;
+    let region = Rect::new(
+        p.x as i32 - pad,
+        p.y as i32 - pad,
+        (2 * pad) as u32 + 1,
+        (2 * pad) as u32 + 1,
+    )
+    .intersect(&canvas);
+    if region.is_empty() {
+        return;
+    }
+    let (w, h) = (region.w as usize, region.h as usize);
+
+    // Straight-colour grid of the destination; alpha 0 means "no data".
+    let mut rgb = vec![[0f32; 3]; w * h];
+    let mut alpha = vec![0f32; w * h];
+    let mut cover = vec![0f32; w * h];
+    for gy in 0..h {
+        for gx in 0..w {
+            let (x, y) = (region.x + gx as i32, region.y + gy as i32);
+            let px = store.get_pixel(x, y);
+            let [cr, cg, cb, a] = px.to_straight();
+            rgb[gy * w + gx] = [cr, cg, cb];
+            alpha[gy * w + gx] = a;
+        }
+    }
+    dab_coverage(brush, p, canvas, sel, |x, y, c| {
+        cover[(y - region.y) as usize * w + (x - region.x) as usize] = c;
+    });
+
+    // Diffuse the surround into the dab: unknowns start at the mean of the
+    // known rim and relax toward their neighbours (Jacobi).
+    let unknown: Vec<bool> = cover.iter().map(|&c| c > 0.01).collect();
+    let mut known_sum = [0f32; 3];
+    let mut known_n = 0f32;
+    for i in 0..w * h {
+        if !unknown[i] && alpha[i] > 0.0 {
+            for k in 0..3 {
+                known_sum[k] += rgb[i][k];
+            }
+            known_n += 1.0;
+        }
+    }
+    if known_n <= 0.0 {
+        return; // nothing to heal from
+    }
+    let mean = [
+        known_sum[0] / known_n,
+        known_sum[1] / known_n,
+        known_sum[2] / known_n,
+    ];
+    let mut field: Vec<[f32; 3]> = (0..w * h)
+        .map(|i| if unknown[i] { mean } else { rgb[i] })
+        .collect();
+    let mut next = field.clone();
+    let iters = (2 * (w.max(h)) as u32).clamp(20, 120);
+    for _ in 0..iters {
+        for gy in 0..h {
+            for gx in 0..w {
+                let i = gy * w + gx;
+                if !unknown[i] {
+                    continue;
+                }
+                let mut acc = [0f32; 3];
+                let mut n = 0f32;
+                let mut push = |j: usize| {
+                    for k in 0..3 {
+                        acc[k] += field[j][k];
+                    }
+                    n += 1.0;
+                };
+                if gx > 0 {
+                    push(i - 1);
+                }
+                if gx + 1 < w {
+                    push(i + 1);
+                }
+                if gy > 0 {
+                    push(i - w);
+                }
+                if gy + 1 < h {
+                    push(i + w);
+                }
+                if n > 0.0 {
+                    next[i] = [acc[0] / n, acc[1] / n, acc[2] / n];
+                }
+            }
+        }
+        std::mem::swap(&mut field, &mut next);
+    }
+
+    // Texture: add back the source patch's high-frequency detail.
+    let highfreq: Option<Vec<[f32; 3]>> = source.map(|src| {
+        let mut patch = vec![[0f32; 3]; w * h];
+        for gy in 0..h {
+            for gx in 0..w {
+                let (sx, sy) = (
+                    (region.x + gx as i32 + offset.0).clamp(canvas.x, canvas.right() - 1),
+                    (region.y + gy as i32 + offset.1).clamp(canvas.y, canvas.bottom() - 1),
+                );
+                let [cr, cg, cb, _] = src.get(sx as u32, sy as u32).to_straight();
+                patch[gy * w + gx] = [cr, cg, cb];
+            }
+        }
+        let low = box_blur_rgb(&patch, w, h, ((r / 2.0) as usize).max(2));
+        patch
+            .iter()
+            .zip(low.iter())
+            .map(|(p, l)| [p[0] - l[0], p[1] - l[1], p[2] - l[2]])
+            .collect()
+    });
+
+    for gy in 0..h {
+        for gx in 0..w {
+            let i = gy * w + gx;
+            let k = (cover[i] * strength).clamp(0.0, 1.0);
+            if k <= 0.0 || alpha[i] <= 0.0 {
+                continue;
+            }
+            let mut out = field[i];
+            if let Some(hf) = &highfreq {
+                for c in 0..3 {
+                    out[c] = (out[c] + hf[i][c]).clamp(0.0, 1.0);
+                }
+            }
+            let cur = rgb[i];
+            let healed = [
+                cur[0] + (out[0] - cur[0]) * k,
+                cur[1] + (out[1] - cur[1]) * k,
+                cur[2] + (out[2] - cur[2]) * k,
+            ];
+            store.set_pixel(
+                region.x + gx as i32,
+                region.y + gy as i32,
+                Rgba::from_straight(healed[0], healed[1], healed[2], alpha[i]),
+            );
+        }
+    }
+}
+
+/// Simple separable box blur over a straight-RGB grid (edge-clamped).
+fn box_blur_rgb(src: &[[f32; 3]], w: usize, h: usize, radius: usize) -> Vec<[f32; 3]> {
+    let r = radius as i32;
+    let mut tmp = vec![[0f32; 3]; w * h];
+    let mut out = vec![[0f32; 3]; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = [0f32; 3];
+            for dx in -r..=r {
+                let sx = (x as i32 + dx).clamp(0, w as i32 - 1) as usize;
+                for k in 0..3 {
+                    acc[k] += src[y * w + sx][k];
+                }
+            }
+            let n = (2 * r + 1) as f32;
+            tmp[y * w + x] = [acc[0] / n, acc[1] / n, acc[2] / n];
+        }
+    }
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = [0f32; 3];
+            for dy in -r..=r {
+                let sy = (y as i32 + dy).clamp(0, h as i32 - 1) as usize;
+                for k in 0..3 {
+                    acc[k] += tmp[sy * w + x][k];
+                }
+            }
+            let n = (2 * r + 1) as f32;
+            out[y * w + x] = [acc[0] / n, acc[1] / n, acc[2] / n];
+        }
+    }
+    out
+}
+
 /// Rotate the whole image by quarter turns (positive = clockwise) or flip it.
 pub struct RotateImage {
     pub quarter_turns: i32,
@@ -2790,6 +3049,162 @@ mod tests {
             .is_ok(),
             "a seed outside the canvas is a no-op"
         );
+    }
+
+    #[test]
+    fn spot_heal_melts_blemishes_into_flat_and_gradient_surroundings() {
+        // Flat green with a red blob.
+        let mut doc = Document::new(64, 64);
+        let id = doc.add_pixel_layer("L");
+        for y in 0..64 {
+            for x in 0..64 {
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(0.2, 0.7, 0.2, 1.0),
+                );
+            }
+        }
+        for y in 28..37 {
+            for x in 28..37 {
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(0.9, 0.1, 0.1, 1.0),
+                );
+            }
+        }
+        HealStroke {
+            layer: id,
+            brush: Brush {
+                radius: 10.0,
+                hardness: 0.7,
+                color: [0.0, 0.0, 0.0, 1.0],
+                ..Brush::default()
+            },
+            points: vec![StrokePoint::new(32.0, 32.0, 1.0)],
+            offset: (0, 0),
+            sample: SampleSource::Layer(id),
+            texture: false,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let px = doc.layer(id).unwrap().pixels().unwrap();
+        let c = px.get_pixel(32, 32).to_straight();
+        assert!(
+            (c[0] - 0.2).abs() < 0.05 && (c[1] - 0.7).abs() < 0.05,
+            "blob healed to the surround: {c:?}"
+        );
+        assert!((c[3] - 1.0).abs() < 1e-5, "alpha untouched");
+        let far = px.get_pixel(5, 5).to_straight();
+        assert!((far[1] - 0.7).abs() < 1e-5, "outside untouched");
+
+        // A horizontal ramp with a blob: diffusion follows the gradient,
+        // which a plain clone or flat fill would not.
+        let mut doc = Document::new(64, 64);
+        let id = doc.add_pixel_layer("L");
+        for y in 0..64 {
+            for x in 0..64 {
+                let v = x as f32 / 63.0;
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(v, v, v, 1.0),
+                );
+            }
+        }
+        for y in 28..37 {
+            for x in 28..37 {
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(1.0, 0.0, 0.0, 1.0),
+                );
+            }
+        }
+        HealStroke {
+            layer: id,
+            brush: Brush {
+                radius: 10.0,
+                hardness: 0.7,
+                color: [0.0, 0.0, 0.0, 1.0],
+                ..Brush::default()
+            },
+            points: vec![StrokePoint::new(32.0, 32.0, 1.0)],
+            offset: (0, 0),
+            sample: SampleSource::Layer(id),
+            texture: false,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let px = doc.layer(id).unwrap().pixels().unwrap();
+        let c = px.get_pixel(32, 32).to_straight();
+        let local = 32.0 / 63.0;
+        assert!(
+            (c[0] - local).abs() < 0.12 && (c[0] - c[1]).abs() < 0.03,
+            "healed onto the ramp: {c:?} vs {local}"
+        );
+    }
+
+    #[test]
+    fn healing_with_texture_keeps_detail_at_the_destination_tone() {
+        // Destination: flat dark grey with a bright blemish. Source region
+        // (offset away): bright vertical stripes.
+        let mut doc = Document::new(96, 48);
+        let id = doc.add_pixel_layer("L");
+        for y in 0..48 {
+            for x in 0..96 {
+                let v = if x >= 64 {
+                    if (x / 4) % 2 == 0 {
+                        0.9
+                    } else {
+                        0.5
+                    }
+                } else {
+                    0.2
+                };
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(v, v, v, 1.0),
+                );
+            }
+        }
+        doc.layer_mut(id)
+            .unwrap()
+            .pixels_mut()
+            .unwrap()
+            .set_pixel(24, 24, Rgba::WHITE);
+        HealStroke {
+            layer: id,
+            brush: Brush {
+                radius: 9.0,
+                hardness: 0.8,
+                color: [0.0, 0.0, 0.0, 1.0],
+                ..Brush::default()
+            },
+            points: vec![StrokePoint::new(24.0, 24.0, 1.0)],
+            offset: (50, 0), // sample from the striped region
+            sample: SampleSource::Layer(id),
+            texture: true,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let px = doc.layer(id).unwrap().pixels().unwrap();
+        let mut lo = f32::MAX;
+        let mut hi = f32::MIN;
+        let mut mean = 0.0;
+        let mut n = 0.0;
+        for x in 19..30 {
+            let v = px.get_pixel(x, 24).to_straight()[0];
+            lo = lo.min(v);
+            hi = hi.max(v);
+            mean += v;
+            n += 1.0;
+        }
+        mean /= n;
+        assert!((mean - 0.2).abs() < 0.1, "tone follows the destination: {mean}");
+        assert!(hi - lo > 0.08, "stripes carried over as texture: {lo}..{hi}");
     }
 
     #[test]

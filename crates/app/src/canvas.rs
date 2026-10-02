@@ -828,11 +828,12 @@ impl App {
                     }
                 }
             }
-            Tool::Brush | Tool::Eraser | Tool::Clone => {
+            Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal => {
                 if resp.hovered() {
                     ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
                 }
-                if self.tool == Tool::Clone {
+                let needs_source = self.tool == Tool::Clone || (self.tool == Tool::Heal && !self.heal_spot);
+                if needs_source {
                     let alt = ctx.input(|i| i.modifiers.alt);
                     let wants_source = self.clone_picking || self.clone_source.is_none() || alt;
                     if wants_source {
@@ -858,7 +859,7 @@ impl App {
                 };
                 if resp.drag_started_by(primary) {
                     if paintable {
-                        if self.tool == Tool::Clone {
+                        if needs_source {
                             if let (Some((sx, sy)), Some(p)) =
                                 (self.clone_source, ctx.input(|i| i.pointer.press_origin()))
                             {
@@ -927,7 +928,7 @@ impl App {
                 } else if resp.clicked_by(primary) && paintable {
                     if let (Some(layer), Some(p)) = (self.active, resp.interact_pointer_pos()) {
                         let (x, y) = to_doc(p);
-                        if self.tool == Tool::Clone {
+                        if needs_source {
                             // A single dab locks its own offset, same as a
                             // drag; reusing the previous stroke's offset
                             // would clone from the wrong place.
@@ -1049,7 +1050,7 @@ impl App {
         resp: &egui::Response,
     ) {
         match self.tool {
-            Tool::Brush | Tool::Eraser | Tool::Clone => {
+            Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal => {
                 if let (true, Some(p)) = (
                     self.drag.is_none() || self.drag == Some(DragKind::Stroke),
                     resp.hover_pos(),

@@ -216,6 +216,8 @@ struct App {
     histogram: [u32; histogram::BINS],
     /// User preferences (undo caps, canvas colour, autosave interval).
     prefs: session::Prefs,
+    /// Healing brush: true = spot mode (no texture source needed).
+    heal_spot: bool,
     /// Quick-mask mode: paint the selection itself under a red overlay.
     quick_mask: bool,
     /// Selection boundary pixels for the animated marching ants.
@@ -332,6 +334,7 @@ impl App {
             recent: session::load_recent(),
             histogram: [0; histogram::BINS],
             prefs: session::Prefs::load(),
+            heal_spot: true,
             quick_mask: false,
             sel_points: Vec::new(),
             layer_drag: None,
@@ -599,6 +602,23 @@ impl App {
         if self.quick_mask && self.tool != Tool::Clone {
             return Box::new(PaintSelection { brush, points });
         }
+        if self.tool == Tool::Heal {
+            brush.mode = BrushMode::Paint;
+            let texture = !self.heal_spot && self.clone_source.is_some();
+            let sample = if self.sample_merged {
+                SampleSource::Merged
+            } else {
+                SampleSource::Layer(layer)
+            };
+            return Box::new(HealStroke {
+                layer,
+                brush,
+                points,
+                offset: if texture { self.clone_offset } else { (0, 0) },
+                sample,
+                texture,
+            });
+        }
         if self.tool == Tool::Clone {
             brush.mode = BrushMode::Paint;
             let sample = if self.sample_merged {
@@ -739,6 +759,8 @@ impl App {
                 } else {
                     Tool::RectSelect
                 })
+            } else if i.key_pressed(Key::J) {
+                Some(Tool::Heal)
             } else if i.key_pressed(Key::H) {
                 Some(Tool::Hand)
             } else {

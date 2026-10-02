@@ -153,7 +153,7 @@ impl App {
                             ui.checkbox(&mut self.gradient_to_transparent, "To transparent");
                             ui.label(RichText::new("Drag on the canvas").weak());
                         }
-                        Tool::Brush | Tool::Eraser | Tool::Clone => {
+                        Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal => {
                             if self.tool == Tool::Brush {
                                 for (m, label) in [
                                     (BrushMode::Paint, "Paint"),
@@ -166,7 +166,14 @@ impl App {
                                 }
                                 ui.separator();
                             }
-                            if self.tool == Tool::Clone {
+                            if self.tool == Tool::Heal {
+                                ui.checkbox(&mut self.heal_spot, "Spot").on_hover_text(
+                                    "Heal from the surroundings alone; untick to add texture from a picked source",
+                                );
+                            }
+                            let needs_source = self.tool == Tool::Clone
+                                || (self.tool == Tool::Heal && !self.heal_spot);
+                            if needs_source {
                                 let picking = self.clone_picking || self.clone_source.is_none();
                                 if ui
                                     .selectable_label(picking, "Pick source")

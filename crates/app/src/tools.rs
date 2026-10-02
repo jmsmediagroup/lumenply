@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Tool {
+    Heal,
     Move,
     RectSelect,
     EllipseSelect,
@@ -19,7 +20,7 @@ pub(crate) enum Tool {
 }
 
 impl Tool {
-    const ALL: [Tool; 14] = [
+    const ALL: [Tool; 15] = [
         Tool::Move,
         Tool::RectSelect,
         Tool::EllipseSelect,
@@ -29,6 +30,7 @@ impl Tool {
         Tool::Brush,
         Tool::Eraser,
         Tool::Clone,
+        Tool::Heal,
         Tool::Bucket,
         Tool::Gradient,
         Tool::Text,
@@ -42,6 +44,7 @@ impl Tool {
             Tool::Brush => "Brush",
             Tool::Eraser => "Eraser",
             Tool::Clone => "Clone Stamp",
+            Tool::Heal => "Healing Brush",
             Tool::Bucket => "Paint Bucket",
             Tool::Gradient => "Gradient",
             Tool::Text => "Text",
@@ -62,6 +65,7 @@ impl Tool {
             Tool::Brush => "B",
             Tool::Eraser => "E",
             Tool::Clone => "S",
+            Tool::Heal => "J",
             Tool::Bucket | Tool::Gradient => "G",
             Tool::Text => "T",
             Tool::Eyedropper => "I",
@@ -78,6 +82,9 @@ impl Tool {
             Tool::Brush => "Brush (B)",
             Tool::Eraser => "Eraser (E)",
             Tool::Clone => "Clone Stamp (S) — Alt+click or 'Pick source' to set the source",
+            Tool::Heal => {
+                "Healing Brush (J) — paints surroundings over blemishes; Alt+click sets a texture source"
+            }
             Tool::Bucket => "Paint Bucket (G)",
             Tool::Gradient => "Gradient (Shift+G)",
             Tool::Text => "Text (T)",
@@ -265,6 +272,17 @@ pub(crate) fn draw_icon(p: &egui::Painter, r: egui::Rect, tool: Tool, c: Color32
         }
         Tool::EllipseSelect => {
             p.extend(Shape::dashed_line(&ellipse_points(r, 40), s, 3.0, 2.5));
+        }
+        Tool::Heal => {
+            // A bandaid: a diagonal capsule with two dots.
+            let c1 = r.min + egui::vec2(3.0, r.height() - 3.0);
+            let c2 = r.min + egui::vec2(r.width() - 3.0, 3.0);
+            let d = (c2 - c1).normalized();
+            let n = egui::vec2(-d.y, d.x) * 3.5;
+            p.add(Shape::closed_line(vec![c1 + n, c2 + n, c2 - n, c1 - n], s));
+            let mid = egui::pos2((c1.x + c2.x) / 2.0, (c1.y + c2.y) / 2.0);
+            p.circle_filled(mid + n * 0.45, 0.9, c);
+            p.circle_filled(mid - n * 0.45, 0.9, c);
         }
         Tool::Hand => {
             let ctr = r.center();

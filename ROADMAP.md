@@ -120,7 +120,8 @@ None of these could be tested in the container.
 
 ## 5. Tools and features
 
-- [ ] Healing brush and spot healing
+- [x] Healing brush and spot healing (rim-diffusion colour, optional texture
+      from a clone-style source; new Heal tool, key J, Spot toggle)
 - [ ] Paths / pen tool (vector), stroke and fill paths, selection from path
 - [x] Skew and non-uniform scale in free transform (edge handles stretch one
       axis, mirror across the centre; W/H/Rotate/Skew fields in the options bar)
