@@ -47,6 +47,7 @@ mod quick_select_tool;
 #[cfg(test)]
 mod select_fill_tests;
 mod session;
+mod shape_tool;
 mod smart_contents;
 mod start;
 mod status;
@@ -380,6 +381,8 @@ struct App {
     crop: crop::CropTool,
     /// Rulers, guides, grid and snapping state (guides.rs).
     aids: guides::ViewAids,
+    /// The Shape tool's options and drag (shape_tool.rs).
+    shape: shape_tool::ShapeTool,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -539,6 +542,7 @@ impl App {
             start_thumb: None,
             crop: crop::CropTool::default(),
             aids: guides::ViewAids::default(),
+            shape: Default::default(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -1135,6 +1139,8 @@ impl App {
                 Some(Tool::Hand)
             } else if i.key_pressed(Key::C) {
                 Some(Tool::Crop)
+            } else if i.key_pressed(Key::U) {
+                Some(Tool::Shape)
             } else {
                 None
             };
@@ -1771,6 +1777,19 @@ pub(crate) mod a11y_tests {
             app.run_menu_action(id);
             assert!(app.active_layer().unwrap().fill_layer().is_some());
             check(&mut app, &format!("{name} fill layer"));
+            app.run_menu_action("undo");
+        }
+        for (kind, extra) in [
+            ("rectangle", "shape:fill=gradient"),
+            ("polygon", "shape:stroke=2"),
+            ("line", "shape:arrows=end"),
+            ("heart", "shape:fill=none"),
+        ] {
+            app.debug_shape(&ctx, &format!("shape:kind={kind}"));
+            app.debug_shape(&ctx, extra);
+            app.debug_shape(&ctx, "shape:draw=4:4:40:30");
+            assert!(app.active_layer().unwrap().shape_layer().is_some());
+            check(&mut app, &format!("{kind} shape layer"));
             app.run_menu_action("undo");
         }
         for (name, f) in filter_presets() {

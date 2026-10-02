@@ -46,7 +46,18 @@ impl App {
                             .doc()
                             .layer(x.layer)
                             .is_some_and(|l| l.smart_layer().is_some());
-                        let affine_only = "Smart objects keep affine transforms; rasterize first";
+                        // Shapes too: their outline takes an affine only.
+                        let shape = self
+                            .editor
+                            .doc()
+                            .layer(x.layer)
+                            .is_some_and(|l| l.shape_layer().is_some());
+                        let affine_only = if shape {
+                            "Shapes stay vector through affine transforms; rasterize first"
+                        } else {
+                            "Smart objects keep affine transforms; rasterize first"
+                        };
+                        let smart = smart || shape;
                         ui.add_enabled_ui(!persp && !warping, |ui| {
                             let mut sx = x.sx * 100.0;
                             let mut sy = x.sy * 100.0;
@@ -164,14 +175,15 @@ impl App {
                     ui.separator();
                     match self.tool {
                         Tool::Move => {
+                            let block = self.action_block("xform");
                             if ui
                                 .add_enabled(
-                                    self.active_is_pixel(),
+                                    block.is_none(),
                                     egui::Button::new("Free transform")
                                         .shortcut_text(self.action_keys(ui.ctx(), "xform")),
                                 )
                                 .on_hover_text("Scale, rotate, skew, distort or warp the active layer")
-                                .on_disabled_hover_text("Select a pixel layer to transform it")
+                                .on_disabled_hover_text(block.unwrap_or("Select a pixel layer to transform it"))
                                 .clicked()
                             {
                                 self.begin_free_transform();
@@ -211,6 +223,7 @@ impl App {
                             }
                         }
                         Tool::Text => self.text_options_bar(ui),
+                        Tool::Shape => self.shape_options_bar(ui, tier),
                         Tool::Gradient => {
                             segmented(
                                 ui,
@@ -709,6 +722,7 @@ fn tool_hint(tool: Tool) -> Option<&'static str> {
         Tool::RectSelect | Tool::EllipseSelect | Tool::Lasso => "Shift adds, Alt subtracts",
         Tool::PolyLasso => "Click to add points, double-click to close",
         Tool::Pen => "Click corners, drag curves; click the first point to close",
+        Tool::Shape => "Shift constrains, Alt draws from the centre",
         Tool::Hand => "Drag to pan, scroll to zoom",
         _ => return None,
     })
@@ -716,7 +730,7 @@ fn tool_hint(tool: Tool) -> Option<&'static str> {
 
 /// The tool's usage hint at the end of the bar (on narrow windows it lives
 /// in the tool name's tooltip instead).
-fn hint_label(ui: &mut egui::Ui, tier: Tier, tool: Tool) {
+pub(crate) fn hint_label(ui: &mut egui::Ui, tier: Tier, tool: Tool) {
     if let (false, Some(h)) = (tier == Tier::Tight, tool_hint(tool)) {
         ui.label(RichText::new(h).weak());
     }

@@ -30,7 +30,7 @@ pub(crate) enum PaletteAct {
 }
 
 /// Every tool, so "Search tools..." finds them, in rail order.
-const TOOLS: [Tool; 17] = [
+const TOOLS: [Tool; 18] = [
     Tool::Move,
     Tool::RectSelect,
     Tool::EllipseSelect,
@@ -45,6 +45,7 @@ const TOOLS: [Tool; 17] = [
     Tool::Bucket,
     Tool::Gradient,
     Tool::Pen,
+    Tool::Shape,
     Tool::Text,
     Tool::Eyedropper,
     Tool::Hand,
@@ -164,6 +165,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Snap on or off", "snap"),
     ("New fill layer: solid color", "fill-solid"),
     ("New fill layer: gradient", "fill-gradient"),
+    ("New shape layer from path", "shape-from-path"),
 ];
 
 impl App {
@@ -489,6 +491,8 @@ impl App {
         let layer = self.active_layer();
         let pixel = self.active_is_pixel();
         let smart = layer.is_some_and(|l| l.smart_layer().is_some());
+        // Shapes transform and flip as vectors, like smart objects.
+        let shape = layer.is_some_and(|l| l.shape_layer().is_some());
         let selection = doc.selection.is_some();
         let need_pixel = Some("Select a pixel layer first");
         let need_layer = Some("Select a layer first");
@@ -509,9 +513,14 @@ impl App {
         match id {
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
             "redo" if !self.editor.can_redo() => Some("Nothing to redo"),
-            "flip-h" | "flip-v" if !pixel && !smart => Some("Select a pixel layer or smart object first"),
+            "flip-h" | "flip-v" if !pixel && !smart && !shape => {
+                Some("Select a pixel layer, smart object or shape first")
+            }
             "fill" | "clear" | "layer-via-copy" | "smart-object" if !pixel => need_pixel,
-            "xform" if !pixel && !smart => Some("Select a pixel layer or smart object first"),
+            "xform" if !pixel && !smart && !shape => {
+                Some("Select a pixel layer, smart object or shape first")
+            }
+            "perspective" | "warp" if shape => Some("Rasterize the shape first"),
             "perspective" | "warp" if smart => Some("Rasterize the smart object first"),
             "perspective" | "warp" if !pixel => need_pixel,
             "liquify" if smart || layer.is_some_and(|l| l.text_layer().is_some()) => {
@@ -557,10 +566,16 @@ impl App {
             "clear-guides" if doc.guides.is_empty() => Some("There are no guides"),
             "rasterize"
                 if !layer.is_some_and(|l| {
-                    l.smart_layer().is_some() || l.text_layer().is_some() || l.fill_layer().is_some()
+                    l.smart_layer().is_some()
+                        || l.text_layer().is_some()
+                        || l.fill_layer().is_some()
+                        || l.shape_layer().is_some()
                 }) =>
             {
-                Some("Select a smart object, text or fill layer first")
+                Some("Select a smart object, text, fill or shape layer first")
+            }
+            "shape-from-path" if doc.work_path.as_ref().is_none_or(|p| p.is_empty()) => {
+                Some("Draw a path with the Pen first")
             }
             "sel-expand" | "sel-contract" | "sel-border" | "sel-smooth" | "sel-grow" | "sel-similar"
                 if !selection =>
@@ -685,6 +700,7 @@ impl App {
                 }
             }
             "fill-solid" | "fill-gradient" => self.add_fill_layer(id == "fill-gradient"),
+            "shape-from-path" => self.shape_from_path(),
             "delete-layer" => self.delete_active(),
             "layer-up" => self.reorder_active(1),
             "layer-down" => self.reorder_active(-1),
@@ -834,7 +850,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 112); // + keyboard shortcuts
+        assert_eq!(n, 113); // + shape from path
     }
 
     #[test]
@@ -852,6 +868,6 @@ mod tests {
         let mut names: Vec<&str> = TOOLS.iter().map(|t| t.name()).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 17);
+        assert_eq!(names.len(), 18);
     }
 }

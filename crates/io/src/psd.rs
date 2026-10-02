@@ -20,6 +20,7 @@ use lumenply_tiles::{Raster, Rect, Rgba, TileStore};
 use crate::{linear_to_srgb, IoError};
 
 mod extra;
+mod shape;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PsdError {
@@ -456,7 +457,9 @@ fn additional_block(key: &[u8; 4], data: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(b"8BIM");
     out.extend_from_slice(key);
-    put_u32(&mut out, data.len() as u32);
+    // The length counts the pad byte ("rounded up to an even byte
+    // count"); readers such as psd-tools rely on it.
+    put_u32(&mut out, (data.len() + data.len() % 2) as u32);
     out.extend_from_slice(data);
     if data.len() % 2 == 1 {
         out.push(0);
@@ -1025,7 +1028,8 @@ fn collect_records(
             LayerContent::Pixel(_)
             | LayerContent::Text(_)
             | LayerContent::Smart(_)
-            | LayerContent::Fill(_) => {
+            | LayerContent::Fill(_)
+            | LayerContent::Shape(_) => {
                 let owned_store;
                 // A fill layer carries its settings block next to its
                 // rendered pixels, so readers without fills still see it.
@@ -1061,6 +1065,19 @@ fn collect_records(
                             .cache
                             .clone()
                             .unwrap_or_else(|| lumenply_render::transform_store(&s.source, &s.transform));
+                        &owned_store
+                    }
+                    LayerContent::Shape(sh) => {
+                        // Photoshop's own shape layer: fill settings, vector
+                        // stroke and vector mask, beside the rendered pixels.
+                        for (key, data) in shape::shape_blocks(sh, canvas.w, canvas.h) {
+                            blocks.push(additional_block(key, &data));
+                        }
+                        owned_store = sh
+                            .cache
+                            .clone()
+                            .filter(|_| sh.cache_canvas == (canvas.w, canvas.h))
+                            .unwrap_or_else(|| lumenply_render::shape::render_shape(sh, canvas, false));
                         &owned_store
                     }
                     _ => unreachable!(),
@@ -1111,6 +1128,9 @@ fn collect_records(
                         blocks
                     },
                 ));
+                if let (LayerContent::Shape(_), Some(rec)) = (&l.content, out.last_mut()) {
+                    shape::mark_pixel_data_irrelevant(&mut rec.record);
+                }
             }
             LayerContent::Group(children) => {
                 // Closing divider comes first in file order (it is the bottom-most record).
@@ -1343,6 +1363,8 @@ struct RawLayer {
     locks: LayerLocks,
     /// A Solid Color or Gradient fill layer's settings.
     fill: Option<lumenply_doc::Fill>,
+    /// A shape layer: a fill with a readable vector mask (and stroke).
+    shape: Option<lumenply_doc::ShapeLayer>,
 }
 
 /// Largest dimension the PSD v1 format allows for the canvas, a layer or a
@@ -1486,6 +1508,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let mut locks = LayerLocks::NONE;
                 let mut fill = None;
                 let (mut vector_mask, mut pattern) = (false, false);
+                let (mut vmsk, mut vstk): (Option<Vec<u8>>, Option<Vec<u8>>) = (None, None);
                 while rd.pos + 12 <= extra_end {
                     let sig = rd.bytes(4)?;
                     if sig != b"8BIM" && sig != b"8B64" {
@@ -1540,7 +1563,11 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                             None => warnings.push(format!("fill layer '{name}': settings not readable")),
                         },
                         // A vector mask makes a fill a shape layer.
-                        b"vmsk" | b"vsms" => vector_mask = true,
+                        b"vmsk" | b"vsms" => {
+                            vector_mask = true;
+                            vmsk = Some(data.to_vec());
+                        }
+                        b"vstk" => vstk = Some(data.to_vec()),
                         // Pattern fills keep their rendered pixels.
                         b"PtFl" => pattern = true,
                         b"levl" | b"curv" | b"brit" | b"CgEd" | b"hue2" | b"hue " | b"blnc" | b"blwh"
@@ -1557,10 +1584,16 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 rd.pos = extra_end;
                 // Shape layers (a fill clipped by vector paths) and pattern
                 // fills come in as the pixels Photoshop rendered for them.
-                if vector_mask && fill.take().is_some() {
-                    warnings.push(format!(
-                        "shape layer '{name}' was imported as pixels (vector shapes are not supported yet)"
-                    ));
+                let mut shape_layer = None;
+                if let Some(f) = fill.take_if(|_| vector_mask) {
+                    shape_layer = vmsk
+                        .as_deref()
+                        .and_then(|m| shape::parse_shape(f, m, vstk.as_deref(), width, height));
+                    if shape_layer.is_none() {
+                        warnings.push(format!(
+                            "shape layer '{name}' was imported as pixels (its vector mask is not readable)"
+                        ));
+                    }
                 }
                 if pattern {
                     warnings.push(format!("pattern fill layer '{name}' was imported as pixels"));
@@ -1583,6 +1616,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         adjustment,
                         locks,
                         fill,
+                        shape: shape_layer,
                     },
                     chans,
                 ));
@@ -1761,6 +1795,20 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                             rl.name
                         )),
                     }
+                    continue;
+                }
+                if let Some(sh) = rl.shape.clone() {
+                    // Rendered below with the fills, once every layer is in.
+                    let id = doc.alloc_id();
+                    let mut l = Layer::shape(id, sh);
+                    l.name = rl.name.clone();
+                    l.blend = rl.blend;
+                    l.clip = rl.clip;
+                    l.opacity = rl.opacity;
+                    l.visible = rl.visible;
+                    l.mask = build_mask(&rl);
+                    l.locks = rl.locks;
+                    stack.last_mut().expect("root").push(l);
                     continue;
                 }
                 if let Some(fill) = rl.fill.clone() {

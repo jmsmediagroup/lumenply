@@ -77,7 +77,11 @@ fn clip_baseable(l: &Layer) -> bool {
     !l.clip
         && matches!(
             l.content,
-            LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) | LayerContent::Group(_)
+            LayerContent::Pixel(_)
+                | LayerContent::Text(_)
+                | LayerContent::Smart(_)
+                | LayerContent::Shape(_)
+                | LayerContent::Group(_)
         )
 }
 
