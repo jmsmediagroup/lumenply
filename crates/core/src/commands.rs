@@ -9,6 +9,10 @@ use lumenply_tiles::{Affine, Raster, Rect, Rgba, TileStore};
 
 use crate::{Command, EditError, EditResult};
 
+pub use crate::content_aware::ContentAwareFill;
+pub use crate::select_ops::{GrowSelection, ModifySelectionEdge};
+pub use lumenply_doc::selection_ops::EdgeOp;
+
 /// Add an empty pixel layer (or one filled from a raster) on top of the stack.
 pub struct AddPixelLayer {
     pub name: String,

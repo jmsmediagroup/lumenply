@@ -16,6 +16,7 @@
 pub mod cache;
 pub mod filters;
 pub mod gpu;
+pub mod inpaint;
 pub mod text;
 pub mod transform;
 

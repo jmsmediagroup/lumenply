@@ -78,6 +78,7 @@ impl FromStr for BlendMode {
 
 pub mod adjust;
 pub mod selection;
+pub mod selection_ops;
 
 pub use adjust::{Adjustment, CompiledAdjustment, LevelsChannel};
 pub use selection::{CombineOp, Selection};

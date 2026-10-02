@@ -7,7 +7,9 @@
 //! CLI behave identically.
 
 pub mod commands;
+mod content_aware;
 pub mod demo;
+mod select_ops;
 
 use lumenply_doc::{Document, LayerId};
 
