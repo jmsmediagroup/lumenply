@@ -83,7 +83,7 @@ impl App {
 
         egui::ScrollArea::vertical()
             .id_salt("layers")
-            .max_height(260.0)
+            .max_height((ui.available_height() - 46.0).max(160.0))
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 for row in &rows {

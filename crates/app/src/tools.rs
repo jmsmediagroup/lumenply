@@ -100,6 +100,18 @@ impl App {
             .frame(egui::Frame::none().fill(PANEL).inner_margin(9.0))
             .show(ctx, |ui| {
                 for tool in Tool::ALL {
+                    // A breath between tool families: move / select / paint /
+                    // type & sample / navigate.
+                    if matches!(tool, Tool::RectSelect | Tool::Brush | Tool::Text | Tool::Hand) {
+                        ui.add_space(3.0);
+                        let (r, _) = ui.allocate_exact_size(egui::vec2(40.0, 1.0), Sense::hover());
+                        ui.painter().hline(
+                            r.min.x + 6.0..=r.max.x - 6.0,
+                            r.center().y,
+                            Stroke::new(1.0, LINE),
+                        );
+                        ui.add_space(3.0);
+                    }
                     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(40.0), Sense::click());
                     let active = self.tool == tool;
                     let bg = if active {

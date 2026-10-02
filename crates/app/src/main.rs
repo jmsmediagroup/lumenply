@@ -720,13 +720,22 @@ impl App {
     fn side_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::right("side")
             .default_width(330.0)
-            .min_width(290.0)
+            .min_width(300.0)
+            .frame(
+                egui::Frame::none()
+                    .fill(PANEL)
+                    .inner_margin(egui::Margin::symmetric(12.0, 10.0)),
+            )
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
                     .id_salt("props")
                     .max_height(330.0)
                     .auto_shrink([false, true])
                     .show(ui, |ui| self.properties_ui(ui));
+                ui.add_space(4.0);
+                ui.separator();
+                self.quick_add_ui(ui);
+                ui.add_space(2.0);
                 ui.separator();
                 self.layers_ui(ui);
             });

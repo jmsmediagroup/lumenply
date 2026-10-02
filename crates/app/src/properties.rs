@@ -1,8 +1,79 @@
 use super::*;
 
 impl App {
+    /// One-click non-destructive additions, straight from the concept:
+    /// a chip per common adjustment, blur and sharpen, and a menu with the
+    /// rest. Everything lands above the active layer as a live layer.
+    pub(crate) fn quick_add_ui(&mut self, ui: &mut egui::Ui) {
+        section_title(ui, "ADD ABOVE ACTIVE LAYER");
+        let mut add_adj: Option<Adjustment> = None;
+        let mut add_filter: Option<Filter> = None;
+        let chip = |ui: &mut egui::Ui, label: &str| {
+            ui.add(
+                egui::Button::new(RichText::new(label).size(12.0))
+                    .fill(RAISED)
+                    .stroke(Stroke::new(1.0, LINE))
+                    .min_size(egui::vec2(64.0, 24.0)),
+            )
+            .clicked()
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            for (label, name) in [
+                ("Curves", "Curves"),
+                ("Levels", "Levels"),
+                ("Exposure", "Exposure"),
+                ("Hue/Sat", "Hue/Saturation"),
+                ("B & W", "Black & White"),
+            ] {
+                if chip(ui, label) {
+                    add_adj = adjustment_presets()
+                        .into_iter()
+                        .find(|(n, _)| *n == name)
+                        .map(|(_, a)| a);
+                }
+            }
+            if chip(ui, "Blur") {
+                add_filter = Some(Filter::GaussianBlur { radius: 8.0 });
+            }
+            if chip(ui, "Sharpen") {
+                add_filter = Some(Filter::Sharpen {
+                    amount: 1.0,
+                    radius: 2.0,
+                });
+            }
+            egui::menu::menu_custom_button(
+                ui,
+                egui::Button::new(RichText::new("More...").size(12.0).color(MUTED))
+                    .fill(RAISED)
+                    .stroke(Stroke::new(1.0, LINE))
+                    .min_size(egui::vec2(64.0, 24.0)),
+                |ui| {
+                    for (name, adj) in adjustment_presets() {
+                        if ui.button(name).clicked() {
+                            add_adj = Some(adj);
+                            ui.close_menu();
+                        }
+                    }
+                    ui.separator();
+                    for (name, f) in filter_presets() {
+                        if ui.button(format!("Live {name}")).clicked() {
+                            add_filter = Some(f);
+                            ui.close_menu();
+                        }
+                    }
+                },
+            );
+        });
+        if let Some(a) = add_adj {
+            self.add_adjustment(a);
+        }
+        if let Some(f) = add_filter {
+            self.add_filter_layer(f);
+        }
+    }
+
     pub(crate) fn properties_ui(&mut self, ui: &mut egui::Ui) {
-        self.histogram_ui(ui);
         let Some(id) = self.active else {
             section_title(ui, "PROPERTIES");
             ui.label(RichText::new("No layer selected").weak());
@@ -41,11 +112,23 @@ impl App {
         let mut opacity = layer.opacity * 100.0;
         ui.label(RichText::new(name).strong());
 
-        let r = ui.add(
-            egui::Slider::new(&mut opacity, 0.0..=100.0)
-                .suffix("%")
-                .text("Opacity"),
-        );
+        let r = ui
+            .horizontal(|ui| {
+                ui.add_sized(
+                    [70.0, 18.0],
+                    egui::Label::new(RichText::new("Opacity").color(MUTED)),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_sized(
+                        [58.0, 18.0],
+                        egui::Label::new(RichText::new(format!("{opacity:.0}%")).monospace().color(TEXT)),
+                    );
+                    ui.spacing_mut().slider_width = (ui.available_width() - 10.0).max(60.0);
+                    ui.add(egui::Slider::new(&mut opacity, 0.0..=100.0).show_value(false))
+                })
+                .inner
+            })
+            .inner;
         if r.changed() {
             self.run_coalescing(
                 &SetOpacity {
@@ -69,16 +152,23 @@ impl App {
                 f.to_uppercase().collect::<String>() + c.as_str()
             })
         };
-        egui::ComboBox::from_label("Blend mode")
-            .selected_text(sel.map_or("Pass Through".into(), title))
-            .show_ui(ui, |ui| {
-                if is_group {
-                    ui.selectable_value(&mut sel, None, "Pass Through");
-                }
-                for m in BlendMode::ALL {
-                    ui.selectable_value(&mut sel, Some(m), title(m));
-                }
-            });
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [70.0, 18.0],
+                egui::Label::new(RichText::new("Blend").color(MUTED)),
+            );
+            ui.spacing_mut().combo_width = ui.available_width();
+            egui::ComboBox::from_id_salt("blend-mode")
+                .selected_text(sel.map_or("Pass Through".into(), title))
+                .show_ui(ui, |ui| {
+                    if is_group {
+                        ui.selectable_value(&mut sel, None, "Pass Through");
+                    }
+                    for m in BlendMode::ALL {
+                        ui.selectable_value(&mut sel, Some(m), title(m));
+                    }
+                });
+        });
         match sel {
             None if !pass => self.run(&SetPassThrough {
                 layer: id,
@@ -201,6 +291,12 @@ impl App {
                 self.begin_free_transform();
             }
         }
+        self.histogram_footer(ui);
+    }
+
+    fn histogram_footer(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        self.histogram_ui(ui);
     }
 
     pub(crate) fn adjustment_ui(&mut self, ui: &mut egui::Ui, id: LayerId, mut adj: Adjustment) {

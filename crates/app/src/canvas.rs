@@ -300,11 +300,14 @@ impl App {
                     self.handle_tool(ctx, &resp, to_doc);
                 }
 
-                painter.rect_filled(
-                    doc_rect.translate(egui::vec2(0.0, 3.0)).expand(2.0),
-                    2.0,
-                    Color32::from_black_alpha(90),
-                );
+                // A soft drop shadow under the document.
+                for (grow, alpha) in [(14.0, 22), (8.0, 36), (3.0, 60)] {
+                    painter.rect_filled(
+                        doc_rect.translate(egui::vec2(0.0, grow * 0.5)).expand(grow),
+                        grow,
+                        Color32::from_black_alpha(alpha),
+                    );
+                }
                 paint_checker(&painter, doc_rect, rect);
                 let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
                 if let Some(tex) = &self.canvas_tex {
@@ -321,6 +324,48 @@ impl App {
                     self.paint_tool_overlay(ctx, &painter, &resp);
                 }
                 self.selection_action_bar(ctx, rect, origin, zoom);
+                self.zoom_pill(ctx, rect);
+            });
+    }
+
+    /// A floating zoom control in the canvas corner: − / percentage / + / Fit.
+    fn zoom_pill(&mut self, ctx: &egui::Context, clip: egui::Rect) {
+        egui::Area::new("zoom-pill".into())
+            .order(egui::Order::Foreground)
+            .pivot(Align2::RIGHT_BOTTOM)
+            .fixed_pos(clip.right_bottom() - egui::vec2(14.0, 14.0))
+            .show(ctx, |ui| {
+                egui::Frame::none()
+                    .fill(RAISED)
+                    .rounding(8.0)
+                    .stroke(Stroke::new(1.0, LINE))
+                    .inner_margin(egui::Margin::symmetric(6.0, 4.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            if ui.add(egui::Button::new("−").frame(false)).clicked() {
+                                self.zoom_at(clip, clip.center(), 1.0 / 1.25);
+                            }
+                            ui.add_sized(
+                                [52.0, 18.0],
+                                egui::Label::new(
+                                    RichText::new(format!("{:.0}%", self.zoom * 100.0))
+                                        .monospace()
+                                        .color(TEXT),
+                                ),
+                            );
+                            if ui.add(egui::Button::new("+").frame(false)).clicked() {
+                                self.zoom_at(clip, clip.center(), 1.25);
+                            }
+                            ui.separator();
+                            if ui
+                                .add(egui::Button::new(RichText::new("Fit").color(MUTED)).frame(false))
+                                .clicked()
+                            {
+                                self.view_cmd = Some(ViewCmd::Fit);
+                            }
+                        });
+                    });
             });
     }
 
