@@ -17,6 +17,7 @@ impl App {
             || self.debug_camera_raw(ctx, tok)
             || self.debug_select(tok)
             || self.debug_crop_guides(ctx, tok)
+            || self.debug_adjust(ctx, tok)
     }
 
     /// Selections and what acts on them (`select:...`):

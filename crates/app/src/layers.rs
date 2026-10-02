@@ -89,6 +89,7 @@ impl App {
                     ),
                     LayerContent::Text(_) => (Kind::Text, Some("Text")),
                     LayerContent::Smart(_) => (Kind::Pixel, Some("Smart")),
+                    LayerContent::Fill(f) => (Kind::Pixel, Some(f.fill.name())),
                 };
                 out.push(LayerRow {
                     id: l.id,
@@ -492,7 +493,8 @@ impl App {
                         if row.kind == Kind::Group {
                             act(ui, true, "Ungroup", "ungroup");
                         }
-                        if smart || row.kind == Kind::Text {
+                        let fill = matches!(row.chip, Some("Color Fill" | "Gradient Fill"));
+                        if smart || fill || row.kind == Kind::Text {
                             act(ui, true, "Rasterize", "rasterize");
                         }
                         if pixel {

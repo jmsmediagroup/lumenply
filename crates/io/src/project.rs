@@ -123,6 +123,10 @@ enum ContentRecord {
         tiles: Vec<(i32, i32)>,
         transform: [f32; 6],
     },
+    /// Fill layer: only the settings; the pixels re-render on load.
+    Fill {
+        fill: lumenply_doc::Fill,
+    },
 }
 
 /// Write a document to `path`, replacing any existing file.
@@ -213,6 +217,7 @@ fn write_layer<W: Write + std::io::Seek>(
                 transform: s.transform.coeffs(),
             }
         }
+        LayerContent::Fill(f) => ContentRecord::Fill { fill: f.fill.clone() },
     };
 
     let mask = match &layer.mask {
@@ -329,6 +334,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Document, ProjectError> {
             manifest.next_id
         )));
     }
+    lumenply_render::fill::refresh_stale(&mut doc);
     Ok(doc)
 }
 
@@ -390,6 +396,8 @@ fn read_layer<R: Read + std::io::Seek>(
                 cache: Some(cache),
             })
         }
+        // The cache renders once the canvas size is known (end of `load`).
+        ContentRecord::Fill { fill } => LayerContent::Fill(lumenply_doc::FillLayer::new(fill.clone())),
     };
 
     let mask = match &r.mask {

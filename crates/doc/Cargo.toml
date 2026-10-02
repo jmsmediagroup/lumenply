@@ -11,3 +11,6 @@ authors.workspace = true
 [dependencies]
 lumenply-tiles.workspace = true
 serde = { workspace = true }
+
+[dev-dependencies]
+serde_json.workspace = true

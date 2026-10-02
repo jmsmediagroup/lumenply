@@ -2485,6 +2485,7 @@ version = "0.9.0"
 dependencies = [
  "lumenply-tiles",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-# 7. Filter edges, filter units and content-aware fill
+# ADR 0009: Filter edges, filter units and content-aware fill
 
 Date: 2026-10-03. Status: accepted.
 

@@ -22,6 +22,7 @@ use lumenply_doc::{
 use lumenply_io::project;
 use lumenply_tiles::{Affine, Raster, Rect};
 
+mod adjust_ui;
 mod brand;
 mod camera_raw;
 mod canvas;
@@ -1400,6 +1401,10 @@ fn adjustment_presets() -> Vec<(&'static str, Adjustment)> {
         ("Threshold", Adjustment::Threshold { level: 0.5 }),
         ("Posterize", Adjustment::Posterize { levels: 4 }),
         ("Invert", Adjustment::Invert),
+        ("Gradient Map", Adjustment::gradient_map_default()),
+        ("Channel Mixer", Adjustment::channel_mixer_default()),
+        ("Photo Filter", Adjustment::photo_filter_default()),
+        ("Selective Color", Adjustment::selective_color_default()),
     ]
 }
 
@@ -1716,6 +1721,12 @@ pub(crate) mod a11y_tests {
         for (name, adj) in adjustment_presets() {
             app.add_adjustment(adj);
             check(&mut app, &format!("{name} adjustment layer"));
+            app.run_menu_action("undo");
+        }
+        for (name, id) in [("solid", "fill-solid"), ("gradient", "fill-gradient")] {
+            app.run_menu_action(id);
+            assert!(app.active_layer().unwrap().fill_layer().is_some());
+            check(&mut app, &format!("{name} fill layer"));
             app.run_menu_action("undo");
         }
         for (name, f) in filter_presets() {

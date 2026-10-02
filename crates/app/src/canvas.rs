@@ -273,6 +273,11 @@ impl App {
                 LayerContent::Pixel(store) => {
                     thumbs.push((l.id, thumb_image(canvas, |x, y| store.get_pixel(x, y))))
                 }
+                LayerContent::Fill(f) => {
+                    if let Some(store) = &f.cache {
+                        thumbs.push((l.id, thumb_image(canvas, |x, y| store.get_pixel(x, y))))
+                    }
+                }
                 LayerContent::Group(children) if area.is_none_or(|r| group_dirty(children, r)) => {
                     let flat = lumenply_render::composite_layers(children, canvas, canvas);
                     thumbs.push((l.id, thumb_image(canvas, |x, y| flat.get_pixel(x, y))));
@@ -1174,9 +1179,10 @@ impl App {
                     ctx.set_cursor_icon(egui::CursorIcon::Move);
                 }
                 if resp.drag_started_by(primary) {
+                    let fill = self.active_layer().is_some_and(|l| l.fill_layer().is_some());
                     if let Some(why) = self.lock_block(layer_actions::LockNeed::Move) {
                         self.status = why.into();
-                    } else if self.active_is_pixel() || self.active_is_text() {
+                    } else if self.active_is_pixel() || self.active_is_text() || fill {
                         self.drag = Some(DragKind::Move);
                         self.drag_start = ctx.input(|i| i.pointer.press_origin());
                         self.move_offset = (0, 0);

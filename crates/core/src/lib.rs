@@ -11,6 +11,7 @@ pub mod commands;
 mod content_aware;
 pub mod crop;
 pub mod demo;
+pub mod fill_cmds;
 pub mod guides;
 pub mod layer_ops;
 pub mod liquify;
@@ -92,11 +93,13 @@ struct Snapshot {
 /// older snapshots.
 fn delta_bytes(old: &Document, new: &Document) -> usize {
     fn store_delta(old: &lumenply_tiles::TileStore, new: Option<&lumenply_tiles::TileStore>) -> usize {
+        // A tile shared across coordinates (a solid fill's) counts once.
+        let mut seen = std::collections::HashSet::new();
         old.coords()
             .filter_map(|c| {
                 let ot = old.tile(c)?;
                 let shared = new.and_then(|n| n.tile(c)).is_some_and(|nt| std::ptr::eq(ot, nt));
-                (!shared).then(|| ot.byte_size())
+                (!shared && seen.insert(ot as *const lumenply_tiles::Tile)).then(|| ot.byte_size())
             })
             .sum()
     }
@@ -148,6 +151,11 @@ pub fn compact_storage(doc: &mut Document) {
                     c.compact();
                 }
             }
+            lumenply_doc::LayerContent::Fill(f) => {
+                if let Some(c) = f.cache.as_mut() {
+                    c.compact();
+                }
+            }
             _ => {}
         }
         if let Some(m) = l.mask.as_mut() {
@@ -188,7 +196,8 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn new(doc: Document) -> Self {
+    pub fn new(mut doc: Document) -> Self {
+        lumenply_render::fill::refresh_stale(&mut doc);
         Editor {
             doc,
             undo: Vec::new(),
@@ -237,6 +246,7 @@ impl Editor {
             let mut next = self.doc.clone();
             cmd.apply(&mut next)?;
             locks::enforce(&self.doc, &mut next, cmd)?;
+            lumenply_render::fill::refresh_stale(&mut next);
             compact_storage(&mut next);
             self.last_affected = cmd.affected(&self.doc);
             self.last_target = cmd.target_layer();
@@ -266,6 +276,8 @@ impl Editor {
         let mut next = self.doc.clone();
         cmd.apply(&mut next)?;
         locks::enforce(&self.doc, &mut next, cmd)?;
+        // Fill layers follow canvas size changes (crop, resize, rotate).
+        lumenply_render::fill::refresh_stale(&mut next);
         compact_storage(&mut next);
         self.last_affected = cmd.affected(&self.doc);
         self.last_target = cmd.target_layer();

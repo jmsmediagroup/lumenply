@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::gradient::Gradient;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Adjustment {
@@ -77,7 +79,44 @@ pub enum Adjustment {
     Posterize {
         levels: u32,
     },
+    /// Map each pixel's (gamma) luminance onto a colour ramp: dark tones
+    /// take the gradient's start, light tones its end.
+    GradientMap {
+        gradient: Gradient,
+        #[serde(default)]
+        reverse: bool,
+    },
+    /// Each output channel is a weighted mix of the input R, G and B plus
+    /// a constant: rows are `[r, g, b, constant]`, 1.0 = 100%. With
+    /// `monochrome` every channel takes the `gray` row instead.
+    ChannelMixer {
+        red: [f32; 4],
+        green: [f32; 4],
+        blue: [f32; 4],
+        monochrome: bool,
+        gray: [f32; 4],
+    },
+    /// A coloured lens filter: multiply by `color` (straight linear RGB)
+    /// at `density` (0..1), optionally restoring each pixel's luminance.
+    PhotoFilter {
+        color: [f32; 3],
+        density: f32,
+        preserve_luminosity: bool,
+    },
+    /// CMYK shifts (each -1..1) per colour family, in the order of
+    /// [`SELECTIVE_FAMILIES`]. `absolute` adds ink outright; relative
+    /// (the default) scales the ink a pixel already has.
+    SelectiveColor {
+        colors: [[f32; 4]; 9],
+        #[serde(default)]
+        absolute: bool,
+    },
 }
+
+/// The colour families of [`Adjustment::SelectiveColor`], in storage order.
+pub const SELECTIVE_FAMILIES: [&str; 9] = [
+    "Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas", "Whites", "Neutrals", "Blacks",
+];
 
 /// One channel's levels remap (same parameters as the master set).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -134,6 +173,44 @@ impl Adjustment {
             Adjustment::Vibrance { .. } => "Vibrance",
             Adjustment::Threshold { .. } => "Threshold",
             Adjustment::Posterize { .. } => "Posterize",
+            Adjustment::GradientMap { .. } => "Gradient Map",
+            Adjustment::ChannelMixer { .. } => "Channel Mixer",
+            Adjustment::PhotoFilter { .. } => "Photo Filter",
+            Adjustment::SelectiveColor { .. } => "Selective Color",
+        }
+    }
+
+    pub fn gradient_map_default() -> Self {
+        Adjustment::GradientMap {
+            gradient: Gradient::default(),
+            reverse: false,
+        }
+    }
+
+    /// The identity mix (Photoshop's 40/40/20 waits in the gray row).
+    pub fn channel_mixer_default() -> Self {
+        Adjustment::ChannelMixer {
+            red: [1.0, 0.0, 0.0, 0.0],
+            green: [0.0, 1.0, 0.0, 0.0],
+            blue: [0.0, 0.0, 1.0, 0.0],
+            monochrome: false,
+            gray: [0.4, 0.4, 0.2, 0.0],
+        }
+    }
+
+    /// Warming Filter (85) at 25%, luminosity preserved — Photoshop's default.
+    pub fn photo_filter_default() -> Self {
+        Adjustment::PhotoFilter {
+            color: [236u8, 138, 0].map(|c| srgb_decode(c as f32 / 255.0)),
+            density: 0.25,
+            preserve_luminosity: true,
+        }
+    }
+
+    pub fn selective_color_default() -> Self {
+        Adjustment::SelectiveColor {
+            colors: [[0.0; 4]; 9],
+            absolute: false,
         }
     }
 
@@ -251,6 +328,20 @@ impl Adjustment {
                     self.gamma_space(),
                 )
             }
+            Adjustment::GradientMap { gradient, reverse } => {
+                // Gamma luminance → the ramp's colour, decoded to linear
+                // once here so the per-pixel cost is a lookup.
+                let g = if *reverse {
+                    gradient.reversed()
+                } else {
+                    gradient.clone()
+                };
+                let mut map = Box::new([[0f32; 3]; LUT_SIZE]);
+                for (out, c) in map.iter_mut().zip(g.sample_gamma(LUT_SIZE)) {
+                    *out = [srgb_decode(c[0]), srgb_decode(c[1]), srgb_decode(c[2])];
+                }
+                CompiledAdjustment::Map(map)
+            }
             other => CompiledAdjustment::Direct(other.clone(), other.gamma_space()),
         }
     }
@@ -326,6 +417,8 @@ pub enum CompiledAdjustment {
     Lut(Box<[f32; LUT_SIZE]>),
     /// Separate tables for R, G and B (per-channel Levels).
     LutRgb(Box<[[f32; LUT_SIZE]; 3]>),
+    /// Gamma luminance → linear RGB (Gradient Map).
+    Map(Box<[[f32; 3]; LUT_SIZE]>),
 }
 
 impl CompiledAdjustment {
@@ -342,6 +435,21 @@ impl CompiledAdjustment {
                 lut_lookup(&luts[1], rgb[1]),
                 lut_lookup(&luts[2], rgb[2]),
             ],
+            CompiledAdjustment::Map(map) => {
+                let y = luminance(fast_encode(rgb[0]), fast_encode(rgb[1]), fast_encode(rgb[2]));
+                let p = y.clamp(0.0, 1.0) * (LUT_SIZE - 1) as f32;
+                let i = p as usize;
+                if i >= LUT_SIZE - 1 {
+                    return map[LUT_SIZE - 1];
+                }
+                let t = p - i as f32;
+                let (a, b) = (map[i], map[i + 1]);
+                [
+                    a[0] + (b[0] - a[0]) * t,
+                    a[1] + (b[1] - a[1]) * t,
+                    a[2] + (b[2] - a[2]) * t,
+                ]
+            }
             CompiledAdjustment::Direct(adj, gamma) => {
                 let [r, g, b] = if *gamma {
                     [fast_encode(rgb[0]), fast_encode(rgb[1]), fast_encode(rgb[2])]
@@ -431,16 +539,131 @@ impl CompiledAdjustment {
                     let v = if luminance(r, g, b) >= level { 1.0 } else { 0.0 };
                     [v, v, v]
                 }
+                Adjustment::ChannelMixer {
+                    red,
+                    green,
+                    blue,
+                    monochrome,
+                    gray,
+                } => {
+                    let mix = |w: [f32; 4]| (r * w[0] + g * w[1] + b * w[2] + w[3]).clamp(0.0, 1.0);
+                    if monochrome {
+                        let v = mix(gray);
+                        [v, v, v]
+                    } else {
+                        [mix(red), mix(green), mix(blue)]
+                    }
+                }
+                Adjustment::PhotoFilter {
+                    color,
+                    density,
+                    preserve_luminosity,
+                } => {
+                    let f = [
+                        fast_encode(color[0]),
+                        fast_encode(color[1]),
+                        fast_encode(color[2]),
+                    ];
+                    let d = density.clamp(0.0, 1.0);
+                    let c = [r, g, b];
+                    let out: [f32; 3] = std::array::from_fn(|i| c[i] + (c[i] * f[i] - c[i]) * d);
+                    if preserve_luminosity {
+                        set_lum(out, luminance(r, g, b))
+                    } else {
+                        out
+                    }
+                }
+                Adjustment::SelectiveColor { colors, absolute } => {
+                    selective_color([r, g, b], &colors, absolute)
+                }
                 Adjustment::Invert
                 | Adjustment::BrightnessContrast { .. }
                 | Adjustment::Posterize { .. }
                 | Adjustment::Levels { .. }
-                | Adjustment::Curves { .. } => {
+                | Adjustment::Curves { .. }
+                | Adjustment::GradientMap { .. } => {
                     unreachable!("per-channel adjustments compile to a LUT")
                 }
             }
         }
     }
+}
+
+/// Set a colour's luminance to `l`, clipping back into gamut while keeping
+/// the luminance (the W3C "SetLum" of the luminosity blend mode).
+fn set_lum(c: [f32; 3], l: f32) -> [f32; 3] {
+    let d = l - luminance(c[0], c[1], c[2]);
+    let c = c.map(|v| v + d);
+    let l = luminance(c[0], c[1], c[2]);
+    let n = c[0].min(c[1]).min(c[2]);
+    let x = c[0].max(c[1]).max(c[2]);
+    let mut out = c;
+    if n < 0.0 && l - n > 1e-6 {
+        out = out.map(|v| l + (v - l) * l / (l - n));
+    }
+    if x > 1.0 && x - l > 1e-6 {
+        out = out.map(|v| l + (v - l) * (1.0 - l) / (x - l));
+    }
+    out.map(|v| v.clamp(0.0, 1.0))
+}
+
+/// How much a gamma colour belongs to each selective-colour family, in
+/// [`SELECTIVE_FAMILIES`] order. Hue families take the gap between the
+/// two strongest (primaries) or two weakest (secondaries) channels, as
+/// Photoshop does; whites, blacks and neutrals take how far the colour
+/// sits above, below and around mid grey.
+pub fn selective_weights([r, g, b]: [f32; 3]) -> [f32; 9] {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let mid = r + g + b - max - min;
+    let mut w = [0f32; 9];
+    // Primaries: the top channel, by its lead over the middle one.
+    if r >= g && r >= b {
+        w[0] = max - mid;
+    } else if g >= b {
+        w[2] = max - mid;
+    } else {
+        w[4] = max - mid;
+    }
+    // Secondaries: the bottom channel, by the middle one's lead over it.
+    if b <= r && b <= g {
+        w[1] = mid - min;
+    } else if r <= g {
+        w[3] = mid - min;
+    } else {
+        w[5] = mid - min;
+    }
+    w[6] = ((min - 0.5) * 2.0).max(0.0);
+    w[7] = (1.0 - ((max - 0.5).abs() + (min - 0.5).abs())).max(0.0);
+    w[8] = ((0.5 - max) * 2.0).max(0.0);
+    w
+}
+
+/// Selective Color on gamma RGB. Each channel's ink is its complement
+/// (cyan = 1 − red, …); a family's C/M/Y shift adds to that ink outright
+/// (absolute) or in proportion to it (relative), and its black shift
+/// scales the result by `1 − k` (absolute) or `1 − k·K` with
+/// `K = 1 − max(r, g, b)`, the pixel's own black (relative). Each
+/// family's change is weighted by [`selective_weights`]; changes add up.
+fn selective_color(c: [f32; 3], colors: &[[f32; 4]; 9], absolute: bool) -> [f32; 3] {
+    let w = selective_weights(c);
+    let k0 = 1.0 - c[0].max(c[1]).max(c[2]);
+    let mut out = c;
+    for (f, adj) in colors.iter().enumerate() {
+        if w[f] <= 0.0 || adj.iter().all(|v| *v == 0.0) {
+            continue;
+        }
+        let k = adj[3].clamp(-1.0, 1.0);
+        let dark = if absolute { 1.0 - k } else { 1.0 - k * k0 };
+        for i in 0..3 {
+            let a = adj[i].clamp(-1.0, 1.0);
+            let ink = 1.0 - c[i];
+            let ink2 = if absolute { ink + a } else { ink * (1.0 + a) }.clamp(0.0, 1.0);
+            let v = ((1.0 - ink2) * dark).clamp(0.0, 1.0);
+            out[i] += w[f] * (v - c[i]);
+        }
+    }
+    out.map(|v| v.clamp(0.0, 1.0))
 }
 
 fn build_lut(f: impl Fn(f32) -> f32) -> Box<[f32; LUT_SIZE]> {
@@ -809,5 +1032,152 @@ mod tests {
             blue: 0.0,
         };
         assert!(close(in_gamma(&red_only, [0.3, 1.0, 1.0])[0], 0.3));
+    }
+
+    #[test]
+    fn gradient_map_follows_gamma_luminance() {
+        // Black → red: mid grey (sRGB 0.5, linear 0.2140) lands halfway,
+        // on sRGB (0.5, 0, 0) — linear (0.2140, 0, 0).
+        let gm = Adjustment::GradientMap {
+            gradient: Gradient::two([0.0; 3], [1.0, 0.0, 0.0]),
+            reverse: false,
+        };
+        assert!(matches!(gm.compile(), CompiledAdjustment::Map(_)));
+        let out = gm.apply([srgb_decode(0.5); 3]);
+        assert!(close(out[0], 0.2140) && out[1] == 0.0 && out[2] == 0.0, "{out:?}");
+        assert!(close(in_gamma(&gm, [0.0; 3])[0], 0.0) && close(in_gamma(&gm, [1.0; 3])[0], 1.0));
+        // Pure green's gamma luminance is 0.7152, so it lands there.
+        let g = in_gamma(&gm, [0.0, 1.0, 0.0]);
+        assert!(close(g[0], 0.7152) && close(g[1], 0.0), "{g:?}");
+        // Reverse runs the ramp the other way: black becomes red.
+        let rev = Adjustment::GradientMap {
+            gradient: Gradient::two([0.0; 3], [1.0, 0.0, 0.0]),
+            reverse: true,
+        };
+        let o = in_gamma(&rev, [0.0; 3]);
+        assert!(close(o[0], 1.0) && close(o[1], 0.0), "{o:?}");
+        assert!(close(in_gamma(&rev, [0.25; 3])[0], 0.75));
+    }
+
+    #[test]
+    fn channel_mixer_mixes_gamma_channels() {
+        let id = Adjustment::channel_mixer_default();
+        let o = in_gamma(&id, [0.2, 0.6, 0.9]);
+        assert!(close(o[0], 0.2) && close(o[1], 0.6) && close(o[2], 0.9), "{o:?}");
+        // Swap red and blue, add 10% to green.
+        let swap = Adjustment::ChannelMixer {
+            red: [0.0, 0.0, 1.0, 0.0],
+            green: [0.0, 1.0, 0.0, 0.1],
+            blue: [1.0, 0.0, 0.0, 0.0],
+            monochrome: false,
+            gray: [0.4, 0.4, 0.2, 0.0],
+        };
+        let o = in_gamma(&swap, [0.2, 0.6, 0.9]);
+        assert!(close(o[0], 0.9) && close(o[1], 0.7) && close(o[2], 0.2), "{o:?}");
+        // Monochrome: 50/50/0 + 10% constant on (0.2, 0.6, 0.9) gives 0.5.
+        let mono = Adjustment::ChannelMixer {
+            red: [1.0, 0.0, 0.0, 0.0],
+            green: [0.0, 1.0, 0.0, 0.0],
+            blue: [0.0, 0.0, 1.0, 0.0],
+            monochrome: true,
+            gray: [0.5, 0.5, 0.0, 0.1],
+        };
+        let o = in_gamma(&mono, [0.2, 0.6, 0.9]);
+        assert!(o.iter().all(|v| close(*v, 0.5)), "{o:?}");
+        // Sums past 100% clip at white.
+        let hot = Adjustment::ChannelMixer {
+            red: [2.0, 0.0, 0.0, 0.0],
+            green: [0.0, 1.0, 0.0, 0.0],
+            blue: [0.0, 0.0, 1.0, 0.0],
+            monochrome: false,
+            gray: [0.4, 0.4, 0.2, 0.0],
+        };
+        assert!(close(in_gamma(&hot, [0.7, 0.0, 0.0])[0], 1.0));
+    }
+
+    #[test]
+    fn photo_filter_multiplies_then_restores_luminance() {
+        // Filter sRGB (1, 0.5, 0) at 50% on mid grey: halfway to the product.
+        let f = |preserve| Adjustment::PhotoFilter {
+            color: [1.0, srgb_decode(0.5), 0.0],
+            density: 0.5,
+            preserve_luminosity: preserve,
+        };
+        let o = in_gamma(&f(false), [0.5; 3]);
+        assert!(
+            close(o[0], 0.5) && close(o[1], 0.375) && close(o[2], 0.25),
+            "{o:?}"
+        );
+        // Preserving luminosity shifts it back up to luminance 0.5:
+        // (0.5, 0.375, 0.25) has 0.39255, so +0.10745 per channel.
+        let o = in_gamma(&f(true), [0.5; 3]);
+        assert!(
+            close(o[0], 0.60745) && close(o[1], 0.48245) && close(o[2], 0.35745),
+            "{o:?}"
+        );
+        assert!(close(luminance(o[0], o[1], o[2]), 0.5));
+        // Zero density is the identity.
+        let none = Adjustment::PhotoFilter {
+            color: [1.0, 0.0, 0.0],
+            density: 0.0,
+            preserve_luminosity: false,
+        };
+        assert!(close(in_gamma(&none, [0.3, 0.6, 0.9])[1], 0.6));
+    }
+
+    #[test]
+    fn selective_color_targets_one_family() {
+        let w = selective_weights([1.0, 0.5, 0.0]);
+        assert!(
+            close(w[0], 0.5) && close(w[1], 0.5),
+            "orange is half red, half yellow: {w:?}"
+        );
+        assert_eq!(selective_weights([0.5; 3])[7], 1.0, "mid grey is all neutral");
+        assert_eq!(selective_weights([1.0; 3])[6], 1.0, "white is all white");
+        assert_eq!(selective_weights([0.0; 3])[8], 1.0, "black is all black");
+
+        let with = |family: usize, cmyk: [f32; 4], absolute: bool| {
+            let mut colors = [[0.0; 4]; 9];
+            colors[family] = cmyk;
+            Adjustment::SelectiveColor { colors, absolute }
+        };
+        // Reds +100% cyan: absolute fills the red channel's ink (pure red
+        // goes black); relative scales an ink of zero, so nothing happens.
+        let o = in_gamma(&with(0, [1.0, 0.0, 0.0, 0.0], true), [1.0, 0.0, 0.0]);
+        assert!(o.iter().all(|v| close(*v, 0.0)), "{o:?}");
+        let o = in_gamma(&with(0, [1.0, 0.0, 0.0, 0.0], false), [1.0, 0.0, 0.0]);
+        assert!(close(o[0], 1.0), "{o:?}");
+        // ... and the reds setting leaves yellow alone.
+        let o = in_gamma(&with(0, [1.0, 0.0, 0.0, 0.0], true), [1.0, 1.0, 0.0]);
+        assert!(close(o[0], 1.0) && close(o[1], 1.0), "{o:?}");
+        // Neutrals +50% black on mid grey: absolute halves it (0.25);
+        // relative scales by the grey's own black 0.5 → × 0.75 = 0.375.
+        let o = in_gamma(&with(7, [0.0, 0.0, 0.0, 0.5], true), [0.5; 3]);
+        assert!(o.iter().all(|v| close(*v, 0.25)), "{o:?}");
+        let o = in_gamma(&with(7, [0.0, 0.0, 0.0, 0.5], false), [0.5; 3]);
+        assert!(o.iter().all(|v| close(*v, 0.375)), "{o:?}");
+        // Yellows −100% yellow turns pure yellow white.
+        let o = in_gamma(&with(1, [0.0, 0.0, -1.0, 0.0], true), [1.0, 1.0, 0.0]);
+        assert!(o.iter().all(|v| close(*v, 1.0)), "{o:?}");
+    }
+
+    #[test]
+    fn new_adjustments_round_trip_through_json() {
+        for adj in [
+            Adjustment::gradient_map_default(),
+            Adjustment::channel_mixer_default(),
+            Adjustment::photo_filter_default(),
+            Adjustment::selective_color_default(),
+        ] {
+            let json = serde_json::to_string(&adj).unwrap();
+            let back: Adjustment = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, adj, "{json}");
+        }
+        // Optional flags may be missing.
+        let gm: Adjustment = serde_json::from_str(
+            r#"{"type":"gradient-map","gradient":{"stops":[{"pos":0,"color":[0,0,0]},{"pos":1,"color":[1,1,1]}]}}"#,
+        )
+        .unwrap();
+        assert!(matches!(gm, Adjustment::GradientMap { reverse: false, .. }));
     }
 }

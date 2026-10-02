@@ -343,7 +343,10 @@ impl GpuCompositor {
                 !l.clip
                     && l.effects.is_empty()
                     && match &l.content {
-                        LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) => true,
+                        LayerContent::Pixel(_)
+                        | LayerContent::Text(_)
+                        | LayerContent::Smart(_)
+                        | LayerContent::Fill(_) => true,
                         LayerContent::Group(c) => ok(c),
                         LayerContent::Filter(_) => false,
                         LayerContent::Adjustment(a) => {
@@ -424,7 +427,10 @@ impl GpuCompositor {
             }
             let mask = layer.mask.as_ref().filter(|m| m.enabled);
             match &layer.content {
-                LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) => {
+                LayerContent::Pixel(_)
+                | LayerContent::Text(_)
+                | LayerContent::Smart(_)
+                | LayerContent::Fill(_) => {
                     let Some(store) = layer.raster_store() else {
                         continue;
                     };
@@ -907,5 +913,56 @@ mod tests {
             !GpuCompositor::supports(&doc2),
             "per-pixel adjustments stay on the CPU"
         );
+    }
+
+    /// Fill layers are plain raster tiles to the GPU path; the newer
+    /// adjustments (gradient map table, per-pixel maths) stay on the CPU.
+    #[test]
+    fn gpu_renders_fill_layers_and_declines_the_newer_adjustments() {
+        use lumenply_doc::{Fill, Gradient, GradientStyle};
+        let mut doc = Document::new(300, 200);
+        doc.add_pixel_layer("bg");
+        let id = doc.alloc_id();
+        let mut grad = Layer::fill(
+            id,
+            Fill::gradient(Gradient::two([0.9, 0.2, 0.1], [0.1, 0.3, 0.9])),
+        );
+        if let Some(lumenply_doc::fill::FillLayer {
+            fill: Fill::Gradient { style, angle, .. },
+            ..
+        }) = grad.fill_layer_mut()
+        {
+            *style = GradientStyle::Diamond;
+            *angle = 25.0;
+        }
+        grad.opacity = 0.8;
+        doc.add_layer(grad);
+        let id = doc.alloc_id();
+        let mut solid = Layer::fill(
+            id,
+            Fill::Solid {
+                color: [0.2, 0.7, 0.3],
+            },
+        );
+        solid.blend = BlendMode::Screen;
+        let mut m = Mask::hide_all();
+        m.fill_rect(Rect::new(40, 30, 120, 90), 1.0);
+        solid.mask = Some(m);
+        doc.add_layer(solid);
+        crate::fill::refresh_stale(&mut doc);
+        assert!(GpuCompositor::supports(&doc));
+        assert_matches_cpu(&doc, "fill layers");
+
+        for adj in [
+            Adjustment::gradient_map_default(),
+            Adjustment::channel_mixer_default(),
+            Adjustment::photo_filter_default(),
+            Adjustment::selective_color_default(),
+        ] {
+            let mut d = Document::new(16, 16);
+            d.add_pixel_layer("bg");
+            d.add_adjustment(adj.clone());
+            assert!(!GpuCompositor::supports(&d), "{} stays on the CPU", adj.name());
+        }
     }
 }

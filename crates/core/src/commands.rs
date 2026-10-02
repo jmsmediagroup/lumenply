@@ -18,6 +18,8 @@ pub use lumenply_doc::selection_ops::EdgeOp;
 pub use crate::crop::CropCanvas;
 pub use crate::guides::{AddGuide, ClearGuides, MoveGuide, RemoveGuide};
 
+pub use crate::fill_cmds::{AddFillLayer, SetFill};
+
 /// Add an empty pixel layer (or one filled from a raster) on top of the stack.
 pub struct AddPixelLayer {
     pub name: String,
@@ -263,6 +265,7 @@ impl Command for RasterizeLayer {
     }
 
     fn apply(&self, doc: &mut Document) -> EditResult {
+        let (w, h) = (doc.width, doc.height);
         let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
         let store = match &mut l.content {
             LayerContent::Text(t) => {
@@ -273,6 +276,10 @@ impl Command for RasterizeLayer {
                 .cache
                 .take()
                 .unwrap_or_else(|| lumenply_render::transform_store(&sm.source, &sm.transform)),
+            LayerContent::Fill(f) => match f.cache.take() {
+                Some(c) => c,
+                None => lumenply_render::fill::render_fill(&f.fill, Rect::new(0, 0, w, h), false),
+            },
             _ => {
                 return Err(EditError::Invalid(format!(
                     "layer {} cannot be rasterized",
@@ -825,11 +832,28 @@ impl Command for TransformLayer {
         if self.transform.inverse().is_none() {
             return Err(EditError::Invalid("transform is not invertible".into()));
         }
+        let (w, h, float) = (doc.width, doc.height, doc.float_mode);
         let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
         match &mut l.content {
             LayerContent::Pixel(store) => {
                 *store = lumenply_render::transform_store(store, &self.transform);
             }
+            // A fill covers the canvas: moving shifts a gradient's centre
+            // (and the mask, below); a solid fill only moves its mask.
+            LayerContent::Fill(f) => match self.transform.integer_translation() {
+                Some((dx, dy)) => {
+                    if let lumenply_doc::Fill::Gradient { offset, .. } = &mut f.fill {
+                        offset[0] += dx as f32 / w.max(1) as f32;
+                        offset[1] += dy as f32 / h.max(1) as f32;
+                        lumenply_render::fill::refresh_cache(f, w, h, float);
+                    }
+                }
+                None => {
+                    return Err(EditError::Invalid(
+                        "rasterize the fill layer before scaling or rotating it".into(),
+                    ))
+                }
+            },
             LayerContent::Smart(sm) => smart_compose(sm, &self.transform),
             LayerContent::Text(t) => match self.transform.integer_translation() {
                 Some((dx, dy)) => {

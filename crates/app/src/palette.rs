@@ -153,6 +153,8 @@ const ACTIONS: &[(&str, &str)] = &[
     ("New guide...", "new-guide"),
     ("Show or hide the grid", "grid"),
     ("Snap on or off", "snap"),
+    ("New fill layer: solid color", "fill-solid"),
+    ("New fill layer: gradient", "fill-gradient"),
 ];
 
 /// The id of the destructive filter dialog for a filter kind.
@@ -476,8 +478,12 @@ impl App {
             },
             "unclip" if !layer.is_some_and(|l| l.clip) => Some("This layer is not clipped"),
             "clear-guides" if doc.guides.is_empty() => Some("There are no guides"),
-            "rasterize" if !layer.is_some_and(|l| l.smart_layer().is_some() || l.text_layer().is_some()) => {
-                Some("Select a smart object or text layer first")
+            "rasterize"
+                if !layer.is_some_and(|l| {
+                    l.smart_layer().is_some() || l.text_layer().is_some() || l.fill_layer().is_some()
+                }) =>
+            {
+                Some("Select a smart object, text or fill layer first")
             }
             "sel-expand" | "sel-contract" | "sel-border" | "sel-smooth" | "sel-grow" | "sel-similar"
                 if !selection =>
@@ -604,6 +610,7 @@ impl App {
                     self.run(&RasterizeLayer { layer });
                 }
             }
+            "fill-solid" | "fill-gradient" => self.add_fill_layer(id == "fill-gradient"),
             "delete-layer" => self.delete_active(),
             "layer-up" => self.reorder_active(1),
             "layer-down" => self.reorder_active(-1),
@@ -731,7 +738,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 101); // + liquify, layer ops, locks, align, select modify, fill, view aids
+        assert_eq!(n, 103); // + liquify, layer ops, locks, align, select modify, fill, view aids, fill layers
     }
 
     #[test]

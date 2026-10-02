@@ -8,6 +8,7 @@ impl App {
         section_title(ui, "ADD ABOVE ACTIVE LAYER");
         let mut add_adj: Option<Adjustment> = None;
         let mut add_filter: Option<Filter> = None;
+        let mut add_fill: Option<bool> = None;
         // Raised by the dock's `raise_controls`, so hover and press show.
         let chip = |ui: &mut egui::Ui, label: &str, tip: String| {
             ui.add(egui::Button::new(RichText::new(label).size(12.0)).min_size(egui::vec2(64.0, 24.0)))
@@ -59,21 +60,33 @@ impl App {
                     // Two columns keep this menu short enough to open below
                     // the chips instead of covering the bars above.
                     ui.horizontal_top(|ui| {
-                        ui.vertical(|ui| {
-                            menu_heading(ui, "ADJUSTMENT");
-                            for (name, adj) in adjustment_presets() {
-                                if menu_item(ui, name, "") {
-                                    add_adj = Some(adj);
-                                    ui.close_menu();
+                        // Fifteen adjustments: two columns of them.
+                        let adjs = adjustment_presets();
+                        let half = adjs.len().div_ceil(2);
+                        for (col, chunk) in adjs.chunks(half).enumerate() {
+                            ui.vertical(|ui| {
+                                menu_heading(ui, if col == 0 { "ADJUSTMENT" } else { " " });
+                                for (name, adj) in chunk {
+                                    if menu_item(ui, name, "") {
+                                        add_adj = Some(adj.clone());
+                                        ui.close_menu();
+                                    }
                                 }
-                            }
-                        });
-                        ui.add_space(6.0);
+                            });
+                            ui.add_space(6.0);
+                        }
                         ui.vertical(|ui| {
                             menu_heading(ui, "LIVE FILTER");
                             for (name, f) in filter_presets() {
                                 if menu_item(ui, name, "") {
                                     add_filter = Some(f);
+                                    ui.close_menu();
+                                }
+                            }
+                            menu_heading(ui, "FILL LAYER");
+                            for (name, gradient) in [("Solid color", false), ("Gradient", true)] {
+                                if menu_item(ui, name, "") {
+                                    add_fill = Some(gradient);
                                     ui.close_menu();
                                 }
                             }
@@ -87,6 +100,9 @@ impl App {
         }
         if let Some(f) = add_filter {
             self.add_filter_layer(f);
+        }
+        if let Some(gradient) = add_fill {
+            self.add_fill_layer(gradient);
         }
     }
 
@@ -134,8 +150,10 @@ impl App {
                     | LayerContent::Text(_)
                     | LayerContent::Smart(_)
                     | LayerContent::Group(_)
+                    | LayerContent::Fill(_)
             );
         let is_smart = layer.smart_layer().is_some();
+        let fill = layer.fill_layer().map(|f| f.fill.clone());
         // The painted bounds' centre: transforms pivot about it.
         let pivot = layer
             .raster_store()
@@ -218,6 +236,9 @@ impl App {
         } else if let Some(adj) = adj {
             section_title(ui, &adj.name().to_uppercase());
             self.adjustment_ui(ui, id, adj);
+        } else if let Some(f) = fill {
+            section_title(ui, &f.name().to_uppercase());
+            self.fill_ui(ui, id, f);
         } else if let Some(mut f) = filt {
             section_title(ui, &format!("{} · LIVE", f.name().to_uppercase()));
             let before = f.clone();
@@ -829,6 +850,7 @@ impl App {
                 finished |= slider_row_ex(ui, "Levels", &mut v, 2.0..=32.0, "", o);
                 *levels = (v.round() as u32).clamp(2, 32);
             }
+            other => finished |= crate::adjust_ui::adjustment_ui(ui, id, other),
         }
         if adj != before {
             self.run_coalescing(
