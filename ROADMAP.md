@@ -83,7 +83,9 @@ None of these could be tested in the container.
 
 - [ ] GPU compositor with wgpu: blend modes and adjustments in WGSL, CPU path as reference,
       equality tests between the two
-- [ ] Per-layer composite caching so editing a top layer doesn't recomposite everything below
+- [x] Per-layer composite caching (render::BelowCache): consecutive edits to one
+      layer reuse the composited backdrop below it; live filters above the edit
+      fall back to the reference path
 - [x] Faster thumbnails (group composites only rebuild when the change touches them)
 - [ ] Multithreaded filters inside a tile; SIMD for blend loops
 - [x] Memory: cap undo history by bytes (Editor::history_memory_limit, default 1 GiB)

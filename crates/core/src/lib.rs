@@ -37,6 +37,13 @@ pub trait Command {
     fn affected(&self, _doc: &Document) -> Option<nge_tiles::Rect> {
         None
     }
+    /// The single layer whose data or properties this command changes, if it
+    /// can name one. `None` means the change may touch anything (structure,
+    /// several layers, the canvas). Front ends use it to keep composite
+    /// caches warm across consecutive edits to the same layer.
+    fn target_layer(&self) -> Option<LayerId> {
+        None
+    }
 }
 
 struct Snapshot {
@@ -134,6 +141,8 @@ pub struct Editor {
     coalesce_key: Option<String>,
     /// Area changed by the last successful edit/undo/redo; `None` = whole canvas.
     last_affected: Option<nge_tiles::Rect>,
+    /// Layer targeted by the last successful edit (see [`Command::target_layer`]).
+    last_target: Option<LayerId>,
 }
 
 impl Editor {
@@ -146,12 +155,19 @@ impl Editor {
             history_memory_limit: 1 << 30, // 1 GiB
             coalesce_key: None,
             last_affected: None,
+            last_target: None,
         }
     }
 
     /// Canvas area touched by the most recent change (see [`Command::affected`]).
     pub fn last_affected(&self) -> Option<nge_tiles::Rect> {
         self.last_affected
+    }
+
+    /// Layer the most recent edit targeted, when it could name one. Reset
+    /// to `None` by undo, redo and jumps.
+    pub fn last_target_layer(&self) -> Option<LayerId> {
+        self.last_target
     }
 
     /// Estimated bytes the undo stack keeps alive beyond the live document.
@@ -180,6 +196,7 @@ impl Editor {
             cmd.apply(&mut next)?;
             compact_storage(&mut next);
             self.last_affected = cmd.affected(&self.doc);
+            self.last_target = cmd.target_layer();
             // The whole drag undoes in one go, so its undo step covers
             // every tick so far, and its memory estimate follows the
             // moving document.
@@ -207,6 +224,7 @@ impl Editor {
         cmd.apply(&mut next)?;
         compact_storage(&mut next);
         self.last_affected = cmd.affected(&self.doc);
+        self.last_target = cmd.target_layer();
         let prev = std::mem::replace(&mut self.doc, next);
         let bytes = delta_bytes(&prev, &self.doc);
         self.undo.push(Snapshot {
@@ -228,6 +246,7 @@ impl Editor {
     /// Returns the label of the undone command.
     pub fn undo(&mut self) -> Option<String> {
         self.coalesce_key = None;
+        self.last_target = None;
         let snap = self.undo.pop()?;
         self.last_affected = snap.affected;
         let current = std::mem::replace(&mut self.doc, snap.doc);
@@ -243,6 +262,7 @@ impl Editor {
     /// Returns the label of the redone command.
     pub fn redo(&mut self) -> Option<String> {
         self.coalesce_key = None;
+        self.last_target = None;
         let snap = self.redo.pop()?;
         self.last_affected = snap.affected;
         let current = std::mem::replace(&mut self.doc, snap.doc);

@@ -13,10 +13,12 @@
 //! formulas will be ported to WGSL for the GPU path; this CPU path stays as
 //! the reference and fallback.
 
+pub mod cache;
 pub mod filters;
 pub mod text;
 pub mod transform;
 
+pub use cache::BelowCache;
 pub use filters::{apply_filter, filter_raster, Filter};
 pub use transform::{sample_bilinear, transform_mask, transform_store};
 
@@ -60,7 +62,22 @@ pub fn composite_raster(doc: &Document) -> Raster {
 
 /// Render one tile of a layer stack. Returns `None` when nothing touches it.
 pub fn render_tile(layers: &[Layer], coord: TileCoord, canvas: Rect) -> Option<Tile> {
-    let mut dst: Option<Tile> = None;
+    render_tile_over(None, layers, coord, canvas)
+}
+
+/// Render one tile of a layer stack over an existing backdrop.
+///
+/// Note: a live [`LayerContent::Filter`] layer in `layers` reads its
+/// backdrop from the slice alone and would ignore `backdrop`, so callers
+/// must not pass one when the slice contains a visible filter layer
+/// (see [`cache::BelowCache`], which falls back to the full path then).
+pub fn render_tile_over(
+    backdrop: Option<Tile>,
+    layers: &[Layer],
+    coord: TileCoord,
+    canvas: Rect,
+) -> Option<Tile> {
+    let mut dst: Option<Tile> = backdrop;
     for (idx, layer) in layers.iter().enumerate() {
         if !layer.visible || layer.opacity <= 0.0 {
             continue;

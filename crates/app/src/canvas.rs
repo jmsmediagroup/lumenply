@@ -71,6 +71,7 @@ impl App {
     // ---- rendering ---------------------------------------------------------------------
 
     pub(crate) fn refresh(&mut self, ctx: &egui::Context) {
+        let mut below = std::mem::take(&mut self.below);
         let doc = self.editor.doc();
         let canvas = doc.canvas();
         let partial_ok = self
@@ -82,7 +83,7 @@ impl App {
             Some(r) if partial_ok => {
                 let r = r.intersect(&canvas);
                 if !r.is_empty() {
-                    let patch = nge_render::composite_rect(doc, r).to_raster(r);
+                    let patch = below.composite_rect(doc, r).to_raster(r);
                     if let Some(flat) = self.last_flat.as_mut() {
                         for y in 0..r.h {
                             for x in 0..r.w {
@@ -101,7 +102,7 @@ impl App {
                 self.refresh_thumbs(ctx, Some(r));
             }
             _ => {
-                let flat = nge_render::composite_raster(doc);
+                let flat = below.composite_rect(doc, canvas).to_raster(canvas);
                 let img = raster_to_image(&flat);
                 self.last_flat = Some(flat);
                 upload(&mut self.canvas_tex, ctx, "canvas", img, nearest_when_zoomed());
@@ -118,6 +119,7 @@ impl App {
                 self.refresh_thumbs(ctx, None);
             }
         }
+        self.below = below;
         self.capture_history_thumb(ctx);
         self.dirty = false;
     }
@@ -192,11 +194,15 @@ impl App {
 
     /// Upload a preview of `doc` for the given area (or the whole canvas).
     pub(crate) fn preview(&mut self, ctx: &egui::Context, doc: &Document, area: Option<Rect>) {
+        // Previews change only the active layer, so the cached backdrop
+        // below it applies to the preview document too.
+        let mut below = std::mem::take(&mut self.below);
+        below.note_change(doc, self.active);
         match (area, self.canvas_tex.as_mut()) {
             (Some(r), Some(tex)) => {
                 let r = r.intersect(&doc.canvas());
                 if !r.is_empty() {
-                    let patch = nge_render::composite_rect(doc, r).to_raster(r);
+                    let patch = below.composite_rect(doc, r).to_raster(r);
                     tex.set_partial(
                         [r.x as usize, r.y as usize],
                         raster_to_image(&patch),
@@ -205,10 +211,12 @@ impl App {
                 }
             }
             _ => {
-                let img = composite_image(doc);
+                let canvas = doc.canvas();
+                let img = raster_to_image(&below.composite_rect(doc, canvas).to_raster(canvas));
                 upload(&mut self.canvas_tex, ctx, "canvas", img, nearest_when_zoomed());
             }
         }
+        self.below = below;
     }
 
     // ---- canvas ---------------------------------------------------------------------
@@ -1012,10 +1020,6 @@ pub(crate) fn to_color32(p: nge_tiles::Rgba) -> Color32 {
     let enc = |v: f32| lut[(v.clamp(0.0, 1.0) * 4095.0 + 0.5) as usize];
     let [r, g, b, a] = p.to_straight();
     Color32::from_rgba_unmultiplied(enc(r), enc(g), enc(b), (a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
-}
-
-pub(crate) fn composite_image(doc: &Document) -> egui::ColorImage {
-    raster_to_image(&nge_render::composite_raster(doc))
 }
 
 pub(crate) fn raster_to_image(flat: &Raster) -> egui::ColorImage {

@@ -135,6 +135,8 @@ struct App {
     palette: Option<Palette>,
     /// Set once the user confirms quitting with unsaved changes.
     allow_close: bool,
+    /// Composite cache for everything below the layer being edited.
+    below: nge_render::BelowCache,
 }
 
 impl App {
@@ -234,6 +236,7 @@ impl App {
             hist_thumbs: Vec::new(),
             palette: None,
             allow_close: false,
+            below: nge_render::BelowCache::new(),
             filter_previewed: false,
             status,
         };
@@ -311,6 +314,8 @@ impl App {
         match self.editor.execute(cmd) {
             Ok(()) => {
                 let r = self.editor.last_affected();
+                let t = self.editor.last_target_layer();
+                self.below.note_change(self.editor.doc(), t);
                 self.mark(r);
                 self.fix_active();
             }
@@ -322,6 +327,8 @@ impl App {
         match self.editor.execute_coalescing(cmd, key) {
             Ok(()) => {
                 let r = self.editor.last_affected();
+                let t = self.editor.last_target_layer();
+                self.below.note_change(self.editor.doc(), t);
                 self.mark(r);
             }
             Err(e) => self.status = e.to_string(),
@@ -333,6 +340,7 @@ impl App {
         self.path = path;
         self.saved_rev = self.editor.history().len();
         self.hist_thumbs.clear();
+        self.below = nge_render::BelowCache::new();
         self.cancel_interaction();
         self.select_top();
         self.mark(None);

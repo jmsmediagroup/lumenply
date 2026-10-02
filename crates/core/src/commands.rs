@@ -158,6 +158,10 @@ pub struct SetText {
 }
 
 impl Command for SetText {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         "Edit text".into()
     }
@@ -196,6 +200,10 @@ pub struct RasterizeLayer {
 }
 
 impl Command for RasterizeLayer {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         "Rasterize".into()
     }
@@ -226,6 +234,10 @@ pub struct SetFilter {
 }
 
 impl Command for SetFilter {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         format!("Edit {}", self.filter.name())
     }
@@ -252,6 +264,10 @@ pub struct SetAdjustment {
 }
 
 impl Command for SetAdjustment {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         format!("Edit {}", self.adjustment.name())
     }
@@ -278,6 +294,10 @@ pub struct SetMask {
 }
 
 impl Command for SetMask {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         if self.mask.is_some() {
             "Set mask"
@@ -388,6 +408,10 @@ pub struct Fill {
 }
 
 impl Command for Fill {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         "Fill".into()
     }
@@ -429,6 +453,10 @@ pub struct Clear {
 }
 
 impl Command for Clear {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         "Clear".into()
     }
@@ -472,6 +500,10 @@ pub struct MaskFromSelection {
 }
 
 impl Command for MaskFromSelection {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         "Mask from selection".into()
     }
@@ -495,6 +527,10 @@ pub struct RenameLayer {
 }
 
 impl Command for RenameLayer {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         "Rename layer".into()
     }
@@ -560,6 +596,10 @@ pub struct MoveLayer {
 }
 
 impl Command for MoveLayer {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         "Move".into()
     }
@@ -594,6 +634,10 @@ impl TransformLayer {
 }
 
 impl Command for TransformLayer {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         if self.transform.integer_translation().is_some() {
             "Move".into()
@@ -639,6 +683,10 @@ pub struct FlipLayer {
 }
 
 impl Command for FlipLayer {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         if self.horizontal {
             "Flip horizontal"
@@ -671,6 +719,10 @@ pub struct AddMask {
 }
 
 impl Command for AddMask {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         "Add mask".into()
     }
@@ -691,6 +743,10 @@ pub struct RemoveMask {
 }
 
 impl Command for RemoveMask {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         "Remove mask".into()
     }
@@ -708,6 +764,10 @@ pub struct SetMaskEnabled {
 }
 
 impl Command for SetMaskEnabled {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         if self.enabled {
             "Enable mask"
@@ -806,6 +866,10 @@ pub struct SetCollapsed {
 }
 
 impl Command for SetCollapsed {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         if self.collapsed {
             "Collapse group"
@@ -829,6 +893,10 @@ pub struct ApplyFilter {
 }
 
 impl Command for ApplyFilter {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         self.filter.name().into()
     }
@@ -1089,6 +1157,10 @@ pub struct BucketFill {
 }
 
 impl Command for BucketFill {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         "Paint bucket".into()
     }
@@ -1137,6 +1209,10 @@ pub struct CloneStroke {
 }
 
 impl Command for CloneStroke {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         "Clone stamp".into()
     }
@@ -1328,6 +1404,10 @@ pub struct GradientFill {
 }
 
 impl Command for GradientFill {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         "Gradient".into()
     }
@@ -1396,6 +1476,10 @@ pub struct SetOpacity {
 }
 
 impl Command for SetOpacity {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         "Set opacity".into()
     }
@@ -1413,6 +1497,10 @@ pub struct SetBlendMode {
 }
 
 impl Command for SetBlendMode {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         format!("Blend mode: {}", self.blend.name())
     }
@@ -1430,6 +1518,10 @@ pub struct SetVisible {
 }
 
 impl Command for SetVisible {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         if self.visible { "Show layer" } else { "Hide layer" }.into()
     }
@@ -1512,6 +1604,10 @@ pub fn stroke_bounds(brush: &Brush, points: &[StrokePoint], canvas: Rect) -> Rec
 }
 
 impl Command for PaintStroke {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         match self.brush.mode {
             BrushMode::Paint => "Paint stroke".into(),
@@ -1556,6 +1652,10 @@ pub struct PaintMask {
 }
 
 impl Command for PaintMask {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
     fn label(&self) -> String {
         "Paint mask".into()
     }
