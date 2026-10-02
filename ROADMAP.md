@@ -131,8 +131,8 @@ None of these could be tested in the container.
       selection-from-path, saved in .nge
 - [~] Path editing: drag anchors and handles after placing (click selects a
       node and shows its handles, symmetric handles stay mirrored, Backspace
-      deletes the node). Still to do: multiple named paths, holes via
-      even-odd across subpaths
+      deletes the node); holes via even-odd across subpaths (fill and
+      path-to-selection). Still to do: multiple named paths
 - [x] Skew and non-uniform scale in free transform (edge handles stretch one
       axis, mirror across the centre; W/H/Rotate/Skew fields in the options bar)
 - [ ] Perspective and warp transforms (non-affine; needs a mesh resampler)

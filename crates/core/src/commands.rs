@@ -1562,16 +1562,18 @@ fn work_path_coverage(doc: &Document) -> EditResult<Mask> {
         .as_ref()
         .ok_or_else(|| EditError::Invalid("there is no path; draw one with the pen first".into()))?;
     let mut mask = Mask::hide_all();
-    let mut any = false;
-    for (pts, _closed) in path.flatten() {
-        if pts.len() >= 3 {
-            mask.fill_polygon(&pts, 1.0);
-            any = true;
-        }
-    }
-    if !any {
+    // All subpaths fill as one even-odd region, so a subpath drawn inside
+    // another cuts a hole instead of unioning.
+    let polys: Vec<Vec<(f32, f32)>> = path
+        .flatten()
+        .into_iter()
+        .map(|(pts, _closed)| pts)
+        .filter(|pts| pts.len() >= 3)
+        .collect();
+    if polys.is_empty() {
         return Err(EditError::Invalid("the path has no fillable subpath".into()));
     }
+    mask.fill_polygons(&polys, 1.0);
     Ok(mask)
 }
 
@@ -3408,6 +3410,45 @@ mod tests {
         }
         .apply(&mut Document::new(8, 8))
         .is_err());
+    }
+
+    #[test]
+    fn subpath_inside_another_cuts_a_hole() {
+        use lumenply_doc::{PathNode, SubPath, VectorPath};
+        // A donut: outer square 10..90, inner square 30..70, both as
+        // corner-node subpaths of one path. Even-odd fill leaves the ring.
+        let square = |a: f32, b: f32| SubPath {
+            closed: true,
+            nodes: vec![
+                PathNode::corner(a, a),
+                PathNode::corner(b, a),
+                PathNode::corner(b, b),
+                PathNode::corner(a, b),
+            ],
+        };
+        let mut doc = Document::new(100, 100);
+        let id = doc.add_pixel_layer("L");
+        doc.work_path = Some(VectorPath {
+            subpaths: vec![square(10.0, 90.0), square(30.0, 70.0)],
+        });
+        FillPath {
+            layer: id,
+            color: [0.0, 0.5, 1.0, 1.0],
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let px = doc.layer(id).unwrap().pixels().unwrap();
+        assert!(px.get_pixel(20, 50).a > 0.99, "ring filled");
+        assert!(px.get_pixel(50, 50).a < 1e-5, "hole stays empty");
+        assert!(px.get_pixel(5, 50).a < 1e-5, "outside stays empty");
+        // Selection from the same path shows the same hole.
+        PathToSelection {
+            op: CombineOp::Replace,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let sel = doc.selection.as_ref().unwrap();
+        assert!(sel.value(20, 50) > 0.99 && sel.value(50, 50) < 1e-5);
     }
 
     #[test]

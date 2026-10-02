@@ -109,22 +109,21 @@ impl Mask {
     /// Set the inside of a closed polygon to `v`, antialiased by 4×
     /// vertical supersampling of a scanline fill (even-odd rule).
     pub fn fill_polygon(&mut self, points: &[(f32, f32)], v: f32) {
-        if points.len() < 3 {
+        self.fill_polygons(&[points.to_vec()], v);
+    }
+
+    /// Fill several closed polygons as one even-odd region: crossings are
+    /// counted across all of them, so a subpath inside another cuts a hole.
+    pub fn fill_polygons(&mut self, polys: &[Vec<(f32, f32)>], v: f32) {
+        let pts = || polys.iter().filter(|p| p.len() >= 3).flatten();
+        if pts().count() < 3 {
             return;
         }
         let v = v.clamp(0.0, 1.0);
-        let min_y = points.iter().map(|p| p.1).fold(f32::INFINITY, f32::min).floor() as i32;
-        let max_y = points
-            .iter()
-            .map(|p| p.1)
-            .fold(f32::NEG_INFINITY, f32::max)
-            .ceil() as i32;
-        let min_x = points.iter().map(|p| p.0).fold(f32::INFINITY, f32::min).floor() as i32;
-        let max_x = points
-            .iter()
-            .map(|p| p.0)
-            .fold(f32::NEG_INFINITY, f32::max)
-            .ceil() as i32;
+        let min_y = pts().map(|p| p.1).fold(f32::INFINITY, f32::min).floor() as i32;
+        let max_y = pts().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max).ceil() as i32;
+        let min_x = pts().map(|p| p.0).fold(f32::INFINITY, f32::min).floor() as i32;
+        let max_x = pts().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max).ceil() as i32;
         if max_x <= min_x || max_y <= min_y {
             return;
         }
@@ -136,13 +135,15 @@ impl Mask {
             let mut any = false;
             for s in 0..SUB {
                 let sy = py as f32 + (s as f32 + 0.5) / SUB as f32;
-                // Crossings of this sample line with polygon edges.
+                // Crossings of this sample line with every polygon's edges.
                 let mut xs: Vec<f32> = Vec::new();
-                for i in 0..points.len() {
-                    let (x0, y0) = points[i];
-                    let (x1, y1) = points[(i + 1) % points.len()];
-                    if (y0 <= sy && y1 > sy) || (y1 <= sy && y0 > sy) {
-                        xs.push(x0 + (sy - y0) / (y1 - y0) * (x1 - x0));
+                for points in polys.iter().filter(|p| p.len() >= 3) {
+                    for i in 0..points.len() {
+                        let (x0, y0) = points[i];
+                        let (x1, y1) = points[(i + 1) % points.len()];
+                        if (y0 <= sy && y1 > sy) || (y1 <= sy && y0 > sy) {
+                            xs.push(x0 + (sy - y0) / (y1 - y0) * (x1 - x0));
+                        }
                     }
                 }
                 xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
