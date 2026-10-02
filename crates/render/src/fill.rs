@@ -63,7 +63,8 @@ pub fn refresh_cache(f: &mut FillLayer, width: u32, height: u32, float: bool) {
 
 /// Bring every fill layer's cache up to date with the document's canvas:
 /// missing caches (a freshly loaded or built document) and caches rendered
-/// for another canvas size are rebuilt; the rest are left alone.
+/// for another canvas size are rebuilt; the rest are left alone. Shape
+/// layers' caches are brought up to date too (see [`crate::shape`]).
 pub fn refresh_stale(doc: &mut Document) {
     let (w, h, float) = (doc.width, doc.height, doc.float_mode);
     doc.for_each_layer_mut(|l: &mut Layer| {
@@ -73,6 +74,7 @@ pub fn refresh_stale(doc: &mut Document) {
             }
         }
     });
+    crate::shape::refresh_stale(doc);
 }
 
 #[cfg(test)]

@@ -1025,7 +1025,8 @@ fn collect_records(
             LayerContent::Pixel(_)
             | LayerContent::Text(_)
             | LayerContent::Smart(_)
-            | LayerContent::Fill(_) => {
+            | LayerContent::Fill(_)
+            | LayerContent::Shape(_) => {
                 let owned_store;
                 // A fill layer carries its settings block next to its
                 // rendered pixels, so readers without fills still see it.
@@ -1061,6 +1062,15 @@ fn collect_records(
                             .cache
                             .clone()
                             .unwrap_or_else(|| lumenply_render::transform_store(&s.source, &s.transform));
+                        &owned_store
+                    }
+                    LayerContent::Shape(sh) => {
+                        warnings.push(format!("shape layer '{}' was exported as pixels", l.name));
+                        owned_store = sh
+                            .cache
+                            .clone()
+                            .filter(|_| sh.cache_canvas == (canvas.w, canvas.h))
+                            .unwrap_or_else(|| lumenply_render::shape::render_shape(sh, canvas, false));
                         &owned_store
                     }
                     _ => unreachable!(),

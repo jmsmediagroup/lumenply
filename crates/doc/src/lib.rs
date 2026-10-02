@@ -83,6 +83,7 @@ pub mod guides;
 pub mod locks;
 pub mod selection;
 pub mod selection_ops;
+pub mod shape;
 
 pub use adjust::{Adjustment, CompiledAdjustment, LevelsChannel};
 pub use fill::{Fill, FillLayer, GradientStyle};
@@ -90,6 +91,7 @@ pub use gradient::{Gradient, GradientStop};
 pub use guides::{Guide, Orientation};
 pub use locks::LayerLocks;
 pub use selection::{CombineOp, Selection};
+pub use shape::{CustomShape, ShapeGeometry, ShapeKind, ShapeLayer, ShapeParams, ShapeStroke, StrokeAlign};
 
 /// A pixel filter: destructive when applied to a layer, live when it is a
 /// [`LayerContent::Filter`] layer. Kernels live in `lumenply-render`.
@@ -563,6 +565,9 @@ pub enum LayerContent {
     /// A solid colour or gradient over the whole canvas, composited like
     /// pixels from its derived cache (see [`fill`]).
     Fill(FillLayer),
+    /// An editable vector shape with a fill and a stroke, composited
+    /// from its derived cache (see [`shape`]).
+    Shape(ShapeLayer),
 }
 
 /// Non-destructive pixels: the source never changes; edits compose into
@@ -653,6 +658,7 @@ impl Layer {
             LayerContent::Text(t) => t.cache.as_ref(),
             LayerContent::Smart(s) => s.cache.as_ref(),
             LayerContent::Fill(f) => f.cache.as_ref(),
+            LayerContent::Shape(s) => s.cache.as_ref(),
             _ => None,
         }
     }
@@ -672,6 +678,25 @@ impl Layer {
     pub fn fill_layer_mut(&mut self) -> Option<&mut FillLayer> {
         match &mut self.content {
             LayerContent::Fill(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn shape(id: LayerId, shape: ShapeLayer) -> Self {
+        let name = shape.geometry.name().to_string();
+        Layer::with_content(id, name, LayerContent::Shape(shape))
+    }
+
+    pub fn shape_layer(&self) -> Option<&ShapeLayer> {
+        match &self.content {
+            LayerContent::Shape(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn shape_layer_mut(&mut self) -> Option<&mut ShapeLayer> {
+        match &mut self.content {
+            LayerContent::Shape(s) => Some(s),
             _ => None,
         }
     }

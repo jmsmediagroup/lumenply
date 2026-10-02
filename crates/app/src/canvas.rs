@@ -278,6 +278,11 @@ impl App {
                         thumbs.push((l.id, thumb_image(canvas, |x, y| store.get_pixel(x, y))))
                     }
                 }
+                LayerContent::Shape(sh) => {
+                    if let Some(store) = &sh.cache {
+                        thumbs.push((l.id, thumb_image(canvas, |x, y| store.get_pixel(x, y))))
+                    }
+                }
                 LayerContent::Group(children) if area.is_none_or(|r| group_dirty(children, r)) => {
                     let flat = lumenply_render::composite_layers(children, canvas, canvas);
                     thumbs.push((l.id, thumb_image(canvas, |x, y| flat.get_pixel(x, y))));

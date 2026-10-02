@@ -127,6 +127,11 @@ enum ContentRecord {
     Fill {
         fill: lumenply_doc::Fill,
     },
+    /// Shape layer: the vector outline, transform, fill and stroke; the
+    /// pixels re-render on load.
+    Shape {
+        shape: lumenply_doc::ShapeLayer,
+    },
 }
 
 /// Write a document to `path`, replacing any existing file.
@@ -218,6 +223,11 @@ fn write_layer<W: Write + std::io::Seek>(
             }
         }
         LayerContent::Fill(f) => ContentRecord::Fill { fill: f.fill.clone() },
+        LayerContent::Shape(sh) => {
+            let mut shape = sh.clone();
+            shape.cache = None;
+            ContentRecord::Shape { shape }
+        }
     };
 
     let mask = match &layer.mask {
@@ -398,6 +408,15 @@ fn read_layer<R: Read + std::io::Seek>(
         }
         // The cache renders once the canvas size is known (end of `load`).
         ContentRecord::Fill { fill } => LayerContent::Fill(lumenply_doc::FillLayer::new(fill.clone())),
+        // Also rendered at the end of `load`.
+        ContentRecord::Shape { shape } => {
+            if !shape.geometry.is_finite() || !shape.transform.coeffs().iter().all(|v| v.is_finite()) {
+                return Err(ProjectError::Corrupt("shape numbers are not finite".into()));
+            }
+            let mut shape = shape.clone();
+            shape.cache = None;
+            LayerContent::Shape(shape)
+        }
     };
 
     let mask = match &r.mask {
