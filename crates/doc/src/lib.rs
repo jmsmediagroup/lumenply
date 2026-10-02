@@ -333,6 +333,9 @@ pub struct TextLayer {
     pub italic: bool,
     #[serde(default)]
     pub align: TextAlign,
+    /// Extra space between glyphs, in thousandths of an em (Photoshop units).
+    #[serde(default)]
+    pub tracking: f32,
     #[serde(skip)]
     pub cache: Option<TileStore>,
 }
@@ -360,6 +363,7 @@ impl PartialEq for TextLayer {
             && self.font == o.font
             && self.italic == o.italic
             && self.align == o.align
+            && self.tracking == o.tracking
     }
 }
 
@@ -376,6 +380,7 @@ impl TextLayer {
             font: String::new(),
             italic: false,
             align: TextAlign::Left,
+            tracking: 0.0,
             cache: None,
         }
     }

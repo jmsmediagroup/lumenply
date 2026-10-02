@@ -543,6 +543,8 @@ impl App {
                 .text("Size"),
         );
         finished |= rs.drag_stopped() || (rs.changed() && !rs.dragged());
+        let rt = ui.add(egui::Slider::new(&mut t.tracking, -200.0..=800.0).text("Tracking"));
+        finished |= rt.drag_stopped() || (rt.changed() && !rt.dragged());
         ui.horizontal(|ui| {
             if ui.checkbox(&mut t.bold, "Bold").changed() {
                 finished = true;

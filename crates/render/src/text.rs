@@ -140,12 +140,17 @@ pub fn rasterize(t: &TextLayer) -> TileStore {
         glyphs: Vec<fontdue::layout::GlyphPosition>,
         width: f32,
     }
+    let track_px = t.tracking / 1000.0 * t.size;
     let mut lines = Vec::new();
     for line in t.text.split('\n') {
         let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
         layout.reset(&fontdue::layout::LayoutSettings::default());
         layout.append(&fonts_arr, &TextStyle::new(line, t.size, 0));
-        let glyphs: Vec<_> = layout.glyphs().clone();
+        let mut glyphs: Vec<_> = layout.glyphs().clone();
+        // Tracking: widen each inter-glyph gap by a fixed fraction of an em.
+        for (n, g) in glyphs.iter_mut().enumerate() {
+            g.x += n as f32 * track_px;
+        }
         let width = glyphs.iter().map(|g| g.x + g.width as f32).fold(0.0f32, f32::max);
         lines.push(Line { glyphs, width });
     }
@@ -261,6 +266,27 @@ mod tests {
         // The short second line moves with the alignment too: under Right,
         // the "X" must end near 300 as well, so the bounds stay anchored.
         assert!(rb.w >= lb.w - 2 && rb.w <= lb.w + 2, "same overall width");
+    }
+
+    #[test]
+    fn tracking_widens_and_tightens_the_line() {
+        let base = TextLayer::new("lllll", 0.0, 60.0, 40.0, [0.0, 0.0, 0.0, 1.0]);
+        let w = |tracking: f32| {
+            rasterize(&TextLayer {
+                tracking,
+                ..base.clone()
+            })
+            .content_bounds()
+            .unwrap()
+            .w
+        };
+        let (normal, wide, tight) = (w(0.0), w(200.0), w(-50.0));
+        // 4 gaps × 200/1000 em × 40 px = 32 px wider.
+        assert!(
+            (wide as i32 - normal as i32 - 32).abs() <= 2,
+            "tracking 200 adds 4 × 8 px: {normal} → {wide}"
+        );
+        assert!(tight < normal, "negative tracking tightens: {normal} → {tight}");
     }
 
     #[test]
