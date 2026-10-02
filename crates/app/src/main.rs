@@ -413,7 +413,27 @@ impl App {
         self.active = id;
         self.selected = id.into_iter().collect();
         self.editing_mask = false;
-        self.xform = None;
+        // Dropping a live transform must also drop its canvas preview, or
+        // the stale transformed texture lingers over the untouched document.
+        if self.xform.take().is_some() {
+            self.mark(None);
+        }
+    }
+
+    /// Drop any in-progress canvas interaction (drag, stroke, lasso, clone
+    /// source, free transform). Called when the document is replaced.
+    fn cancel_interaction(&mut self) {
+        self.drag = None;
+        self.drag_start = None;
+        self.stroke.clear();
+        self.lasso.clear();
+        self.clone_source = None;
+        self.clone_picking = true;
+        self.clone_offset = (0, 0);
+        self.move_offset = (0, 0);
+        if self.xform.take().is_some() {
+            self.mark(None);
+        }
     }
 
     fn select_top(&mut self) {
@@ -467,6 +487,7 @@ impl App {
     fn set_doc(&mut self, editor: Editor, path: Option<PathBuf>) {
         self.editor = editor;
         self.path = path;
+        self.cancel_interaction();
         self.select_top();
         self.mark(None);
         self.view_cmd = Some(ViewCmd::Fit);
@@ -1009,6 +1030,12 @@ impl App {
         if ctx.wants_keyboard_input() {
             return;
         }
+        // A modal dialog owns the keyboard even when no text field has
+        // focus, and a shortcut firing mid-drag would edit the document
+        // under an in-progress stroke or move.
+        if self.dialog.is_some() || self.drag.is_some() {
+            return;
+        }
         if self.xform.is_some() {
             let (enter, esc) = ctx.input(|i| (i.key_pressed(Key::Enter), i.key_pressed(Key::Escape)));
             if enter {
@@ -1017,6 +1044,9 @@ impl App {
             if esc {
                 self.cancel_free_transform();
             }
+            // Everything else (undo, delete, tool switches, grouping) would
+            // act on the document underneath the live transform preview.
+            return;
         }
         let (redo, invert, undo, all, none, save, open, xform, group) = ctx.input_mut(|i| {
             (
@@ -2874,6 +2904,14 @@ impl App {
                 } else if resp.clicked_by(primary) && paintable {
                     if let (Some(layer), Some(p)) = (self.active, resp.interact_pointer_pos()) {
                         let (x, y) = to_doc(p);
+                        if self.tool == Tool::Clone {
+                            // A single dab locks its own offset, same as a
+                            // drag; reusing the previous stroke's offset
+                            // would clone from the wrong place.
+                            if let Some((sx, sy)) = self.clone_source {
+                                self.clone_offset = ((sx - x).round() as i32, (sy - y).round() as i32);
+                            }
+                        }
                         let cmd = self.stroke_command(layer, vec![StrokePoint::new(x, y, 1.0)]);
                         self.run(cmd.as_ref());
                     }
@@ -2932,7 +2970,7 @@ impl App {
                         self.lasso.push(q);
                     }
                 }
-                if ctx.input(|i| i.key_pressed(Key::Escape)) {
+                if !ctx.wants_keyboard_input() && ctx.input(|i| i.key_pressed(Key::Escape)) {
                     self.lasso.clear();
                 }
             }
