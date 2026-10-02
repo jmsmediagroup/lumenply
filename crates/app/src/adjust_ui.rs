@@ -312,12 +312,15 @@ impl App {
     /// foreground → background gradient, above the active layer (masked
     /// by the selection, if any).
     pub(crate) fn add_fill_layer(&mut self, gradient: bool) {
+        // The swatches hold sRGB; fills store linear light.
+        let (fg, bg) = (
+            self.brush_rgb.map(srgb_to_linear_f),
+            self.bg_rgb.map(srgb_to_linear_f),
+        );
         let fill = if gradient {
-            Fill::gradient(Gradient::two(self.brush_rgb, self.bg_rgb))
+            Fill::gradient(Gradient::two(fg, bg))
         } else {
-            Fill::Solid {
-                color: self.brush_rgb,
-            }
+            Fill::Solid { color: fg }
         };
         let new_id = self.editor.doc().next_id();
         let mut cmd = AddFillLayer::new(fill);
