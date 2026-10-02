@@ -19,6 +19,7 @@
 use nge_doc::{CompiledAdjustment, Document, Layer, LayerContent, Mask};
 use nge_tiles::{Raster, Rect, TileStore};
 
+#[cfg(test)]
 use crate::composite_rect as cpu_composite_rect;
 
 /// Largest rect side the GPU path will take on in one call.
