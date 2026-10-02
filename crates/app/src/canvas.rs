@@ -111,6 +111,16 @@ impl App {
                         );
                     }
                 }
+                if self.quick_mask {
+                    let img = quick_mask_overlay(self.editor.doc());
+                    upload(
+                        &mut self.overlay_tex,
+                        ctx,
+                        "selection",
+                        img,
+                        egui::TextureOptions::NEAREST,
+                    );
+                }
                 self.refresh_thumbs(ctx, Some(r));
             }
             _ => {
@@ -118,22 +128,34 @@ impl App {
                 let img = raster_to_image(&flat);
                 self.last_flat = Some(flat);
                 upload(&mut self.canvas_tex, ctx, "canvas", img, nearest_when_zoomed());
-                self.sel_points = selection_outline_points(self.editor.doc()).unwrap_or_default();
-                // The static texture stays as the fallback for outlines too
-                // big to animate shape-by-shape.
-                if self.sel_points.len() > ANTS_MAX {
-                    match selection_overlay(self.editor.doc()) {
-                        Some(img) => upload(
-                            &mut self.overlay_tex,
-                            ctx,
-                            "selection",
-                            img,
-                            egui::TextureOptions::NEAREST,
-                        ),
-                        None => self.overlay_tex = None,
-                    }
+                if self.quick_mask {
+                    self.sel_points.clear();
+                    let img = quick_mask_overlay(self.editor.doc());
+                    upload(
+                        &mut self.overlay_tex,
+                        ctx,
+                        "selection",
+                        img,
+                        egui::TextureOptions::NEAREST,
+                    );
                 } else {
-                    self.overlay_tex = None;
+                    self.sel_points = selection_outline_points(self.editor.doc()).unwrap_or_default();
+                    // The static texture stays as the fallback for outlines too
+                    // big to animate shape-by-shape.
+                    if self.sel_points.len() > ANTS_MAX {
+                        match selection_overlay(self.editor.doc()) {
+                            Some(img) => upload(
+                                &mut self.overlay_tex,
+                                ctx,
+                                "selection",
+                                img,
+                                egui::TextureOptions::NEAREST,
+                            ),
+                            None => self.overlay_tex = None,
+                        }
+                    } else {
+                        self.overlay_tex = None;
+                    }
                 }
                 self.refresh_thumbs(ctx, None);
             }
@@ -827,7 +849,9 @@ impl App {
                         return;
                     }
                 }
-                let paintable = if self.editing_mask {
+                let paintable = if self.quick_mask {
+                    true
+                } else if self.editing_mask {
                     self.active_has_mask()
                 } else {
                     self.active_is_pixel()
@@ -866,6 +890,20 @@ impl App {
                         let cmd = self.stroke_command(layer, self.stroke.clone());
                         let mut preview = self.editor.doc().clone();
                         if cmd.apply(&mut preview).is_ok() {
+                            if self.quick_mask {
+                                // The stroke edits the selection, not pixels:
+                                // refresh the red overlay from the preview.
+                                let img = quick_mask_overlay(&preview);
+                                upload(
+                                    &mut self.overlay_tex,
+                                    ctx,
+                                    "selection",
+                                    img,
+                                    egui::TextureOptions::NEAREST,
+                                );
+                                self.stroke_drawn = self.stroke.len();
+                                return;
+                            }
                             // Catmull-Rom smoothing can bend the curve up to
                             // two points back, so repaint from there instead
                             // of the whole stroke: long strokes stay cheap.
@@ -1240,6 +1278,23 @@ pub(crate) fn selection_outline_points(doc: &Document) -> Option<Vec<(i32, i32)>
         }
     }
     Some(pts)
+}
+
+/// The quick-mask overlay: unselected areas tinted red, like the classic
+/// mode, so painting the selection reads as painting a mask.
+pub(crate) fn quick_mask_overlay(doc: &Document) -> egui::ColorImage {
+    let (w, h) = (doc.width as usize, doc.height as usize);
+    let mut pixels = vec![Color32::TRANSPARENT; w * h];
+    let sel = doc.selection.as_ref();
+    for (i, px) in pixels.iter_mut().enumerate() {
+        let (x, y) = ((i % w) as i32, (i / w) as i32);
+        let cover = sel.map_or(0.0, |s| s.value(x, y));
+        let a = ((1.0 - cover) * 128.0) as u8;
+        if a > 0 {
+            *px = Color32::from_rgba_unmultiplied(220, 40, 40, a);
+        }
+    }
+    egui::ColorImage { size: [w, h], pixels }
 }
 
 pub(crate) fn selection_overlay(doc: &Document) -> Option<egui::ColorImage> {

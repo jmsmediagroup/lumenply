@@ -1213,6 +1213,48 @@ pub enum SampleSource {
     Merged,
 }
 
+/// Paint the selection itself (quick-mask mode): the brush colour's
+/// luminance is the target coverage — white selects, black deselects,
+/// the eraser always deselects. The current selection never clips these
+/// strokes, since it is what they edit.
+pub struct PaintSelection {
+    pub brush: Brush,
+    pub points: Vec<StrokePoint>,
+}
+
+impl Command for PaintSelection {
+    fn label(&self) -> String {
+        "Paint selection".into()
+    }
+
+    fn affected(&self, doc: &Document) -> Option<Rect> {
+        Some(stroke_bounds(&self.brush, &self.points, doc.canvas()))
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        if self.points.is_empty() {
+            return Err(EditError::Invalid("stroke has no points".into()));
+        }
+        let canvas = doc.canvas();
+        let mut sel = doc.selection.take().unwrap_or_else(Selection::none);
+        let [cr, cg, cb, ca] = self.brush.color;
+        let target = match self.brush.mode {
+            BrushMode::Paint | BrushMode::Dodge => nge_doc::adjust::luminance(cr, cg, cb).clamp(0.0, 1.0),
+            BrushMode::Erase | BrushMode::Burn => 0.0,
+        };
+        for d in interpolate_dabs(&self.brush, &self.points) {
+            dab_coverage(&self.brush, d, canvas, None, |px, py, cover| {
+                let k = (ca * cover).clamp(0.0, 1.0);
+                let v = sel.coverage.value(px, py);
+                sel.coverage.set_value(px, py, v + (target - v) * k);
+            });
+        }
+        sel.coverage.prune_uniform();
+        doc.selection = Some(sel).filter(|s| !s.is_empty());
+        Ok(())
+    }
+}
+
 /// Select every pixel of the composite whose colour lies within
 /// `tolerance` of `color` (straight linear RGB, max channel difference),
 /// with coverage ramping down linearly across the top half of the
@@ -2748,6 +2790,60 @@ mod tests {
             .is_ok(),
             "a seed outside the canvas is a no-op"
         );
+    }
+
+    #[test]
+    fn painting_the_selection_selects_and_deselects() {
+        let mut doc = Document::new(64, 64);
+        let white = Brush {
+            radius: 6.0,
+            hardness: 1.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            ..Brush::default()
+        };
+        PaintSelection {
+            brush: white,
+            points: vec![StrokePoint::new(32.0, 32.0, 1.0)],
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let sel = doc.selection.as_ref().unwrap();
+        assert!((sel.value(32, 32) - 1.0).abs() < 1e-4, "painted selected");
+        assert!(sel.value(5, 5) <= 1e-5, "elsewhere empty");
+
+        // Black paint deselects, even though a selection exists (strokes
+        // must not be clipped by the selection they edit).
+        let black = Brush {
+            radius: 3.0,
+            hardness: 1.0,
+            color: [0.0, 0.0, 0.0, 1.0],
+            ..Brush::default()
+        };
+        PaintSelection {
+            brush: black,
+            points: vec![StrokePoint::new(32.0, 32.0, 1.0)],
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let sel = doc.selection.as_ref().unwrap();
+        assert!(sel.value(32, 32) <= 1e-4, "black deselects the centre");
+        assert!(sel.value(36, 32) > 0.5, "ring stays selected");
+
+        // Erasing everything clears the selection entirely.
+        let eraser = Brush {
+            radius: 40.0,
+            hardness: 1.0,
+            color: [0.0, 0.0, 0.0, 1.0],
+            mode: BrushMode::Erase,
+            ..Brush::default()
+        };
+        PaintSelection {
+            brush: eraser,
+            points: vec![StrokePoint::new(32.0, 32.0, 1.0)],
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert!(doc.selection.is_none(), "fully erased selection clears");
     }
 
     #[test]

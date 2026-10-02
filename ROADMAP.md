@@ -140,7 +140,8 @@ None of these could be tested in the container.
       to the static texture)
 - [x] Select by colour range (Select menu + palette: fuzziness slider with live
       marching-ants preview, soft graded edges, cancel undoes)
-- [ ] Quick-mask mode
+- [x] Quick-mask mode (Q): paint the selection under the classic red overlay —
+      white selects, black deselects, live while stroking
 - [ ] AI tools (local ONNX): subject select, object removal, upscaling — see project overview
 
 ## 6. Usability

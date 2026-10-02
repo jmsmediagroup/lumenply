@@ -62,6 +62,17 @@ impl App {
                             .family(egui::FontFamily::Name("semibold".into()))
                             .color(TEXT),
                     );
+                    if self.quick_mask {
+                        let red = Color32::from_rgb(0xE8, 0x5D, 0x5D);
+                        let chip = RichText::new("QUICK MASK").small().color(red);
+                        ui.add(
+                            egui::Button::new(chip)
+                                .fill(PANEL)
+                                .stroke(Stroke::new(1.0, red))
+                                .sense(Sense::hover()),
+                        )
+                        .on_hover_text("Painting edits the selection (Q exits)");
+                    }
                     if self.editing_mask {
                         let chip = RichText::new("ON MASK").small().color(ACCENT);
                         ui.add(

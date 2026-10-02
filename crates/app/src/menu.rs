@@ -345,6 +345,14 @@ impl App {
                     });
                     ui.menu_button("Select", |ui| {
                         if ui
+                            .selectable_label(self.quick_mask, "Quick mask   Q")
+                            .on_hover_text("Paint the selection: white selects, black deselects")
+                            .clicked()
+                        {
+                            self.toggle_quick_mask();
+                            ui.close_menu();
+                        }
+                        if ui
                             .button("Colour range...")
                             .on_hover_text("Select everything close to the brush colour")
                             .clicked()

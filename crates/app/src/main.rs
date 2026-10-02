@@ -216,6 +216,8 @@ struct App {
     histogram: [u32; histogram::BINS],
     /// User preferences (undo caps, canvas colour, autosave interval).
     prefs: session::Prefs,
+    /// Quick-mask mode: paint the selection itself under a red overlay.
+    quick_mask: bool,
     /// Selection boundary pixels for the animated marching ants.
     sel_points: Vec<(i32, i32)>,
     /// Layer row being dragged to a new position in the panel.
@@ -330,6 +332,7 @@ impl App {
             recent: session::load_recent(),
             histogram: [0; histogram::BINS],
             prefs: session::Prefs::load(),
+            quick_mask: false,
             sel_points: Vec::new(),
             layer_drag: None,
             last_title: String::new(),
@@ -579,8 +582,23 @@ impl App {
     }
 
     /// The command a brush stroke becomes: paint pixels, paint the mask, or clone.
+    /// Flip quick-mask mode; the overlay swaps between red coverage and
+    /// marching ants on the next refresh.
+    pub(crate) fn toggle_quick_mask(&mut self) {
+        self.quick_mask = !self.quick_mask;
+        self.status = if self.quick_mask {
+            "Quick mask: paint white to select, black to deselect (Q exits)".into()
+        } else {
+            "Quick mask off".into()
+        };
+        self.mark(None);
+    }
+
     fn stroke_command(&self, layer: LayerId, points: Vec<StrokePoint>) -> Box<dyn Command> {
         let mut brush = self.make_brush();
+        if self.quick_mask && self.tool != Tool::Clone {
+            return Box::new(PaintSelection { brush, points });
+        }
         if self.tool == Tool::Clone {
             brush.mode = BrushMode::Paint;
             let sample = if self.sample_merged {
@@ -685,9 +703,9 @@ impl App {
         if clear && self.active_is_pixel() {
             self.clear_active();
         }
-        let (tool, bigger, smaller, fit, actual, swap_colors, default_colors) = ctx.input(|i| {
+        let (tool, bigger, smaller, fit, actual, swap_colors, default_colors, quick_mask) = ctx.input(|i| {
             if i.modifiers.command || i.modifiers.alt {
-                return (None, false, false, false, false, false, false);
+                return (None, false, false, false, false, false, false, false);
             }
             let tool = if i.key_pressed(Key::V) {
                 Some(Tool::Move)
@@ -734,8 +752,12 @@ impl App {
                 i.key_pressed(Key::Num1),
                 i.key_pressed(Key::X),
                 i.key_pressed(Key::D),
+                i.key_pressed(Key::Q),
             )
         });
+        if quick_mask {
+            self.toggle_quick_mask();
+        }
         if swap_colors {
             std::mem::swap(&mut self.brush_rgb, &mut self.bg_rgb);
         }
