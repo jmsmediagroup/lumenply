@@ -225,9 +225,11 @@ None of these could be tested in the container.
 - [x] Liquify (Filter menu, Shift+Cmd+X): modal workspace with Forward warp,
       Reconstruct, Smooth, Twirl, Pucker, Bloat; advected displacement field,
       per-stroke undo, mesh view; bakes 12 MP in ~20 ms as one undo step
-- [~] Quick Selection: engine done (core::quick_select — geodesic segmentation
-      with a stroke colour model, colour-line edge refinement, ~0.2 s per stroke);
-      the tool in the rail is still to wire up
+- [x] Quick Selection (the Wand's sibling: Shift+W or the Wand bar's switch):
+      paint and the selection grows to edges — geodesic segmentation with a
+      stroke colour model and colour-line edge refinement (core::quick_select,
+      ~0.2 s per stroke); New turns into Add after the first stroke, Alt
+      subtracts, [ ] resize, one undo step per stroke
 - [x] Crop tool (C): whole-canvas frame (or the selection), 8 handles, move,
       straighten by dragging outside (fits inside the canvas), ratio presets +
       custom W:H + swap, Delete cropped pixels (off by default), checkerboard

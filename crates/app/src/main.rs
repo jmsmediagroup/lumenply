@@ -42,6 +42,7 @@ mod options_bar;
 mod palette;
 mod pen;
 mod properties;
+mod quick_select_tool;
 #[cfg(test)]
 mod select_fill_tests;
 mod session;
@@ -263,6 +264,8 @@ struct App {
     text_align: TextAlign,
     /// "New text" pressed: the next Text-tool click starts a new layer.
     text_new_armed: bool,
+    /// Quick Selection (the Wand tool's sibling mode) and its stroke.
+    quick: quick_select_tool::QuickSelectState,
     /// Filter > Liquify's workspace, while open (it replaces the editor UI).
     liquify: Option<Box<liquify::LiquifyState>>,
     /// The Camera Raw develop workspace, while a RAW file is being opened.
@@ -438,6 +441,7 @@ impl App {
             text_align: TextAlign::Left,
             text_new_armed: false,
             liquify: None,
+            quick: Default::default(),
             camera_raw: None,
             clone_source: None,
             clone_picking: true,
@@ -1134,13 +1138,26 @@ impl App {
             self.bg_rgb = [1.0; 3];
         }
         if let Some(t) = tool {
+            // Shift+W switches between the Magic Wand and Quick Selection.
+            if t == Tool::Wand && ctx.input(|i| i.modifiers.shift) {
+                self.quick.on = !self.quick.on;
+            }
             self.tool = t;
         }
+        let quick = self.tool == Tool::Wand && self.quick.on;
         if bigger {
-            self.brush.radius = (self.brush.radius * 1.25).min(200.0);
+            if quick {
+                self.quick.radius = (self.quick.radius * 1.25).min(300.0);
+            } else {
+                self.brush.radius = (self.brush.radius * 1.25).min(200.0);
+            }
         }
         if smaller {
-            self.brush.radius = (self.brush.radius / 1.25).max(1.0);
+            if quick {
+                self.quick.radius = (self.quick.radius / 1.25).max(1.0);
+            } else {
+                self.brush.radius = (self.brush.radius / 1.25).max(1.0);
+            }
         }
         if fit {
             self.view_cmd = Some(ViewCmd::Fit);

@@ -88,6 +88,10 @@ impl App {
             "click" => [glide(&t), vec![("press-l", t.clone()), ("release-l", t)]].concat(),
             "rclick" => [glide(&t), vec![("press-r", t.clone()), ("release-r", t)]].concat(),
             "hover" => [glide(&t), vec![("wait", String::new())]].concat(),
+            // A drag in parts: press=T, move=T (repeat), release=T.
+            "press" => [glide(&t), vec![("press-l", t)]].concat(),
+            "move" => vec![("move", t)],
+            "release" => vec![("release-l", t)],
             "wait" => vec![("wait", String::new())],
             "esc" => vec![("key", "Escape".into())],
             "key" => vec![("key", t)],
