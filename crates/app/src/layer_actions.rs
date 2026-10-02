@@ -344,7 +344,10 @@ impl App {
                 .map_or(LayerLocks::NONE, |p| effective_locks(doc, p))
         });
         let mut clicked = None;
-        ui.horizontal(|ui| {
+        // As tall as the toggles, no taller (`horizontal` would pad the
+        // row to the interact height and push the list down).
+        let row = egui::vec2(ui.available_width(), 18.0);
+        ui.allocate_ui_with_layout(row, egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.label(RichText::new("LAYERS").small().strong().color(MUTED));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
@@ -499,11 +502,11 @@ impl App {
     }
 }
 
-/// One 20 px lock toggle: the kind's line icon, warm-tinted while on.
+/// One 18 px lock toggle: the kind's line icon, warm-tinted while on.
 fn lock_toggle(ui: &mut egui::Ui, kind: LockKind, on: bool, enabled: bool, name: &str) -> egui::Response {
     // Disabled toggles still answer hovers (for the tooltip), never clicks.
     let sense = if enabled { Sense::click() } else { Sense::hover() };
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(20.0), sense);
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(18.0), sense);
     let p = ui.painter();
     if on {
         p.rect_filled(rect, 4.0, ACCENT_TINT);
@@ -516,7 +519,7 @@ fn lock_toggle(ui: &mut egui::Ui, kind: LockKind, on: bool, enabled: bool, name:
         (true, false) => MUTED,
         (false, false) => Color32::from_rgb(0x5A, 0x61, 0x6B),
     };
-    paint_lock_icon(p, rect.shrink(4.5), kind, ink);
+    paint_lock_icon(p, rect.shrink(4.0), kind, ink);
     let label = name.to_string();
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, &label));
     resp
