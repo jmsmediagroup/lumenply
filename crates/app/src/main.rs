@@ -807,5 +807,15 @@ fn filter_presets() -> Vec<(&'static str, Filter)> {
                 radius: 2.0,
             },
         ),
+        ("Add Noise", Filter::Noise { amount: 0.1 }),
+        (
+            "Motion Blur",
+            Filter::MotionBlur {
+                angle: 0.0,
+                distance: 20.0,
+            },
+        ),
+        ("Median", Filter::Median { radius: 2.0 }),
+        ("High Pass", Filter::HighPass { radius: 4.0 }),
     ]
 }

@@ -98,6 +98,25 @@ pub enum Filter {
         amount: f32,
         radius: f32,
     },
+    /// Monochromatic uniform noise, `amount` in 0..=1, seeded by pixel
+    /// position so tiles and re-renders agree.
+    Noise {
+        amount: f32,
+    },
+    /// Average along a straight line: `angle` in degrees, `distance` in
+    /// pixels.
+    MotionBlur {
+        angle: f32,
+        distance: f32,
+    },
+    /// Per-channel median in a square window (radius capped at 8 px).
+    Median {
+        radius: f32,
+    },
+    /// The detail above `radius`: mid grey plus source minus blur.
+    HighPass {
+        radius: f32,
+    },
 }
 
 impl Filter {
@@ -106,7 +125,16 @@ impl Filter {
             Filter::GaussianBlur { .. } => "Gaussian Blur",
             Filter::BoxBlur { .. } => "Box Blur",
             Filter::Sharpen { .. } => "Sharpen",
+            Filter::Noise { .. } => "Add Noise",
+            Filter::MotionBlur { .. } => "Motion Blur",
+            Filter::Median { .. } => "Median",
+            Filter::HighPass { .. } => "High Pass",
         }
+    }
+
+    /// Median windows are gathered per pixel, so keep them small.
+    pub fn median_radius(radius: f32) -> i32 {
+        (sane_radius(radius).round() as i32).clamp(1, 8)
     }
 
     /// How far (in pixels) the filter reads outside the area it produces.
@@ -115,6 +143,10 @@ impl Filter {
         match self {
             Filter::GaussianBlur { radius } | Filter::Sharpen { radius, .. } => box_radius(*radius) * 3,
             Filter::BoxBlur { radius } => sane_radius(*radius).round() as i32,
+            Filter::Noise { .. } => 0,
+            Filter::MotionBlur { distance, .. } => (sane_radius(*distance) / 2.0).ceil() as i32 + 1,
+            Filter::Median { radius } => Filter::median_radius(*radius),
+            Filter::HighPass { radius } => box_radius(*radius) * 3,
         }
     }
 }

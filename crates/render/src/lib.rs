@@ -149,7 +149,7 @@ pub fn render_tile_over(
                         src.set(x as u32, y as u32, below.get_pixel(sx, sy));
                     }
                 }
-                let filtered = filter_raster(&src, f);
+                let filtered = filter_raster(&src, f, (area.x, area.y));
                 let d = dst.get_or_insert_with(Tile::new);
                 let mask_px = mask.and_then(|m| m.tiles.tile(coord)).map(|t| t.pixels());
                 let mask_default = mask.map_or(1.0, |m| m.default);

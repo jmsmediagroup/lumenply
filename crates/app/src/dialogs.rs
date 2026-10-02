@@ -343,6 +343,43 @@ impl App {
                                 .add(egui::Slider::new(radius, 0.5..=20.0).suffix(" px").text("Radius"))
                                 .changed();
                         }
+                        Filter::Noise { amount } => {
+                            filter_changed |= ui
+                                .add(egui::Slider::new(amount, 0.0..=1.0).text("Amount"))
+                                .changed();
+                        }
+                        Filter::MotionBlur { angle, distance } => {
+                            filter_changed |= ui
+                                .add(egui::Slider::new(angle, -180.0..=180.0).suffix("°").text("Angle"))
+                                .changed();
+                            filter_changed |= ui
+                                .add(
+                                    egui::Slider::new(distance, 1.0..=200.0)
+                                        .suffix(" px")
+                                        .text("Distance"),
+                                )
+                                .changed();
+                        }
+                        Filter::Median { radius } => {
+                            filter_changed |= ui
+                                .add(
+                                    egui::Slider::new(radius, 1.0..=8.0)
+                                        .integer()
+                                        .suffix(" px")
+                                        .text("Radius"),
+                                )
+                                .changed();
+                        }
+                        Filter::HighPass { radius } => {
+                            filter_changed |= ui
+                                .add(
+                                    egui::Slider::new(radius, 0.5..=60.0)
+                                        .logarithmic(true)
+                                        .suffix(" px")
+                                        .text("Radius"),
+                                )
+                                .changed();
+                        }
                     },
                     Dialog::CanvasSize(w, h, anchor) => {
                         ui.horizontal(|ui| {

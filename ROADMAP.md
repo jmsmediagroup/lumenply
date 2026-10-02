@@ -121,7 +121,8 @@ None of these could be tested in the container.
 - [ ] Smart objects (embedded documents with transforms)
 - [ ] Clipping masks; pass-through blend mode for groups
 - [ ] Histogram panel; auto levels/colour
-- [ ] More filters: noise, motion blur, unsharp mask parameters, median, high pass
+- [x] More filters: noise (position-seeded), motion blur, median, high pass —
+      destructive or live, with dialog previews and palette entries
 - [ ] Text: font picker (system fonts), italic, alignment, kerning/tracking, text on canvas
 - [ ] Animated marching ants; quick-mask mode; select by colour range
 - [ ] AI tools (local ONNX): subject select, object removal, upscaling — see project overview

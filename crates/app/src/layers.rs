@@ -36,6 +36,10 @@ impl App {
                         Some(match f {
                             Filter::GaussianBlur { .. } | Filter::BoxBlur { .. } => "Live blur",
                             Filter::Sharpen { .. } => "Live sharpen",
+                            Filter::Noise { .. } => "Live noise",
+                            Filter::MotionBlur { .. } => "Live motion",
+                            Filter::Median { .. } => "Live median",
+                            Filter::HighPass { .. } => "Live high pass",
                         }),
                     ),
                     LayerContent::Text(_) => (Kind::Text, Some("Text")),

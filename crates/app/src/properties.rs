@@ -98,6 +98,19 @@ impl App {
                     finished |= slider_row(ui, "Amount", amount, 0.0..=5.0, "");
                     finished |= slider_row(ui, "Radius", radius, 0.5..=20.0, " px");
                 }
+                Filter::Noise { amount } => {
+                    finished |= slider_row(ui, "Amount", amount, 0.0..=1.0, "");
+                }
+                Filter::MotionBlur { angle, distance } => {
+                    finished |= slider_row(ui, "Angle", angle, -180.0..=180.0, "°");
+                    finished |= slider_row(ui, "Distance", distance, 1.0..=200.0, " px");
+                }
+                Filter::Median { radius } => {
+                    finished |= slider_row(ui, "Radius", radius, 1.0..=8.0, " px");
+                }
+                Filter::HighPass { radius } => {
+                    finished |= slider_row(ui, "Radius", radius, 0.5..=60.0, " px");
+                }
             }
             if f != before {
                 self.run_coalescing(&SetFilter { layer: id, filter: f }, &format!("filter-{id}"));

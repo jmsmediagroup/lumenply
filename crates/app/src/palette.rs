@@ -90,6 +90,10 @@ impl App {
                     Filter::GaussianBlur { .. } => "filter-gauss",
                     Filter::BoxBlur { .. } => "filter-box",
                     Filter::Sharpen { .. } => "filter-sharpen",
+                    Filter::Noise { .. } => "filter-noise",
+                    Filter::MotionBlur { .. } => "filter-motion",
+                    Filter::Median { .. } => "filter-median",
+                    Filter::HighPass { .. } => "filter-highpass",
                 }),
             });
             v.push(Entry {
@@ -298,6 +302,15 @@ impl App {
                     radius: 2.0,
                 }))
             }
+            "filter-noise" => self.dialog = Some(Dialog::Filter(Filter::Noise { amount: 0.1 })),
+            "filter-motion" => {
+                self.dialog = Some(Dialog::Filter(Filter::MotionBlur {
+                    angle: 0.0,
+                    distance: 20.0,
+                }))
+            }
+            "filter-median" => self.dialog = Some(Dialog::Filter(Filter::Median { radius: 2.0 })),
+            "filter-highpass" => self.dialog = Some(Dialog::Filter(Filter::HighPass { radius: 4.0 })),
             other => self.status = format!("Unknown command '{other}'"),
         }
     }
