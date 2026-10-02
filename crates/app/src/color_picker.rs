@@ -235,6 +235,10 @@ pub(crate) fn remember(ctx: &egui::Context, rgb: [f32; 3]) {
     let mut list = recent(ctx);
     push_recent(&mut list, to_u8(rgb));
     ctx.data_mut(|d| d.insert_temp(gid("recent"), Recent(list.clone())));
+    // Screenshot runs never write the user's file.
+    if ctx.data(|d| d.get_temp::<bool>(gid("no-persist"))).is_some() {
+        return;
+    }
     if let Some(p) = recent_file() {
         let hex: Vec<String> = list
             .iter()
@@ -257,6 +261,19 @@ pub(crate) enum Placement {
     Auto,
     /// With the popup's `Align2` corner at this point.
     At(Pos2, Align2),
+}
+
+/// Where an auto-placed popup of height `h` goes: 6 px below the
+/// anchor when it fits on `screen`, else 6 px above when that fits,
+/// else below (the area then clamps it on screen).
+pub(crate) fn auto_place(anchor: egui::Rect, h: f32, screen: egui::Rect) -> (Pos2, Align2) {
+    let fits_below = anchor.bottom() + 6.0 + h <= screen.bottom() - 4.0;
+    let fits_above = anchor.top() - 6.0 - h >= screen.top() + 4.0;
+    if fits_below || !fits_above {
+        (anchor.left_bottom() + egui::vec2(0.0, 6.0), Align2::LEFT_TOP)
+    } else {
+        (anchor.left_top() - egui::vec2(0.0, 6.0), Align2::LEFT_BOTTOM)
+    }
 }
 
 /// What a picker did to its colour this frame.
@@ -418,13 +435,8 @@ pub(crate) fn picker_popup(
     let (pos, pivot) = match place {
         Placement::At(p, a) => (p, a),
         Placement::Auto => {
-            let r = anchor.rect;
             let h = if st.height > 0.0 { st.height } else { 360.0 };
-            if r.bottom() + 6.0 + h <= screen.bottom() - 4.0 || r.top() - 6.0 - h < screen.top() {
-                (r.left_bottom() + egui::vec2(0.0, 6.0), Align2::LEFT_TOP)
-            } else {
-                (r.left_top() - egui::vec2(0.0, 6.0), Align2::LEFT_BOTTOM)
-            }
+            auto_place(anchor.rect, h, screen)
         }
     };
 
@@ -857,6 +869,9 @@ impl App {
         to_doc: impl Fn(Pos2) -> (f32, f32),
     ) -> bool {
         ctx.data_mut(|d| d.insert_temp(gid("canvas"), resp.rect));
+        if self.shot.is_some() {
+            ctx.data_mut(|d| d.insert_temp(gid("no-persist"), true));
+        }
         if let Some(msg) = ctx.data_mut(|d| d.remove_temp::<String>(gid("status"))) {
             self.status = msg;
         }
@@ -1123,6 +1138,312 @@ mod tests {
         assert_eq!(sample_srgb(&flat, 0.0, 3.0), None);
         assert_eq!(sample_srgb(&flat, -0.5, 1.0), None);
         assert_eq!(sample_srgb(&flat, f32::NAN, 1.0), None);
+    }
+
+    /// One egui frame with `f` drawing into a central panel.
+    fn frame(ctx: &egui::Context, f: &mut dyn FnMut(&mut egui::Ui)) {
+        frame_with(ctx, Vec::new(), f);
+    }
+
+    fn frame_with(ctx: &egui::Context, events: Vec<egui::Event>, f: &mut dyn FnMut(&mut egui::Ui)) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 800.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| f(ui));
+        });
+    }
+
+    fn press(at: Pos2) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ]
+    }
+
+    /// Draws one colour button with its picker open; returns the popup
+    /// id and the popup's screen rect. The canvas is the right half.
+    fn open_picker(ctx: &egui::Context, rgb: &mut [f32; 3]) -> (egui::Id, egui::Rect) {
+        let canvas = egui::Rect::from_min_max(egui::pos2(600.0, 0.0), egui::pos2(1200.0, 800.0));
+        ctx.data_mut(|d| d.insert_temp(gid("canvas"), canvas));
+        let mut id = egui::Id::NULL;
+        frame(ctx, &mut |ui| {
+            id = color_edit_button_rgb(ui, rgb).id.with("color-picker")
+        });
+        ctx.memory_mut(|m| m.open_popup(id));
+        for _ in 0..3 {
+            frame(ctx, &mut |ui| {
+                color_edit_button_rgb(ui, rgb);
+            });
+        }
+        let rect = ctx.memory(|m| m.area_rect(id)).expect("picker drawn");
+        (id, rect)
+    }
+
+    #[test]
+    fn a_press_on_the_canvas_closes_the_picker_and_is_swallowed() {
+        let ctx = quiet_ctx();
+        let mut rgb = [0.2, 0.4, 0.6];
+        let (id, rect) = open_picker(&ctx, &mut rgb);
+        assert_eq!(rect.width(), W + 20.0, "fixed width: content plus margins");
+        assert!(rect.right() < 600.0, "picker sits left of the test canvas");
+        // A press inside the picker keeps it open and leaves the canvas alone.
+        frame_with(&ctx, press(rect.center()), &mut |ui| {
+            color_edit_button_rgb(ui, &mut rgb);
+        });
+        assert!(ctx.memory(|m| m.is_popup_open(id)));
+        assert!(ctx.data(|d| d.get_temp::<bool>(gid("swallow"))).is_none());
+        // A press on the canvas closes it and must not reach a tool.
+        frame_with(&ctx, press(egui::pos2(900.0, 400.0)), &mut |ui| {
+            color_edit_button_rgb(ui, &mut rgb);
+        });
+        assert!(!ctx.memory(|m| m.is_popup_open(id)));
+        assert_eq!(ctx.data(|d| d.get_temp::<bool>(gid("swallow"))), Some(true));
+    }
+
+    #[test]
+    fn the_square_sets_saturation_and_value_and_reports_like_a_slider() {
+        let ctx = quiet_ctx();
+        // h = 0.5833 (210°), s = 0.667, v = 0.6.
+        let mut rgb = [0.2, 0.4, 0.6];
+        let (_, rect) = open_picker(&ctx, &mut rgb);
+        // The square is the first thing inside the 10 px margin; press at
+        // half saturation, a quarter of the way down (v = 0.75).
+        let at = rect.min + egui::vec2(10.0 + W * 0.5, 10.0 + SV_H * 0.25);
+        let mut seen = (false, false, false);
+        frame_with(&ctx, press(at), &mut |ui| {
+            let r = color_edit_button_rgb(ui, &mut rgb);
+            seen = (r.changed(), r.dragged(), is_dragging(ui.ctx()));
+        });
+        // While the button is down: changed, dragging, undo step held open.
+        assert_eq!(seen, (true, true, true));
+        // hsv (0.5833, 0.5, 0.75) is rgb (0.375, 0.5625, 0.75).
+        assert!(close(rgb, [0.375, 0.5625, 0.75]), "{rgb:?}");
+        let release = vec![egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }];
+        let mut end = (false, false, false);
+        frame_with(&ctx, release, &mut |ui| {
+            let r = color_edit_button_rgb(ui, &mut rgb);
+            end = (r.changed(), r.drag_stopped(), is_dragging(ui.ctx()));
+        });
+        // Release: one more `changed` so listeners close the undo step.
+        assert_eq!(end, (true, true, false));
+        assert!(close(rgb, [0.375, 0.5625, 0.75]));
+    }
+
+    fn key(k: Key) -> egui::Event {
+        egui::Event::Key {
+            key: k,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }
+    }
+
+    /// Focus the hex field, clear it, type `text`, then press Enter.
+    /// Returns whether the field showed the text as invalid before Enter.
+    fn type_hex(ctx: &egui::Context, id: egui::Id, rgb: &mut [f32; 3], text: &str) -> bool {
+        ctx.memory_mut(|m| m.request_focus(id.with("hex")));
+        frame(ctx, &mut |ui| {
+            color_edit_button_rgb(ui, rgb);
+        });
+        let mut events = vec![key(Key::End)];
+        events.extend((0..12).map(|_| key(Key::Backspace)));
+        events.push(egui::Event::Text(text.into()));
+        frame_with(ctx, events, &mut |ui| {
+            color_edit_button_rgb(ui, rgb);
+        });
+        let st: PickerState = ctx.data(|d| d.get_temp(id.with("state"))).unwrap();
+        assert_eq!(st.hex, text);
+        frame_with(ctx, vec![key(Key::Enter)], &mut |ui| {
+            color_edit_button_rgb(ui, rgb);
+        });
+        st.hex_bad
+    }
+
+    #[test]
+    fn the_hex_field_takes_short_forms_and_rejects_garbage() {
+        let ctx = quiet_ctx();
+        let mut rgb = [0.2, 0.4, 0.6];
+        let (id, _) = open_picker(&ctx, &mut rgb);
+        // Three digits, no '#': valid, applied on Enter as #FF0000.
+        assert!(!type_hex(&ctx, id, &mut rgb, "f00"));
+        assert_eq!(rgb, [1.0, 0.0, 0.0]);
+        // Six digits apply as typed.
+        assert!(!type_hex(&ctx, id, &mut rgb, "#1a2e8c"));
+        assert_eq!(rgb, [26.0 / 255.0, 46.0 / 255.0, 140.0 / 255.0]);
+        // Garbage shows as invalid and Enter leaves the colour alone; the
+        // field then reads the colour again.
+        assert!(type_hex(&ctx, id, &mut rgb, "#12zz"));
+        assert_eq!(rgb, [26.0 / 255.0, 46.0 / 255.0, 140.0 / 255.0]);
+        frame(&ctx, &mut |ui| {
+            color_edit_button_rgb(ui, &mut rgb);
+        });
+        let st: PickerState = ctx.data(|d| d.get_temp(id.with("state"))).unwrap();
+        assert_eq!((st.hex.as_str(), st.hex_bad), ("#1A2E8C", false));
+    }
+
+    #[test]
+    fn with_the_eyedropper_armed_a_canvas_press_keeps_the_picker() {
+        let ctx = quiet_ctx();
+        let mut rgb = [0.2, 0.4, 0.6];
+        let (id, _) = open_picker(&ctx, &mut rgb);
+        arm(&ctx, id);
+        frame_with(&ctx, press(egui::pos2(900.0, 400.0)), &mut |ui| {
+            color_edit_button_rgb(ui, &mut rgb);
+        });
+        // The press is the sample (taken by the canvas hook): picker open,
+        // eyedropper still armed, nothing swallowed.
+        assert!(ctx.memory(|m| m.is_popup_open(id)));
+        assert_eq!(eyedropper_target(&ctx), Some(id));
+        assert!(ctx.data(|d| d.get_temp::<bool>(gid("swallow"))).is_none());
+        // Esc cancels the eyedropper first and only then closes the picker.
+        let esc = || {
+            vec![egui::Event::Key {
+                key: Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }]
+        };
+        frame_with(&ctx, esc(), &mut |ui| {
+            color_edit_button_rgb(ui, &mut rgb);
+        });
+        assert_eq!(eyedropper_target(&ctx), None);
+        assert!(ctx.memory(|m| m.is_popup_open(id)));
+        frame_with(&ctx, esc(), &mut |ui| {
+            color_edit_button_rgb(ui, &mut rgb);
+        });
+        assert!(!ctx.memory(|m| m.is_popup_open(id)));
+        assert_eq!(rgb, [0.2, 0.4, 0.6]);
+    }
+
+    /// A context that never touches the user's recent-colours file.
+    fn quiet_ctx() -> egui::Context {
+        let ctx = egui::Context::default();
+        ctx.data_mut(|d| {
+            d.insert_temp(gid("no-persist"), true);
+            d.insert_temp(gid("recent"), Recent(Vec::new()));
+        });
+        ctx
+    }
+
+    #[test]
+    fn a_canvas_sample_reaches_only_the_picker_that_asked() {
+        let ctx = quiet_ctx();
+        let (mut a, mut b) = ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]);
+        let mut ids = (egui::Id::NULL, egui::Id::NULL);
+        frame(&ctx, &mut |ui| {
+            let ra = color_edit_button_rgb(ui, &mut a);
+            let rb = color_edit_button_rgb(ui, &mut b);
+            ids = (ra.id.with("color-picker"), rb.id.with("color-picker"));
+        });
+        let now = ctx.cumulative_pass_nr();
+        let rgb = [1.0, 0.5, 0.0];
+        ctx.data_mut(|d| {
+            d.insert_temp(
+                gid("sample"),
+                Sample {
+                    target: ids.0,
+                    rgb,
+                    frame: now,
+                },
+            )
+        });
+        let mut seen = (false, false, false);
+        frame(&ctx, &mut |ui| {
+            let ra = color_edit_button_rgb(ui, &mut a);
+            let rb = color_edit_button_rgb(ui, &mut b);
+            seen = (ra.changed(), ra.drag_stopped(), rb.changed());
+        });
+        assert_eq!(a, [1.0, 0.5, 0.0]);
+        assert_eq!(b, [0.4, 0.5, 0.6]);
+        // One finished edit for the target, nothing for its neighbour.
+        assert_eq!(seen, (true, true, false));
+        assert_eq!(recent(&ctx), vec![[255, 128, 0]]);
+    }
+
+    #[test]
+    fn a_stale_sample_is_dropped() {
+        let ctx = quiet_ctx();
+        let mut a = [0.1, 0.2, 0.3];
+        let mut id = egui::Id::NULL;
+        for _ in 0..4 {
+            frame(&ctx, &mut |ui| {
+                id = color_edit_button_rgb(ui, &mut a).id.with("color-picker")
+            });
+        }
+        // Delivered three passes ago: the picker it was for has gone.
+        let old = ctx.cumulative_pass_nr() - 3;
+        let s = Sample {
+            target: id,
+            rgb: [1.0, 1.0, 1.0],
+            frame: old,
+        };
+        ctx.data_mut(|d| d.insert_temp(gid("sample"), s));
+        frame(&ctx, &mut |ui| {
+            color_edit_button_rgb(ui, &mut a);
+        });
+        assert_eq!(a, [0.1, 0.2, 0.3]);
+        assert!(ctx.data(|d| d.get_temp::<Sample>(gid("sample"))).is_none());
+    }
+
+    #[test]
+    fn an_armed_eyedropper_lapses_when_its_picker_stops_drawing() {
+        let ctx = quiet_ctx();
+        frame(&ctx, &mut |_| {});
+        let target = egui::Id::new("some picker");
+        arm(&ctx, target);
+        assert_eq!(eyedropper_target(&ctx), Some(target));
+        frame(&ctx, &mut |_| {});
+        frame(&ctx, &mut |_| {});
+        // Two passes without a refresh still count (dialogs draw after the
+        // canvas, so their pickers refresh a pass late)...
+        assert_eq!(eyedropper_target(&ctx), Some(target));
+        frame(&ctx, &mut |_| {});
+        // ...three do not.
+        assert_eq!(eyedropper_target(&ctx), None);
+        arm(&ctx, target);
+        disarm(&ctx);
+        assert_eq!(eyedropper_target(&ctx), None);
+    }
+
+    #[test]
+    fn auto_placement_prefers_below_then_above() {
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1600.0, 1000.0));
+        let swatch = |y: f32| egui::Rect::from_min_size(egui::pos2(300.0, y), egui::vec2(34.0, 20.0));
+        // Options bar: room below.
+        assert_eq!(
+            auto_place(swatch(51.0), 360.0, screen),
+            (egui::pos2(300.0, 77.0), Align2::LEFT_TOP)
+        );
+        // Near the bottom (720 + 6 + 360 > 996): above instead.
+        assert_eq!(
+            auto_place(swatch(700.0), 360.0, screen),
+            (egui::pos2(300.0, 694.0), Align2::LEFT_BOTTOM)
+        );
+        // Room on neither side: below, and the area clamps it on screen.
+        let short = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 400.0));
+        assert_eq!(
+            auto_place(swatch(190.0), 360.0, short),
+            (egui::pos2(300.0, 216.0), Align2::LEFT_TOP)
+        );
     }
 
     #[test]
