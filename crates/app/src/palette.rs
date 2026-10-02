@@ -175,6 +175,15 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Import brushes (.abr)...", "import-brushes"),
     ("Define brush tip from selection", "define-brush"),
     ("Convert for smart filters", "sf-convert"),
+    ("Spot Healing Brush (Heal ▸ Spot)", "tool-spot-heal"),
+    ("Patch tool (Heal ▸ Patch)", "tool-patch"),
+    ("Content-Aware Move tool (Heal ▸ Move)", "tool-content-move"),
+    ("Red Eye tool (Heal ▸ Red Eye)", "tool-red-eye"),
+    ("Blur tool (Brush ▸ Blur)", "tool-blur"),
+    ("Sharpen tool (Brush ▸ Sharpen)", "tool-sharpen"),
+    ("History Brush (Brush ▸ History)", "tool-history-brush"),
+    ("Background Eraser (Eraser ▸ Background)", "tool-bg-eraser"),
+    ("Magic Eraser (Eraser ▸ Magic)", "tool-magic-eraser"),
 ];
 
 impl App {
@@ -877,6 +886,7 @@ impl App {
             }
             "select-mask" => self.open_select_mask(),
             aid if guides::VIEW_ACTIONS.contains(&aid) => self.run_view_aid(aid),
+            tool if self.retouch_tool_action(tool) => {}
             filter if filter.starts_with("filter-") => {
                 match filter_presets().into_iter().find(|(_, f)| filter_id(f) == filter) {
                     Some((_, f)) => self.dialog = Some(Dialog::Filter(f)),
@@ -903,7 +913,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 122); // + convert for smart filters
+        assert_eq!(n, 131); // + convert for smart filters, retouching modes
     }
 
     #[test]

@@ -18,7 +18,10 @@ pub use lumenply_doc::selection_ops::EdgeOp;
 pub use crate::crop::CropCanvas;
 pub use crate::guides::{AddGuide, ClearGuides, MoveGuide, RemoveGuide};
 
+pub use crate::erasers::{BackgroundErase, MagicErase};
 pub use crate::fill_cmds::{AddFillLayer, SetFill};
+pub use crate::retouch::{ContentAwareMove, HealRegion, PatchHeal, RedEye, RetouchSample, SpotHealAware};
+pub use crate::retouch_brush::HistoryStroke;
 pub use crate::shape_cmds::{AddShapeLayer, SetShape, ShapeFromWorkPath, ShapeToWorkPath};
 pub use crate::smart_filter_cmds::{
     AddSmartFilter, RemoveSmartFilter, ReorderSmartFilter, SetSmartFilter, SetSmartFilterMask,
@@ -1688,7 +1691,7 @@ pub fn flood_region(
     mask
 }
 
-fn sampler<'a>(
+pub(crate) fn sampler<'a>(
     doc: &'a Document,
     source: SampleSource,
 ) -> Result<Box<dyn Fn(i32, i32) -> Rgba + 'a>, EditError> {
@@ -2663,6 +2666,15 @@ pub enum BrushMode {
     Saturate,
     /// Drain saturation; `color[3]` acts as strength.
     Desaturate,
+    /// Soften what is there (a small box blur per dab); `color[3]` acts as
+    /// strength.
+    Blur,
+    /// Crisp up what is there (unsharp mask per dab); `color[3]` acts as
+    /// strength.
+    Sharpen,
+    /// Paint from a past state (the history brush). A `PaintStroke` cannot
+    /// carry the state, so it refuses this mode: use [`HistoryStroke`].
+    History,
 }
 
 /// A brush: the computed round tip or a sampled one, with Photoshop's
@@ -2797,6 +2809,9 @@ impl Command for PaintStroke {
             BrushMode::Smudge => "Smudge".into(),
             BrushMode::Saturate => "Sponge (saturate)".into(),
             BrushMode::Desaturate => "Sponge (desaturate)".into(),
+            BrushMode::Blur => "Blur".into(),
+            BrushMode::Sharpen => "Sharpen".into(),
+            BrushMode::History => "History brush".into(),
         }
     }
 
@@ -2814,6 +2829,18 @@ impl Command for PaintStroke {
         let store = layer.pixels_mut().ok_or(EditError::NotPixel(self.layer))?;
         let [cr, cg, cb, ca] = self.brush.color;
         let mode = self.brush.mode;
+        match mode {
+            BrushMode::Blur | BrushMode::Sharpen => {
+                crate::retouch_brush::filter_stroke(store, &self.brush, &self.points, canvas, sel.as_ref());
+                return Ok(());
+            }
+            BrushMode::History => {
+                return Err(EditError::Invalid(
+                    "the history brush needs a source state".into(),
+                ))
+            }
+            _ => {}
+        }
         if mode == BrushMode::Smudge {
             // Each dab stamps the pixels from under the previous dab,
             // sampled from a snapshot so a dab never reads its own writes.
@@ -2899,7 +2926,9 @@ impl Command for PaintStroke {
                         let sat = |c: f32| dec((y + (c - y) * scale).clamp(0.0, 1.0));
                         Rgba::from_straight(sat(er), sat(eg), sat(eb), a)
                     }
-                    BrushMode::Smudge => unreachable!("handled above"),
+                    BrushMode::Smudge | BrushMode::Blur | BrushMode::Sharpen | BrushMode::History => {
+                        unreachable!("handled above")
+                    }
                 };
                 store.set_pixel(px, py, out);
             });

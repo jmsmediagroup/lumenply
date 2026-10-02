@@ -14,6 +14,7 @@ pub mod commands;
 mod content_aware;
 pub mod crop;
 pub mod demo;
+mod erasers;
 pub mod fill_cmds;
 pub mod gradient_tool;
 pub mod guides;
@@ -23,6 +24,8 @@ pub mod locks;
 pub mod paste;
 pub mod quick_select;
 pub mod refine;
+mod retouch;
+mod retouch_brush;
 mod select_ops;
 pub mod shape_cmds;
 pub mod smart_contents;
@@ -404,6 +407,18 @@ impl Editor {
 
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
+    }
+
+    /// The document as it was after `steps` history steps: 0 is the oldest
+    /// state kept (the opened image unless the history limit dropped it),
+    /// `history().len()` the current one, beyond that the redo steps.
+    pub fn state(&self, steps: usize) -> Option<&Document> {
+        let n = self.undo.len();
+        match steps.cmp(&n) {
+            std::cmp::Ordering::Less => Some(&self.undo[steps].doc),
+            std::cmp::Ordering::Equal => Some(&self.doc),
+            std::cmp::Ordering::Greater => self.redo.iter().rev().nth(steps - n - 1).map(|s| &s.doc),
+        }
     }
 
     /// Labels of the undo stack, oldest first.

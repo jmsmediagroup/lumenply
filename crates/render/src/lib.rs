@@ -22,6 +22,7 @@ pub mod gpu;
 pub mod gradient_draw;
 pub mod inpaint;
 pub mod liquify;
+pub mod membrane;
 pub mod resample;
 pub mod shape;
 pub mod smart_filters;

@@ -39,6 +39,7 @@ impl App {
                     .chain(self.editor.redo_history().iter().map(|s| s.to_string()))
                     .collect();
                 let mut jump = None;
+                let mut source = None;
                 let mut toggle = false;
                 // Folded: one vertically centred line. Open: cards from the top.
                 let align = if collapsed {
@@ -76,6 +77,12 @@ impl App {
                                 if resp.clicked() {
                                     jump = Some(i);
                                 }
+                                context_menu(&resp, |ui| {
+                                    if ui.button("Use as history brush source").clicked() {
+                                        source = Some(i);
+                                        ui.close_menu();
+                                    }
+                                });
                             }
                             ui.data_mut(|d| d.insert_temp(seen_id, current));
                         });
@@ -84,6 +91,9 @@ impl App {
                 });
                 if toggle {
                     self.toggle_history_strip();
+                }
+                if let Some(i) = source {
+                    self.set_history_source(i);
                 }
                 if let Some(n) = jump {
                     self.editor.jump_to(n);
@@ -133,6 +143,12 @@ impl App {
             Stroke::new(1.0, LINE)
         };
         p.rect_stroke(well, 4.0, stroke);
+        // The history brush's source: a small brush tip in the corner.
+        let source = i == self.history_source_step();
+        if source {
+            p.circle_filled(well.left_top() + egui::vec2(7.0, 7.0), 4.5, ACCENT);
+            p.circle_filled(well.left_top() + egui::vec2(7.0, 7.0), 1.8, ACCENT_INK);
+        }
         let col = if i == current {
             TEXT
         } else if i > current {
@@ -154,7 +170,12 @@ impl App {
             "step"
         };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-        resp.on_hover_text(format!("{label}\n{what} {i} · click to jump here"))
+        let src = if source {
+            "\nThe history brush paints from here"
+        } else {
+            ""
+        };
+        resp.on_hover_text(format!("{label}\n{what} {i} · click to jump here{src}"))
     }
 
     /// Record a thumbnail for the current history step from the composited

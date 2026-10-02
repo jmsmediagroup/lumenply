@@ -48,6 +48,7 @@ mod palette;
 mod pen;
 mod properties;
 mod quick_select_tool;
+mod retouch_ui;
 #[cfg(test)]
 mod select_fill_tests;
 mod select_mask;
@@ -382,8 +383,8 @@ struct App {
     pen_hit: Option<PenHit>,
     /// Pen: the selected node (its handles are shown and grabbable).
     pen_sel: Option<(usize, usize)>,
-    /// Healing brush: true = spot mode (no texture source needed).
-    heal_spot: bool,
+    /// Retouching modes of the Heal and Eraser tools (retouch_ui.rs).
+    retouch: retouch_ui::Retouch,
     /// Quick-mask mode: paint the selection itself under a red overlay.
     quick_mask: bool,
     /// Selection boundary pixels for the animated marching ants.
@@ -548,7 +549,7 @@ impl App {
             pen_dragging: false,
             pen_hit: None,
             pen_sel: None,
-            heal_spot: true,
+            retouch: Default::default(),
             quick_mask: false,
             sel_points: Vec::new(),
             layer_drag: None,
@@ -640,6 +641,7 @@ impl App {
         self.move_offset = (0, 0);
         self.crop.frame = None;
         self.aids = guides::ViewAids::default();
+        self.retouch.reset();
         if self.xform.take().is_some() {
             self.mark(None);
         }
@@ -972,7 +974,27 @@ impl App {
         }
         if self.tool == Tool::Heal {
             brush.mode = BrushMode::Paint;
-            let texture = !self.heal_spot && self.clone_source.is_some();
+            // Content-aware spot healing runs on release; while dragging
+            // the fast diffusion heal previews it.
+            if self.retouch.heal_mode == retouch_ui::HealMode::Spot
+                && self.retouch.spot_aware
+                && self.drag != Some(DragKind::Stroke)
+            {
+                let sample = self.retouch.sample;
+                return Box::new(SpotHealAware {
+                    layer,
+                    brush,
+                    points,
+                    sample,
+                });
+            }
+            let texture =
+                self.retouch.heal_mode == retouch_ui::HealMode::Healing && self.clone_source.is_some();
+            // On release the whole stroke heals as one region; while
+            // dragging, per-dab healing previews it.
+            if self.drag != Some(DragKind::Stroke) {
+                return Box::new(self.heal_region(layer, brush, points, texture));
+            }
             let sample = if self.sample_merged {
                 SampleSource::Merged
             } else {
@@ -1001,6 +1023,15 @@ impl App {
                 offset: self.clone_offset,
                 sample,
             });
+        }
+        if self.tool == Tool::Eraser
+            && self.retouch.eraser_mode == retouch_ui::EraserMode::Background
+            && !self.editing_mask
+        {
+            return Box::new(self.background_erase(layer, brush, points));
+        }
+        if self.tool == Tool::Brush && brush.mode == BrushMode::History && !self.editing_mask {
+            return Box::new(self.history_stroke(layer, brush, points));
         }
         if self.editing_mask {
             Box::new(PaintMask { layer, brush, points })
@@ -1211,7 +1242,9 @@ impl App {
             if t == Tool::Wand && ctx.input(|i| i.modifiers.shift) {
                 self.quick.on = !self.quick.on;
             }
-            self.tool = t;
+            // Shift+J / Shift+E step through the Heal and Eraser modes.
+            let shift = ctx.input(|i| i.modifiers.shift);
+            self.select_tool_key(t, shift);
         }
         let quick = self.tool == Tool::Wand && self.quick.on;
         if bigger {

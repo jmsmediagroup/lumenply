@@ -54,6 +54,8 @@ pub(crate) enum DragKind {
     Xform(Handle),
     /// Shape tool: drawing a new shape (shape_tool.rs).
     Shape,
+    /// A retouching mode's own drag (retouch_ui.rs).
+    Retouch,
 }
 
 /// In-progress free transform of one layer.
@@ -841,6 +843,9 @@ impl App {
         to_doc: impl Fn(Pos2) -> (f32, f32),
     ) {
         let primary = egui::PointerButton::Primary;
+        if self.retouch_canvas(ctx, resp, &to_doc) {
+            return;
+        }
         match self.tool {
             Tool::Pen => {
                 if resp.hovered() {
@@ -1223,7 +1228,8 @@ impl App {
                 if resp.hovered() {
                     ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
                 }
-                let needs_source = self.tool == Tool::Clone || (self.tool == Tool::Heal && !self.heal_spot);
+                let needs_source = self.tool == Tool::Clone
+                    || (self.tool == Tool::Heal && self.retouch.heal_mode == retouch_ui::HealMode::Healing);
                 if needs_source {
                     let alt = ctx.input(|i| i.modifiers.alt);
                     let wants_source = self.clone_picking || self.clone_source.is_none() || alt;
@@ -1463,6 +1469,9 @@ impl App {
         painter: &egui::Painter,
         resp: &egui::Response,
     ) {
+        if self.retouch_overlay(ctx, painter, resp) {
+            return;
+        }
         match self.tool {
             Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal => {
                 if let (true, Some(p)) = (
