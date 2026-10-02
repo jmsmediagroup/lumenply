@@ -42,6 +42,16 @@ pub trait Command {
 struct Snapshot {
     label: String,
     doc: Document,
+    /// Canvas area the step changed (see [`Command::affected`]); undoing or
+    /// redoing the step dirties exactly this area. `None` means "anything".
+    affected: Option<nge_tiles::Rect>,
+}
+
+fn union_opt(a: Option<nge_tiles::Rect>, b: Option<nge_tiles::Rect>) -> Option<nge_tiles::Rect> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.union(&b)),
+        _ => None,
+    }
 }
 
 /// Put every tile the document owns outright into compact 16-bit storage.
@@ -128,6 +138,11 @@ impl Editor {
             cmd.apply(&mut next)?;
             compact_storage(&mut next);
             self.last_affected = cmd.affected(&self.doc);
+            // The whole drag undoes in one go, so its undo step covers
+            // every tick so far.
+            if let Some(s) = self.undo.last_mut() {
+                s.affected = union_opt(s.affected, self.last_affected);
+            }
             self.doc = next;
             Ok(())
         } else {
@@ -151,6 +166,7 @@ impl Editor {
         self.undo.push(Snapshot {
             label: cmd.label(),
             doc: prev,
+            affected: self.last_affected,
         });
         if self.undo.len() > self.history_limit {
             self.undo.remove(0);
@@ -162,12 +178,13 @@ impl Editor {
     /// Returns the label of the undone command.
     pub fn undo(&mut self) -> Option<String> {
         self.coalesce_key = None;
-        self.last_affected = None;
         let snap = self.undo.pop()?;
+        self.last_affected = snap.affected;
         let current = std::mem::replace(&mut self.doc, snap.doc);
         self.redo.push(Snapshot {
             label: snap.label.clone(),
             doc: current,
+            affected: snap.affected,
         });
         Some(snap.label)
     }
@@ -175,20 +192,36 @@ impl Editor {
     /// Returns the label of the redone command.
     pub fn redo(&mut self) -> Option<String> {
         self.coalesce_key = None;
-        self.last_affected = None;
         let snap = self.redo.pop()?;
+        self.last_affected = snap.affected;
         let current = std::mem::replace(&mut self.doc, snap.doc);
         self.undo.push(Snapshot {
             label: snap.label.clone(),
             doc: current,
+            affected: snap.affected,
         });
         Some(snap.label)
     }
 
     /// Undo or redo until exactly `steps` history entries remain applied.
+    /// Afterwards [`Editor::last_affected`] covers every step crossed.
     pub fn jump_to(&mut self, steps: usize) {
-        while self.undo.len() > steps && self.undo().is_some() {}
-        while self.undo.len() < steps && self.redo().is_some() {}
+        let mut acc: Option<Option<nge_tiles::Rect>> = None;
+        while self.undo.len() > steps && self.undo().is_some() {
+            acc = Some(match acc {
+                None => self.last_affected,
+                Some(a) => union_opt(a, self.last_affected),
+            });
+        }
+        while self.undo.len() < steps && self.redo().is_some() {
+            acc = Some(match acc {
+                None => self.last_affected,
+                Some(a) => union_opt(a, self.last_affected),
+            });
+        }
+        if let Some(a) = acc {
+            self.last_affected = a;
+        }
     }
 
     pub fn can_undo(&self) -> bool {
@@ -373,6 +406,61 @@ mod tests {
                 .abs()
                 < 1e-4
         );
+    }
+
+    #[test]
+    fn undo_redo_and_jump_report_affected_areas() {
+        let mut ed = Editor::new(Document::new(500, 500));
+        ed.execute(&AddPixelLayer::new("L")).unwrap();
+        let id = ed.doc().layers()[0].id;
+        let dab = |x: f32, y: f32| PaintStroke {
+            layer: id,
+            brush: Brush {
+                radius: 10.0,
+                ..Brush::default()
+            },
+            points: vec![StrokePoint::new(x, y, 1.0)],
+        };
+        ed.execute(&dab(100.0, 100.0)).unwrap();
+        ed.execute(&dab(300.0, 300.0)).unwrap();
+
+        // Undoing a step dirties exactly that step's area.
+        ed.undo();
+        let r = ed.last_affected().expect("undo of a stroke is local");
+        assert!(r.contains(300, 300) && !r.contains(100, 100), "{r:?}");
+        ed.redo();
+        let r = ed.last_affected().expect("redo of a stroke is local");
+        assert!(r.contains(300, 300) && !r.contains(100, 100), "{r:?}");
+
+        // Jumping across several steps unions their areas.
+        ed.jump_to(1);
+        let r = ed.last_affected().expect("both strokes are local");
+        assert!(r.contains(100, 100) && r.contains(300, 300), "{r:?}");
+
+        // A step whose command cannot bound its change poisons to "anything".
+        ed.jump_to(3);
+        ed.undo(); // stroke at (300, 300)
+        ed.undo(); // stroke at (100, 100)
+        ed.undo(); // AddPixelLayer: affected() is None
+        assert!(ed.last_affected().is_none());
+
+        // A coalesced drag undoes as the union of its ticks' areas.
+        let mut ed = Editor::new(Document::new(500, 500));
+        ed.execute(&AddPixelLayer::new("L")).unwrap();
+        let id = ed.doc().layers()[0].id;
+        let dab = |x: f32, y: f32| PaintStroke {
+            layer: id,
+            brush: Brush {
+                radius: 10.0,
+                ..Brush::default()
+            },
+            points: vec![StrokePoint::new(x, y, 1.0)],
+        };
+        ed.execute_coalescing(&dab(50.0, 50.0), "drag").unwrap();
+        ed.execute_coalescing(&dab(400.0, 400.0), "drag").unwrap();
+        ed.undo();
+        let r = ed.last_affected().expect("coalesced strokes are local");
+        assert!(r.contains(50, 50) && r.contains(400, 400), "{r:?}");
     }
 
     #[test]

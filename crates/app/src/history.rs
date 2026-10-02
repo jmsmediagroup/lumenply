@@ -41,7 +41,8 @@ impl App {
                 });
                 if let Some(n) = jump {
                     self.editor.jump_to(n);
-                    self.mark(None);
+                    let r = self.editor.last_affected();
+                    self.mark(r);
                     self.fix_active();
                     self.status = format!("Jumped to history step {n}");
                 }

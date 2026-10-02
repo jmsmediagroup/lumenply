@@ -6,7 +6,8 @@ impl App {
     pub(crate) fn undo(&mut self) {
         if let Some(l) = self.editor.undo() {
             self.status = format!("Undid {l}");
-            self.mark(None);
+            let r = self.editor.last_affected();
+            self.mark(r);
             self.fix_active();
         }
     }
@@ -14,7 +15,8 @@ impl App {
     pub(crate) fn redo(&mut self) {
         if let Some(l) = self.editor.redo() {
             self.status = format!("Redid {l}");
-            self.mark(None);
+            let r = self.editor.last_affected();
+            self.mark(r);
             self.fix_active();
         }
     }
