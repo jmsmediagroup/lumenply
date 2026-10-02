@@ -980,7 +980,12 @@ fn collect_records(
                 let store: &TileStore = match &l.content {
                     LayerContent::Pixel(s) => s,
                     LayerContent::Text(t) => {
-                        warnings.push(format!("text layer '{}' was exported as pixels", l.name));
+                        warnings.push(format!(
+                            "text layer '{}' was exported as pixels (font: {}, {} px)",
+                            l.name,
+                            lumenply_render::text::font_label(t),
+                            t.size.round()
+                        ));
                         owned_store = t
                             .cache
                             .clone()
