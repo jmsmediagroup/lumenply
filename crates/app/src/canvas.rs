@@ -98,7 +98,7 @@ impl App {
                         );
                     }
                 }
-                self.refresh_thumbs(ctx, false);
+                self.refresh_thumbs(ctx, Some(r));
             }
             _ => {
                 let flat = nge_render::composite_raster(doc);
@@ -115,24 +115,34 @@ impl App {
                     ),
                     None => self.overlay_tex = None,
                 }
-                self.refresh_thumbs(ctx, true);
+                self.refresh_thumbs(ctx, None);
             }
         }
         self.capture_history_thumb(ctx);
         self.dirty = false;
     }
 
-    pub(crate) fn refresh_thumbs(&mut self, ctx: &egui::Context, groups_too: bool) {
+    pub(crate) fn refresh_thumbs(&mut self, ctx: &egui::Context, area: Option<Rect>) {
         let doc = self.editor.doc();
         let canvas = doc.canvas();
         let mut thumbs: Vec<(LayerId, egui::ColorImage)> = Vec::new();
         let mut masks: Vec<(LayerId, egui::ColorImage)> = Vec::new();
+        // A group thumbnail needs a full composite of its children, which is
+        // the expensive part: on a partial refresh only rebuild it when the
+        // changed area could touch the group's content.
+        fn group_dirty(children: &[Layer], r: Rect) -> bool {
+            children.iter().any(|l| match &l.content {
+                LayerContent::Pixel(store) => store.bounds().is_none_or(|b| !b.intersect(&r).is_empty()),
+                LayerContent::Group(c) => group_dirty(c, r),
+                _ => true,
+            })
+        }
         doc.for_each_layer(|l| {
             match &l.content {
                 LayerContent::Pixel(store) => {
                     thumbs.push((l.id, thumb_image(canvas, |x, y| store.get_pixel(x, y))))
                 }
-                LayerContent::Group(children) if groups_too => {
+                LayerContent::Group(children) if area.is_none_or(|r| group_dirty(children, r)) => {
                     let flat = nge_render::composite_layers(children, canvas, canvas);
                     thumbs.push((l.id, thumb_image(canvas, |x, y| flat.get_pixel(x, y))));
                 }
@@ -610,8 +620,17 @@ impl App {
                         let d = (b - a) / self.zoom;
                         let off = (d.x.round() as i32, d.y.round() as i32);
                         if off != self.move_offset {
+                            let prev = self.move_offset;
                             self.move_offset = off;
                             if let Some(layer) = self.active {
+                                // Repaint only where the layer was and where
+                                // it lands, not the whole canvas.
+                                let bounds = self
+                                    .editor
+                                    .doc()
+                                    .layer(layer)
+                                    .and_then(|l| l.pixels())
+                                    .and_then(|s| s.bounds());
                                 let mut preview = self.editor.doc().clone();
                                 let cmd = MoveLayer {
                                     layer,
@@ -619,7 +638,18 @@ impl App {
                                     dy: off.1,
                                 };
                                 if cmd.apply(&mut preview).is_ok() {
-                                    self.preview(ctx, &preview, None);
+                                    let area = bounds.map(|b| {
+                                        let at = |o: (i32, i32)| {
+                                            Rect::new(
+                                                b.x.saturating_add(o.0),
+                                                b.y.saturating_add(o.1),
+                                                b.w,
+                                                b.h,
+                                            )
+                                        };
+                                        at(prev).union(&at(off))
+                                    });
+                                    self.preview(ctx, &preview, area);
                                 }
                             }
                         }
@@ -631,8 +661,10 @@ impl App {
                     let (dx, dy) = self.move_offset;
                     if let (Some(layer), true) = (self.active, dx != 0 || dy != 0) {
                         self.run(&MoveLayer { layer, dx, dy });
+                    } else {
+                        // The drag went nowhere; drop any preview left on the texture.
+                        self.mark(None);
                     }
-                    self.mark(None);
                 }
             }
             Tool::Brush | Tool::Eraser | Tool::Clone => {
@@ -673,6 +705,7 @@ impl App {
                         }
                         self.drag = Some(DragKind::Stroke);
                         self.stroke.clear();
+                        self.stroke_drawn = 0;
                         if let Some(p) = ctx.input(|i| i.pointer.press_origin()) {
                             let (x, y) = to_doc(p);
                             self.stroke.push(StrokePoint::new(x, y, 1.0));
@@ -694,8 +727,14 @@ impl App {
                         let cmd = self.stroke_command(layer, self.stroke.clone());
                         let mut preview = self.editor.doc().clone();
                         if cmd.apply(&mut preview).is_ok() {
-                            let area = stroke_bounds(&self.make_brush(), &self.stroke, preview.canvas());
+                            // Catmull-Rom smoothing can bend the curve up to
+                            // two points back, so repaint from there instead
+                            // of the whole stroke: long strokes stay cheap.
+                            let from = self.stroke_drawn.saturating_sub(3);
+                            let area =
+                                stroke_bounds(&self.make_brush(), &self.stroke[from..], preview.canvas());
                             self.preview(ctx, &preview, Some(area));
+                            self.stroke_drawn = self.stroke.len();
                         }
                     }
                 }

@@ -72,11 +72,11 @@ None of these could be tested in the container.
       launches and renders; Windows and Linux still unverified
 - [ ] Keyboard shortcuts: V B E S G Shift+G W L Shift+L T I M Shift+M H [ ] 0 1,
       Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y, Ctrl+A/D/Shift+I, Ctrl+S/O/T/G, Shift+F5, Delete,
-      Enter/Esc in free transform
+      Enter/Esc in free transform -- i checked this
 - [ ] Typing in text fields: text tool, layer rename (double-click), file-path dialogs
 - [ ] HiDPI / display scaling (canvas maths assume `pixels_per_point` handled by egui)
 - [ ] Brush responsiveness at 4K in a release build; measure stroke latency
-- [ ] Run the CI workflow on GitHub and fix what breaks
+- [ ] Run the CI workflow on GitHub and fix what breaks -- skip for now
 - [ ] Open real-world PSDs from Photoshop/Affinity/Photopea; collect failures as test files
 
 ## 2. Performance

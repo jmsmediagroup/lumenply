@@ -111,6 +111,8 @@ struct App {
     drag: Option<DragKind>,
     drag_start: Option<Pos2>,
     stroke: Vec<StrokePoint>,
+    /// Points already painted onto the preview texture this stroke.
+    stroke_drawn: usize,
     /// Points of a lasso in progress (document space).
     lasso: Vec<(f32, f32)>,
     curve_drag: Option<usize>,
@@ -215,6 +217,7 @@ impl App {
             drag: None,
             drag_start: None,
             stroke: Vec::new(),
+            stroke_drawn: 0,
             lasso: Vec::new(),
             curve_drag: None,
             cursor_doc: None,
