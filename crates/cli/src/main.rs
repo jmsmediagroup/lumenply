@@ -66,6 +66,9 @@ enum Cmd {
         layers: u32,
         #[arg(long, default_value_t = 5)]
         runs: u32,
+        /// Blend every layer with Normal instead of cycling all modes.
+        #[arg(long, default_value_t = false)]
+        normal: bool,
     },
     /// Write a project (or the demo) as a layered Photoshop PSD.
     ExportPsd {
@@ -123,7 +126,12 @@ fn main() -> Result<()> {
             print_tree(doc.layers(), 1);
             Ok(())
         }
-        Cmd::Bench { size, layers, runs } => bench(size, layers, runs),
+        Cmd::Bench {
+            size,
+            layers,
+            runs,
+            normal,
+        } => bench(size, layers, runs, normal),
         Cmd::Blends => {
             for m in BlendMode::ALL {
                 println!("{}", m.name());
@@ -233,14 +241,18 @@ fn paint(out: PathBuf, width: u32, height: u32, save: Option<PathBuf>) -> Result
     Ok(())
 }
 
-fn bench(size: u32, layers: u32, runs: u32) -> Result<()> {
+fn bench(size: u32, layers: u32, runs: u32, normal: bool) -> Result<()> {
     let mut doc = Document::new(size, size);
     for i in 0..layers {
         let id = doc.add_pixel_layer(format!("L{i}"));
         let shade = (i + 1) as f32 / layers as f32;
         let fill = Raster::filled(size, size, Rgba::from_straight(shade, 1.0 - shade, 0.5, 0.6));
         let layer = doc.layer_mut(id).unwrap();
-        layer.blend = BlendMode::ALL[i as usize % BlendMode::ALL.len()];
+        layer.blend = if normal {
+            BlendMode::Normal
+        } else {
+            BlendMode::ALL[i as usize % BlendMode::ALL.len()]
+        };
         *layer.pixels_mut().unwrap() = lumenply_tiles::TileStore::from_raster(&fill, 0, 0);
     }
     lumenply_core::compact_storage(&mut doc);

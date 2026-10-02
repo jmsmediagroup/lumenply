@@ -93,7 +93,14 @@ None of these could be tested in the container.
       fall back to the reference path
 - [x] Faster thumbnails (group composites only rebuild when the change touches them)
 - [~] Filters are row-parallel via rayon (box blur, noise, motion blur,
-      median, high pass). Still open: SIMD for blend loops
+      median, high pass). Blend loops measured (`lumenply bench --size 2048
+      --layers 10`, 14 threads): Normal-only 4.5 ms (~9.3 GP·layers/s),
+      mixed modes 20.9 ms (~2.0 GP·layers/s). Tried and rejected: a
+      branchless Normal loop (no gain beyond noise — Normal is bound by
+      decoding compact u16 tiles to f32 in `Tile::pixels()`, not ALU) and
+      per-mode monomorphised loops (75% slower, code bloat). Next lever if
+      needed: fuse the u16 decode into the blend loop instead of
+      materialising an f32 copy of each source tile
 - [x] Memory: cap undo history by bytes (Editor::history_memory_limit, default 1 GiB)
 - [ ] Optional 8-bit storage mode
 - [x] Incremental brush rendering (only the smoothing window repaints per frame)
