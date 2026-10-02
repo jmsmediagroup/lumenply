@@ -153,9 +153,10 @@ None of these could be tested in the container.
 - [~] More styles: inner shadow and inner glow (blurred inverse coverage,
       clipped to the layer, rendered over it); colour and gradient overlays
       (gradient spans the content bounds at any angle); bevel (emboss from
-      the blurred-coverage gradient, light angle/depth/size). Still to do:
-      pattern overlay; effects on clip-chain members and pass-through
-      groups
+      the blurred-coverage gradient, light angle/depth/size); effects on
+      clip-chain members (rendered inside the unit, clipped by the base)
+      and on chain bases; a styled pass-through group composites isolated,
+      as in Photoshop. Still to do: pattern overlay
 - [ ] Smart objects (embedded documents with transforms)
 - [x] Clipping masks (clip chains composite as a unit gated by the base's alpha
       and carrying its blend/opacity; context menu + palette; PSD clipping byte

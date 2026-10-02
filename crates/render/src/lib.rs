@@ -135,7 +135,18 @@ pub fn render_tile_over(
                             Some(m) => apply_mask(src, m, coord),
                             None => src,
                         };
-                        blend_tile(&mut unit, &masked, member.blend, member.opacity);
+                        if member.effects.is_empty() {
+                            blend_tile(&mut unit, &masked, member.blend, member.opacity);
+                        } else {
+                            // A member's effects render inside the unit; the
+                            // alpha force-back below clips them to the base.
+                            render_effects_under(&mut unit, member, coord, canvas);
+                            blend_tile(&mut unit, &masked, member.blend, member.opacity);
+                            render_overlays_over(&mut unit, member, coord, canvas);
+                            render_bevel_over(&mut unit, member, coord, canvas);
+                            render_inner_over(&mut unit, member, coord, canvas);
+                            render_stroke_over(&mut unit, member, coord, canvas);
+                        }
                     }
                 }
             }
@@ -151,7 +162,20 @@ pub fn render_tile_over(
                 }
             }
             let d = dst.get_or_insert_with(Tile::new);
-            blend_tile(d, &unit, layer.blend, layer.opacity);
+            if layer.effects.is_empty() {
+                blend_tile(d, &unit, layer.blend, layer.opacity);
+            } else {
+                // The base's own effects come from the base's coverage:
+                // shadow and glow under the whole unit, the rest above it
+                // (so an opaque overlay covers clipped content, as in
+                // Photoshop).
+                render_effects_under(d, layer, coord, canvas);
+                blend_tile(d, &unit, layer.blend, layer.opacity);
+                render_overlays_over(d, layer, coord, canvas);
+                render_bevel_over(d, layer, coord, canvas);
+                render_inner_over(d, layer, coord, canvas);
+                render_stroke_over(d, layer, coord, canvas);
+            }
             continue;
         }
         if !layer.visible || layer.opacity <= 0.0 {
@@ -189,7 +213,10 @@ pub fn render_tile_over(
                 let has_filter = children
                     .iter()
                     .any(|c| c.visible && c.opacity > 0.0 && matches!(c.content, LayerContent::Filter(_)));
-                if layer.pass_through && !has_filter {
+                // Effects need a defined group raster, so a styled group
+                // composites isolated even when set to pass-through (as
+                // Photoshop does).
+                if layer.pass_through && !has_filter && layer.effects.is_empty() {
                     let before = dst.clone();
                     let after = render_tile_over(before.clone(), children, coord, canvas);
                     dst = mix_tiles(before, after, layer.opacity, mask, coord);
@@ -1057,6 +1084,116 @@ mod tests {
                 assert!((a - b).abs() < 2e-3, "seam mismatch at {dx},{dy}: {a} vs {b}");
             }
         }
+    }
+
+    #[test]
+    fn effects_work_on_clip_members_and_isolate_styled_pass_through_groups() {
+        use lumenply_doc::{LayerEffects, ShadowFx, StrokeFx};
+        // Base: grey square 20..40 in both axes. Clipped member: red square
+        // x 32..44, y 24..32 (crossing the base's right edge) with a green
+        // stroke and a drop shadow.
+        let mut doc = Document::new(64, 64);
+        let base = doc.add_pixel_layer("base");
+        for y in 20..40 {
+            for x in 20..40 {
+                doc.layer_mut(base).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(0.5, 0.5, 0.5, 1.0),
+                );
+            }
+        }
+        let member = doc.add_pixel_layer("clipped");
+        for y in 24..32 {
+            for x in 32..44 {
+                doc.layer_mut(member).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(0.9, 0.1, 0.1, 1.0),
+                );
+            }
+        }
+        doc.layer_mut(member).unwrap().clip = true;
+        doc.layer_mut(member).unwrap().effects = LayerEffects {
+            stroke: Some(StrokeFx {
+                size: 2.0,
+                color: [0.0, 1.0, 0.0],
+                opacity: 1.0,
+            }),
+            drop_shadow: Some(ShadowFx {
+                dx: 0.0,
+                dy: 4.0,
+                blur: 1.0,
+                color: [0.0, 0.0, 0.0],
+                opacity: 1.0,
+            }),
+            ..LayerEffects::default()
+        };
+        let out = composite_raster(&doc);
+        let ring = straight(out.get(31, 28)); // stroke left of the member, inside the base
+        assert!(
+            ring[1] > 0.8 && ring[0] < 0.2,
+            "member stroke inside the base: {ring:?}"
+        );
+        assert!(
+            out.get(45, 28).a < 1e-4,
+            "stroke outside the base is clipped away"
+        );
+        let shadow = straight(out.get(36, 34)); // below the member, inside the base
+        assert!(
+            shadow[0] < 0.15,
+            "member shadow darkens the base fill: {shadow:?}"
+        );
+        assert!(
+            out.get(36, 42).a < 1e-4,
+            "shadow outside the base is clipped away"
+        );
+        let red = straight(out.get(36, 28));
+        assert!(red[0] > 0.8 && red[1] < 0.2, "member paint shows inside: {red:?}");
+
+        // The base's own stroke still rings the base, outside it.
+        doc.layer_mut(base).unwrap().effects = LayerEffects {
+            stroke: Some(StrokeFx {
+                size: 2.0,
+                color: [0.0, 0.2, 1.0],
+                opacity: 1.0,
+            }),
+            ..LayerEffects::default()
+        };
+        let out = composite_raster(&doc);
+        let base_ring = straight(out.get(18, 30));
+        assert!(base_ring[2] > 0.8, "base stroke outside the base: {base_ring:?}");
+
+        // A styled pass-through group composites isolated, so its effects
+        // render (and its square still paints).
+        let mut doc = Document::new(64, 64);
+        let g = doc.add_group("g");
+        let child_id = doc.alloc_id();
+        let mut child = Layer::pixel(child_id, "sq");
+        for y in 24..40 {
+            for x in 24..40 {
+                child
+                    .pixels_mut()
+                    .unwrap()
+                    .set_pixel(x, y, Rgba::from_straight(0.9, 0.1, 0.1, 1.0));
+            }
+        }
+        doc.layer_mut(g).unwrap().children_mut().unwrap().push(child);
+        doc.layer_mut(g).unwrap().pass_through = true;
+        doc.layer_mut(g).unwrap().effects = LayerEffects {
+            drop_shadow: Some(ShadowFx {
+                dx: 6.0,
+                dy: 6.0,
+                blur: 1.0,
+                color: [0.0, 0.0, 0.0],
+                opacity: 1.0,
+            }),
+            ..LayerEffects::default()
+        };
+        let out = composite_raster(&doc);
+        assert!(out.get(44, 44).a > 0.5, "group shadow renders beside the square");
+        let sq = straight(out.get(30, 30));
+        assert!(sq[0] > 0.8, "group content still paints: {sq:?}");
     }
 
     #[test]
