@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.85"
 license = "GPL-3.0-or-later"
@@ -19,11 +19,11 @@ repository = "https://github.com/CHANGE-ME/nge"
 authors = ["NGE contributors"]
 
 [workspace.dependencies]
-nge-tiles = { path = "crates/tiles" }
-nge-doc = { path = "crates/doc" }
-nge-render = { path = "crates/render" }
-nge-io = { path = "crates/io" }
-nge-core = { path = "crates/core" }
+lumenply-tiles = { path = "crates/tiles" }
+lumenply-doc = { path = "crates/doc" }
+lumenply-render = { path = "crates/render" }
+lumenply-io = { path = "crates/io" }
+lumenply-core = { path = "crates/core" }
 
 rayon = "1.10"
 thiserror = "1.0"

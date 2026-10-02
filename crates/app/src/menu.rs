@@ -178,7 +178,7 @@ impl App {
                         }
                         if ui
                             .button("Open...   Ctrl+O")
-                            .on_hover_text(".nge project, .psd, .png, .jpg")
+                            .on_hover_text(".lumen project, .psd, .ora, images")
                             .clicked()
                         {
                             self.pick_open();
@@ -208,7 +208,7 @@ impl App {
                             ui.close_menu();
                         }
                         if ui.button("Open demo document").clicked() {
-                            match nge_core::demo::build(1200, 800) {
+                            match lumenply_core::demo::build(1200, 800) {
                                 Ok(ed) => self.set_doc(ed, None),
                                 Err(e) => self.status = e.to_string(),
                             }

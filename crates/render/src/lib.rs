@@ -24,8 +24,8 @@ pub use filters::{apply_filter, filter_raster, Filter};
 pub use gpu::GpuCompositor;
 pub use transform::{sample_bilinear, transform_mask, transform_store};
 
-use nge_doc::{Adjustment, BlendMode, Document, Layer, LayerContent, Mask};
-use nge_tiles::{Raster, Rect, Rgba, Tile, TileCoord, TileStore, TILE_PIXELS, TILE_SIZE};
+use lumenply_doc::{Adjustment, BlendMode, Document, Layer, LayerContent, Mask};
+use lumenply_tiles::{Raster, Rect, Rgba, Tile, TileCoord, TileStore, TILE_PIXELS, TILE_SIZE};
 use rayon::prelude::*;
 
 /// Composite the whole canvas.
@@ -416,7 +416,7 @@ fn render_stroke_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: R
     let Some(stroke) = &layer.effects.stroke else {
         return;
     };
-    let size = nge_doc::sane_radius(stroke.size);
+    let size = lumenply_doc::sane_radius(stroke.size);
     if size <= 0.0 {
         return;
     }
@@ -695,7 +695,7 @@ fn soft_light(cb: f32, cs: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nge_doc::Layer;
+    use lumenply_doc::Layer;
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-5
@@ -773,7 +773,7 @@ mod tests {
 
     #[test]
     fn layer_effects_render_shadow_glow_and_stroke() {
-        use nge_doc::{LayerEffects, ShadowFx, StrokeFx};
+        use lumenply_doc::{LayerEffects, ShadowFx, StrokeFx};
         let mut doc = Document::new(96, 96);
         let id = doc.add_pixel_layer("square");
         for y in 40..56 {
@@ -912,7 +912,7 @@ mod tests {
         let adj = doc.add_adjustment(Adjustment::Invert);
         doc.layer_mut(adj).unwrap().clip = true;
         let out = composite_raster(&doc);
-        let inv = nge_doc::adjust::srgb_decode(1.0 - nge_doc::adjust::srgb_encode(0.2));
+        let inv = lumenply_doc::adjust::srgb_decode(1.0 - lumenply_doc::adjust::srgb_encode(0.2));
         assert!(close(straight(out.get(2, 2))[0], inv), "inverted inside the base");
         assert!(close(straight(out.get(6, 2))[0], 0.5), "untouched outside");
 
@@ -956,7 +956,7 @@ mod tests {
             .push(Layer::adjustment(id, Adjustment::Invert));
 
         // Invert runs in gamma space, so linear 0.2 maps to this:
-        let inv = nge_doc::adjust::srgb_decode(1.0 - nge_doc::adjust::srgb_encode(0.2));
+        let inv = lumenply_doc::adjust::srgb_decode(1.0 - lumenply_doc::adjust::srgb_encode(0.2));
 
         // Isolated: the adjustment has nothing inside the group to act on.
         let p = straight(composite_raster(&doc).get(4, 4));
@@ -977,7 +977,7 @@ mod tests {
 
         // A mask gates where it applies.
         doc.layer_mut(g).unwrap().opacity = 1.0;
-        let mut mask = nge_doc::Mask::hide_all();
+        let mut mask = lumenply_doc::Mask::hide_all();
         mask.fill_rect(Rect::new(0, 0, 4, 8), 1.0);
         doc.layer_mut(g).unwrap().mask = Some(mask);
         let out = composite_raster(&doc);
@@ -1029,7 +1029,7 @@ mod tests {
         );
 
         // Invert runs in gamma space, like Photoshop.
-        let inv = nge_doc::adjust::srgb_decode(1.0 - nge_doc::adjust::srgb_encode(0.2));
+        let inv = lumenply_doc::adjust::srgb_decode(1.0 - lumenply_doc::adjust::srgb_encode(0.2));
         let out = composite_raster(&doc);
         let a = straight(out.get(0, 0));
         assert!(close(a[0], inv), "inverted below: {a:?}");
@@ -1058,7 +1058,7 @@ mod tests {
         let fill = Raster::filled(600, 4, Rgba::WHITE);
         *doc.layer_mut(id).unwrap().pixels_mut().unwrap() = TileStore::from_raster(&fill, 0, 0);
 
-        let mut mask = nge_doc::Mask::reveal_all();
+        let mut mask = lumenply_doc::Mask::reveal_all();
         mask.set_value(10, 1, 0.25);
         doc.layer_mut(id).unwrap().mask = Some(mask);
         let out = composite_raster(&doc);
@@ -1066,7 +1066,7 @@ mod tests {
         assert!(close(out.get(11, 1).a, 1.0));
         assert!(close(out.get(500, 1).a, 1.0)); // tile 1 has no mask tile → default
 
-        doc.layer_mut(id).unwrap().mask = Some(nge_doc::Mask::hide_all());
+        doc.layer_mut(id).unwrap().mask = Some(lumenply_doc::Mask::hide_all());
         assert_eq!(composite(&doc).len(), 0);
     }
 
@@ -1087,7 +1087,7 @@ mod tests {
         let before = composite_raster(&doc);
         assert!(close(before.get(255, 32).r, 0.2) && close(before.get(256, 32).r, 0.8));
 
-        let f = doc.add_filter(nge_doc::Filter::GaussianBlur { radius: 6.0 });
+        let f = doc.add_filter(lumenply_doc::Filter::GaussianBlur { radius: 6.0 });
         let after = composite_raster(&doc);
         let l = after.get(252, 32).r;
         let r = after.get(259, 32).r;
@@ -1125,12 +1125,12 @@ mod tests {
         let bg = doc.add_pixel_layer("bg");
         let fill = Raster::filled(512, 256, Rgba::from_straight(0.3, 0.5, 0.7, 1.0));
         *doc.layer_mut(bg).unwrap().pixels_mut().unwrap() = TileStore::from_raster(&fill, 0, 0);
-        let mut mask = nge_doc::Mask::reveal_all();
+        let mut mask = lumenply_doc::Mask::reveal_all();
         gradient_mask(&mut mask, Rect::new(0, 0, 512, 256));
         doc.layer_mut(bg).unwrap().mask = Some(mask.clone());
         let adj = doc.add_adjustment(Adjustment::Invert);
         doc.layer_mut(adj).unwrap().mask = Some(mask.clone());
-        let f = doc.add_filter(nge_doc::Filter::BoxBlur { radius: 3.0 });
+        let f = doc.add_filter(lumenply_doc::Filter::BoxBlur { radius: 3.0 });
         doc.layer_mut(f).unwrap().mask = Some(mask);
         let reference = composite_raster(&doc);
 

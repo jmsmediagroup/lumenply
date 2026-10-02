@@ -15,7 +15,7 @@ pub(crate) fn luminance_histogram(flat: &Raster) -> [u32; BINS] {
             continue;
         }
         let [r, g, b, _] = p.to_straight();
-        let y = nge_doc::adjust::srgb_encode(0.2126 * r + 0.7152 * g + 0.0722 * b);
+        let y = lumenply_doc::adjust::srgb_encode(0.2126 * r + 0.7152 * g + 0.0722 * b);
         let bin = ((y * (BINS - 1) as f32).round() as usize).min(BINS - 1);
         hist[bin] += 1;
     }
@@ -113,7 +113,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nge_tiles::Rgba;
+    use lumenply_tiles::Rgba;
 
     #[test]
     fn auto_contrast_finds_percentile_endpoints() {
@@ -146,7 +146,7 @@ mod tests {
         assert_eq!(h[0], 1);
         assert_eq!(h[BINS - 1], 1);
         // Bins are gamma-domain: linear 0.5 sits at sRGB ~0.735.
-        let expect = (nge_doc::adjust::srgb_encode(0.5) * (BINS - 1) as f32).round() as usize;
+        let expect = (lumenply_doc::adjust::srgb_encode(0.5) * (BINS - 1) as f32).round() as usize;
         assert_eq!(h[expect], 1);
     }
 }

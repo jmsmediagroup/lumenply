@@ -11,8 +11,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use nge_doc::{Document, Layer, LayerContent, LayerId};
-use nge_tiles::{Rect, Tile, TileCoord, TileStore};
+use lumenply_doc::{Document, Layer, LayerContent, LayerId};
+use lumenply_tiles::{Rect, Tile, TileCoord, TileStore};
 use rayon::prelude::*;
 
 use crate::{composite_layers, render_tile, render_tile_over};
@@ -125,8 +125,8 @@ fn top_ancestor(doc: &Document, id: LayerId) -> Option<LayerId> {
 mod tests {
     use super::*;
     use crate::{composite_rect, gradient_mask};
-    use nge_doc::{Adjustment, BlendMode, Mask};
-    use nge_tiles::{Raster, Rgba, TileStore as Store};
+    use lumenply_doc::{Adjustment, BlendMode, Mask};
+    use lumenply_tiles::{Raster, Rgba, TileStore as Store};
 
     /// A document exercising every compositor feature below the top layer:
     /// a filled background, a masked multiply layer, an adjustment, a live
@@ -151,7 +151,7 @@ mod tests {
             brightness: 0.1,
             contrast: 0.2,
         });
-        doc.add_filter(nge_doc::Filter::BoxBlur { radius: 2.0 });
+        doc.add_filter(lumenply_doc::Filter::BoxBlur { radius: 2.0 });
 
         let g = doc.add_group("g");
         let inner_id = doc.alloc_id();

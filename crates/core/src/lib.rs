@@ -9,7 +9,7 @@
 pub mod commands;
 pub mod demo;
 
-use nge_doc::{Document, LayerId};
+use lumenply_doc::{Document, LayerId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EditError {
@@ -34,7 +34,7 @@ pub trait Command {
     /// Canvas area whose appearance may change, computed against the
     /// document *before* the command runs. `None` means "anything".
     /// Front ends use it to recomposite only what moved.
-    fn affected(&self, _doc: &Document) -> Option<nge_tiles::Rect> {
+    fn affected(&self, _doc: &Document) -> Option<lumenply_tiles::Rect> {
         None
     }
     /// The single layer whose data or properties this command changes, if it
@@ -51,7 +51,7 @@ struct Snapshot {
     doc: Document,
     /// Canvas area the step changed (see [`Command::affected`]); undoing or
     /// redoing the step dirties exactly this area. `None` means "anything".
-    affected: Option<nge_tiles::Rect>,
+    affected: Option<lumenply_tiles::Rect>,
     /// Estimated bytes this snapshot keeps alive: its tiles that the state
     /// replacing it no longer shares.
     bytes: usize,
@@ -62,7 +62,7 @@ struct Snapshot {
 /// dropping `old` from the history would free, modulo sharing with even
 /// older snapshots.
 fn delta_bytes(old: &Document, new: &Document) -> usize {
-    fn store_delta(old: &nge_tiles::TileStore, new: Option<&nge_tiles::TileStore>) -> usize {
+    fn store_delta(old: &lumenply_tiles::TileStore, new: Option<&lumenply_tiles::TileStore>) -> usize {
         old.coords()
             .filter_map(|c| {
                 let ot = old.tile(c)?;
@@ -87,7 +87,10 @@ fn delta_bytes(old: &Document, new: &Document) -> usize {
     total
 }
 
-fn union_opt(a: Option<nge_tiles::Rect>, b: Option<nge_tiles::Rect>) -> Option<nge_tiles::Rect> {
+fn union_opt(
+    a: Option<lumenply_tiles::Rect>,
+    b: Option<lumenply_tiles::Rect>,
+) -> Option<lumenply_tiles::Rect> {
     match (a, b) {
         (Some(a), Some(b)) => Some(a.union(&b)),
         _ => None,
@@ -100,8 +103,8 @@ fn union_opt(a: Option<nge_tiles::Rect>, b: Option<nge_tiles::Rect>) -> Option<n
 pub fn compact_storage(doc: &mut Document) {
     doc.for_each_layer_mut(|l| {
         match &mut l.content {
-            nge_doc::LayerContent::Pixel(store) => store.compact(),
-            nge_doc::LayerContent::Text(t) => {
+            lumenply_doc::LayerContent::Pixel(store) => store.compact(),
+            lumenply_doc::LayerContent::Text(t) => {
                 if let Some(c) = t.cache.as_mut() {
                     c.compact();
                 }
@@ -140,7 +143,7 @@ pub struct Editor {
     /// Key of the open coalescing run, if any (see [`Editor::execute_coalescing`]).
     coalesce_key: Option<String>,
     /// Area changed by the last successful edit/undo/redo; `None` = whole canvas.
-    last_affected: Option<nge_tiles::Rect>,
+    last_affected: Option<lumenply_tiles::Rect>,
     /// Layer targeted by the last successful edit (see [`Command::target_layer`]).
     last_target: Option<LayerId>,
 }
@@ -160,7 +163,7 @@ impl Editor {
     }
 
     /// Canvas area touched by the most recent change (see [`Command::affected`]).
-    pub fn last_affected(&self) -> Option<nge_tiles::Rect> {
+    pub fn last_affected(&self) -> Option<lumenply_tiles::Rect> {
         self.last_affected
     }
 
@@ -278,7 +281,7 @@ impl Editor {
     /// Undo or redo until exactly `steps` history entries remain applied.
     /// Afterwards [`Editor::last_affected`] covers every step crossed.
     pub fn jump_to(&mut self, steps: usize) {
-        let mut acc: Option<Option<nge_tiles::Rect>> = None;
+        let mut acc: Option<Option<lumenply_tiles::Rect>> = None;
         while self.undo.len() > steps && self.undo().is_some() {
             acc = Some(match acc {
                 None => self.last_affected,
@@ -319,7 +322,7 @@ impl Editor {
 mod tests {
     use super::commands::*;
     use super::*;
-    use nge_tiles::Rgba;
+    use lumenply_tiles::Rgba;
 
     #[test]
     fn undo_and_redo_restore_pixels() {
@@ -460,7 +463,7 @@ mod tests {
         .unwrap();
         let store = ed.doc().layer(id).unwrap().pixels().unwrap();
         assert!(store.coords().all(|c| store.tile(c).unwrap().is_compact()));
-        assert_eq!(storage_bytes(ed.doc()), 4 * nge_tiles::TILE_PIXELS * 8);
+        assert_eq!(storage_bytes(ed.doc()), 4 * lumenply_tiles::TILE_PIXELS * 8);
         let p = store.get_pixel(150, 150).to_straight();
         assert!((p[0] - 0.2).abs() < 1e-4 && (p[2] - 0.6).abs() < 1e-4);
         // The undo snapshot still composites correctly after compaction.
@@ -592,7 +595,7 @@ mod tests {
         let mut ed = Editor::new(Document::new(600, 600));
         ed.execute(&AddPixelLayer::new("L")).unwrap();
         let id = ed.doc().layers()[0].id;
-        let step = 9 * nge_tiles::TILE_PIXELS * 8;
+        let step = 9 * lumenply_tiles::TILE_PIXELS * 8;
         ed.history_memory_limit = 3 * step + step / 2; // room for ~3 fills
         for i in 0..6 {
             ed.execute(&Fill {

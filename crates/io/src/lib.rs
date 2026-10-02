@@ -12,7 +12,7 @@ pub mod psd;
 
 use std::path::Path;
 
-use nge_tiles::{Raster, Rgba};
+use lumenply_tiles::{Raster, Rgba};
 
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
@@ -206,7 +206,7 @@ mod tests {
                 );
             }
         }
-        let dir = std::env::temp_dir().join("nge-io-test");
+        let dir = std::env::temp_dir().join("lumenply-io-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("rt.jpg");
         save_jpeg(&path, &r, 95).unwrap();
@@ -291,7 +291,7 @@ mod tests {
         r.set(0, 0, Rgba::from_straight(1.0, 0.0, 0.0, 1.0));
         r.set(1, 0, Rgba::from_straight(0.0, 1.0, 0.0, 0.5));
         r.set(2, 1, Rgba::WHITE);
-        let dir = std::env::temp_dir().join("nge-io-test");
+        let dir = std::env::temp_dir().join("lumenply-io-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("rt.png");
         save_png(&path, &r).unwrap();

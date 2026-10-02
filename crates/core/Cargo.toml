@@ -1,5 +1,5 @@
 [package]
-name = "nge-core"
+name = "lumenply-core"
 description = "Command bus, undo history and editing commands"
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-nge-tiles.workspace = true
-nge-doc.workspace = true
-nge-render.workspace = true
+lumenply-tiles.workspace = true
+lumenply-doc.workspace = true
+lumenply-render.workspace = true
 thiserror.workspace = true

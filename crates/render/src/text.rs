@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use fontdue::layout::{CoordinateSystem, Layout, TextStyle};
 use fontdue::Font;
-use nge_doc::TextLayer;
-use nge_tiles::{Rgba, TileStore};
+use lumenply_doc::TextLayer;
+use lumenply_tiles::{Rgba, TileStore};
 
 static REGULAR: &[u8] = include_bytes!("../fonts/DejaVuSans.ttf");
 static BOLD: &[u8] = include_bytes!("../fonts/DejaVuSans-Bold.ttf");

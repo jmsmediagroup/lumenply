@@ -1,4 +1,5 @@
-//! The native project format (`.nge`).
+//! The native project format (`.lumen`; the legacy `.nge` extension and
+//! format id from the working title still load).
 //!
 //! A plain zip archive:
 //!
@@ -17,8 +18,8 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 
-use nge_doc::{Adjustment, BlendMode, Document, Filter, Layer, LayerContent, LayerId, Mask, TextLayer};
-use nge_tiles::{Rgba, Tile, TileCoord, TileStore, TILE_PIXELS};
+use lumenply_doc::{Adjustment, BlendMode, Document, Filter, Layer, LayerContent, LayerId, Mask, TextLayer};
+use lumenply_tiles::{Rgba, Tile, TileCoord, TileStore, TILE_PIXELS};
 use serde::{Deserialize, Serialize};
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -57,7 +58,7 @@ struct Manifest {
     height: u32,
     next_id: LayerId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    work_path: Option<nge_doc::VectorPath>,
+    work_path: Option<lumenply_doc::VectorPath>,
     layers: Vec<LayerRecord>,
 }
 
@@ -72,8 +73,8 @@ struct LayerRecord {
     pass_through: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     clip: bool,
-    #[serde(default, skip_serializing_if = "nge_doc::LayerEffects::is_empty")]
-    effects: nge_doc::LayerEffects,
+    #[serde(default, skip_serializing_if = "lumenply_doc::LayerEffects::is_empty")]
+    effects: lumenply_doc::LayerEffects,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mask: Option<MaskRecord>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -127,7 +128,7 @@ fn write_archive(path: &Path, doc: &Document) -> Result<(), ProjectError> {
         layers.push(write_layer(&mut zip, l, deflate)?);
     }
     let manifest = Manifest {
-        format: "nge".into(),
+        format: "lumenply".into(),
         version: FORMAT_VERSION,
         width: doc.width,
         height: doc.height,
@@ -230,7 +231,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Document, ProjectError> {
         }
         serde_json::from_str(&buf)?
     };
-    if manifest.format != "nge" {
+    if manifest.format != "lumenply" && manifest.format != "nge" {
         return Err(ProjectError::NotAProject(format!(
             "format field is '{}'",
             manifest.format
@@ -313,7 +314,7 @@ fn read_layer<R: Read + std::io::Seek>(
             if !(0.0..=10_000.0).contains(&t.size) {
                 return Err(ProjectError::Corrupt(format!("text size {} is not sane", t.size)));
             }
-            nge_render::text::refresh_cache(&mut t);
+            lumenply_render::text::refresh_cache(&mut t);
             LayerContent::Text(t)
         }
     };
@@ -424,7 +425,7 @@ fn mask_from_bytes(bytes: &[u8]) -> Result<Tile, ProjectError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nge_tiles::Raster;
+    use lumenply_tiles::Raster;
 
     fn temp(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join("nge-project-test");
@@ -532,17 +533,17 @@ mod tests {
         doc.add_filter(Filter::GaussianBlur { radius: 3.5 });
         let tid = doc.alloc_id();
         let mut tl = TextLayer::new("Round trip", 10.0, 60.0, 32.0, [0.0, 0.0, 1.0, 1.0]);
-        nge_render::text::refresh_cache(&mut tl);
+        lumenply_render::text::refresh_cache(&mut tl);
         doc.add_layer(Layer::text(tid, tl));
 
-        doc.layer_mut(bg).unwrap().effects.stroke = Some(nge_doc::StrokeFx::default());
-        doc.work_path = Some(nge_doc::VectorPath {
-            subpaths: vec![nge_doc::SubPath {
+        doc.layer_mut(bg).unwrap().effects.stroke = Some(lumenply_doc::StrokeFx::default());
+        doc.work_path = Some(lumenply_doc::VectorPath {
+            subpaths: vec![lumenply_doc::SubPath {
                 closed: true,
                 nodes: vec![
-                    nge_doc::PathNode::corner(1.0, 2.0),
-                    nge_doc::PathNode::corner(50.0, 2.0),
-                    nge_doc::PathNode::corner(25.0, 40.0),
+                    lumenply_doc::PathNode::corner(1.0, 2.0),
+                    lumenply_doc::PathNode::corner(50.0, 2.0),
+                    lumenply_doc::PathNode::corner(25.0, 40.0),
                 ],
             }],
         });
@@ -591,8 +592,8 @@ mod tests {
         assert_eq!(m.value(0, 0), 1.0);
 
         // The rendered result is identical.
-        let before = nge_render::composite_raster(&doc);
-        let after = nge_render::composite_raster(&back);
+        let before = lumenply_render::composite_raster(&doc);
+        let after = lumenply_render::composite_raster(&back);
         assert_eq!(before, after);
     }
 

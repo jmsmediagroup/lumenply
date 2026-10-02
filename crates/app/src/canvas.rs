@@ -187,7 +187,7 @@ impl App {
                     thumbs.push((l.id, thumb_image(canvas, |x, y| store.get_pixel(x, y))))
                 }
                 LayerContent::Group(children) if area.is_none_or(|r| group_dirty(children, r)) => {
-                    let flat = nge_render::composite_layers(children, canvas, canvas);
+                    let flat = lumenply_render::composite_layers(children, canvas, canvas);
                     thumbs.push((l.id, thumb_image(canvas, |x, y| flat.get_pixel(x, y))));
                 }
                 _ => {}
@@ -197,7 +197,7 @@ impl App {
                     l.id,
                     thumb_image(canvas, |x, y| {
                         let v = m.value(x, y);
-                        nge_tiles::Rgba::new(v, v, v, 1.0)
+                        lumenply_tiles::Rgba::new(v, v, v, 1.0)
                     }),
                 ));
             }
@@ -631,11 +631,11 @@ impl App {
                     if let Some(q) = ctx.input(|i| i.pointer.press_origin()) {
                         let (x, y) = to_doc(q);
                         if !self.pen_open {
-                            path.subpaths.push(nge_doc::SubPath::default());
+                            path.subpaths.push(lumenply_doc::SubPath::default());
                             self.pen_open = true;
                         }
                         if let Some(sp) = path.subpaths.last_mut() {
-                            sp.nodes.push(nge_doc::PathNode::corner(x, y));
+                            sp.nodes.push(lumenply_doc::PathNode::corner(x, y));
                         }
                         self.pen_dragging = true;
                         changed = true;
@@ -673,11 +673,11 @@ impl App {
                             self.pen_open = false;
                         } else {
                             if !self.pen_open {
-                                path.subpaths.push(nge_doc::SubPath::default());
+                                path.subpaths.push(lumenply_doc::SubPath::default());
                                 self.pen_open = true;
                             }
                             if let Some(sp) = path.subpaths.last_mut() {
-                                sp.nodes.push(nge_doc::PathNode::corner(x, y));
+                                sp.nodes.push(lumenply_doc::PathNode::corner(x, y));
                             }
                         }
                         changed = true;
@@ -724,7 +724,7 @@ impl App {
                         let (x, y) = to_doc(p);
                         if x >= 0.0 && y >= 0.0 && (x as u32) < flat.width && (y as u32) < flat.height {
                             let [r, g, b, _] = flat.get(x as u32, y as u32).to_straight();
-                            let enc = |v: f32| nge_io::linear_to_srgb(v) as f32 / 255.0;
+                            let enc = |v: f32| lumenply_io::linear_to_srgb(v) as f32 / 255.0;
                             self.brush_rgb = [enc(r), enc(g), enc(b)];
                             self.status = format!("Picked colour at {}, {}", x as i32, y as i32);
                         }
@@ -1303,13 +1303,13 @@ pub(crate) fn srgb_lut() -> &'static [u8; 4096] {
     LUT.get_or_init(|| {
         let mut t = [0u8; 4096];
         for (i, v) in t.iter_mut().enumerate() {
-            *v = nge_io::linear_to_srgb(i as f32 / 4095.0);
+            *v = lumenply_io::linear_to_srgb(i as f32 / 4095.0);
         }
         t
     })
 }
 
-pub(crate) fn to_color32(p: nge_tiles::Rgba) -> Color32 {
+pub(crate) fn to_color32(p: lumenply_tiles::Rgba) -> Color32 {
     let lut = srgb_lut();
     let enc = |v: f32| lut[(v.clamp(0.0, 1.0) * 4095.0 + 0.5) as usize];
     let [r, g, b, a] = p.to_straight();
@@ -1324,7 +1324,10 @@ pub(crate) fn raster_to_image(flat: &Raster) -> egui::ColorImage {
 }
 
 /// Sample a layer onto a small thumbnail (nearest, centre of each cell).
-pub(crate) fn thumb_image(canvas: Rect, sample: impl Fn(i32, i32) -> nge_tiles::Rgba) -> egui::ColorImage {
+pub(crate) fn thumb_image(
+    canvas: Rect,
+    sample: impl Fn(i32, i32) -> lumenply_tiles::Rgba,
+) -> egui::ColorImage {
     let (tw, th) = THUMB;
     let scale = (canvas.w as f32 / tw as f32)
         .max(canvas.h as f32 / th as f32)

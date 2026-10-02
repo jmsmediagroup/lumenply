@@ -1820,6 +1820,85 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "lumenply-app"
+version = "0.9.0"
+dependencies = [
+ "eframe",
+ "image 0.24.9",
+ "lumenply-core",
+ "lumenply-doc",
+ "lumenply-io",
+ "lumenply-render",
+ "lumenply-tiles",
+ "rfd",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lumenply-cli"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "lumenply-core",
+ "lumenply-doc",
+ "lumenply-io",
+ "lumenply-render",
+ "lumenply-tiles",
+]
+
+[[package]]
+name = "lumenply-core"
+version = "0.9.0"
+dependencies = [
+ "lumenply-doc",
+ "lumenply-render",
+ "lumenply-tiles",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "lumenply-doc"
+version = "0.9.0"
+dependencies = [
+ "lumenply-tiles",
+ "serde",
+]
+
+[[package]]
+name = "lumenply-io"
+version = "0.9.0"
+dependencies = [
+ "exr",
+ "image 0.24.9",
+ "lumenply-doc",
+ "lumenply-render",
+ "lumenply-tiles",
+ "quick-xml 0.36.2",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "zip",
+]
+
+[[package]]
+name = "lumenply-render"
+version = "0.9.0"
+dependencies = [
+ "fontdue",
+ "lumenply-doc",
+ "lumenply-tiles",
+ "pollster 0.3.0",
+ "rayon",
+ "wgpu",
+]
+
+[[package]]
+name = "lumenply-tiles"
+version = "0.9.0"
+
+[[package]]
 name = "malloc_buf"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1956,85 +2035,6 @@ checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
 ]
-
-[[package]]
-name = "nge-app"
-version = "0.0.1"
-dependencies = [
- "eframe",
- "image 0.24.9",
- "nge-core",
- "nge-doc",
- "nge-io",
- "nge-render",
- "nge-tiles",
- "rfd",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "nge-cli"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "clap",
- "nge-core",
- "nge-doc",
- "nge-io",
- "nge-render",
- "nge-tiles",
-]
-
-[[package]]
-name = "nge-core"
-version = "0.0.1"
-dependencies = [
- "nge-doc",
- "nge-render",
- "nge-tiles",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "nge-doc"
-version = "0.0.1"
-dependencies = [
- "nge-tiles",
- "serde",
-]
-
-[[package]]
-name = "nge-io"
-version = "0.0.1"
-dependencies = [
- "exr",
- "image 0.24.9",
- "nge-doc",
- "nge-render",
- "nge-tiles",
- "quick-xml 0.36.2",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "zip",
-]
-
-[[package]]
-name = "nge-render"
-version = "0.0.1"
-dependencies = [
- "fontdue",
- "nge-doc",
- "nge-tiles",
- "pollster 0.3.0",
- "rayon",
- "wgpu",
-]
-
-[[package]]
-name = "nge-tiles"
-version = "0.0.1"
 
 [[package]]
 name = "nohash-hasher"

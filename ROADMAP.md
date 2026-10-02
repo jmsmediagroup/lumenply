@@ -1,4 +1,4 @@
-# NGE roadmap
+# Lumenply roadmap
 
 Status as of 2026-10-02. About 12,900 lines of Rust, 76 engine tests, clippy-clean.
 Built and tested in a headless Linux container: the app was driven with simulated mouse
@@ -184,7 +184,9 @@ None of these could be tested in the container.
 - [ ] Sandboxed WASM plugins (wasmtime)
 - [ ] Browser build (WebAssembly + WebGPU) — engine crates are UI-free by design
 - [ ] Packaging: Windows installer, signed macOS app, Flatpak; nightly builds from CI
-- [ ] Final project name and trademark search; full GPLv3 text in `LICENSE`; CLA bot
+- [x] Project name: **Lumenply** (brand assets in img/; crates, CLI, titles,
+      `.lumen` extension and `~/.lumenply` all renamed; legacy `.nge` loads)
+- [ ] Trademark search; full GPLv3 text in `LICENSE`; CLA bot
 - [ ] User documentation and a website
 
 ---

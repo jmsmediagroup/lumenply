@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use nge_tiles::{Affine, Rect, Rgba, Tile, TileCoord, TileStore, TILE_SIZE};
+use lumenply_tiles::{Affine, Rect, Rgba, Tile, TileCoord, TileStore, TILE_SIZE};
 use rayon::prelude::*;
 
 /// Transform a store. Whole-pixel translations are exact and cheap; anything
@@ -56,13 +56,13 @@ pub fn transform_store(src: &TileStore, t: &Affine) -> TileStore {
 /// outside the tiles means `default` (it would come back 0). Transforming the
 /// complement instead makes 0 mean "default" again, so the plain store
 /// transform applies. Masks have a default of exactly 0 or 1.
-pub fn transform_mask(mask: &nge_doc::Mask, t: &Affine) -> nge_doc::Mask {
+pub fn transform_mask(mask: &lumenply_doc::Mask, t: &Affine) -> lumenply_doc::Mask {
     let tiles = if mask.default == 0.0 {
         transform_store(&mask.tiles, t)
     } else {
         complement(&transform_store(&complement(&mask.tiles), t))
     };
-    let mut out = nge_doc::Mask {
+    let mut out = lumenply_doc::Mask {
         tiles,
         default: mask.default,
         enabled: mask.enabled,
@@ -179,8 +179,8 @@ pub fn sample_bilinear(src: &TileStore, x: f32, y: f32) -> Rgba {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nge_doc::Mask;
-    use nge_tiles::Raster;
+    use lumenply_doc::Mask;
+    use lumenply_tiles::Raster;
 
     /// A reveal-all mask with a painted-hidden rect must keep hiding that
     /// rect after any transform, and keep revealing everywhere else. The

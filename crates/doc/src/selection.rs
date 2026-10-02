@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use nge_tiles::{Rect, Rgba, Tile, TileCoord};
+use lumenply_tiles::{Rect, Rgba, Tile, TileCoord};
 use serde::{Deserialize, Serialize};
 
 use crate::Mask;

@@ -2,8 +2,8 @@
 //! a feathered glow, a pressure-sensitive ink stroke, a masked hue shift and
 //! a curves layer. It exercises most of the engine in one go.
 
-use nge_doc::{Adjustment, Document, Mask, Selection};
-use nge_tiles::{Raster, Rect, Rgba};
+use lumenply_doc::{Adjustment, Document, Mask, Selection};
+use lumenply_tiles::{Raster, Rect, Rgba};
 
 use crate::commands::{
     AddAdjustmentLayer, AddPixelLayer, Brush, BrushMode, FeatherSelection, Fill, PaintStroke, SetMask,
@@ -72,7 +72,7 @@ pub fn build(width: u32, height: u32) -> EditResult<Editor> {
     }))?;
     let adj = ed.doc().layers()[3].id;
     let mut mask = Mask::hide_all();
-    nge_render::gradient_mask(&mut mask, Rect::new(0, 0, width, height));
+    lumenply_render::gradient_mask(&mut mask, Rect::new(0, 0, width, height));
     ed.execute(&SetMask {
         layer: adj,
         mask: Some(mask),

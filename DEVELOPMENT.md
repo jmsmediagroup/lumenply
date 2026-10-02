@@ -1,7 +1,9 @@
-# NGE — next-gen open image editor
+# Lumenply — free photo editor
 
 Rust raster image editor aiming to be a better GIMP: non-destructive by
-default, Photoshop-familiar UX, PSD round-trip, fast. Working name "NGE".
+default, Photoshop-familiar UX, PSD round-trip, fast. The name is
+**Lumenply** (brand assets in `img/`); crates are `lumenply-*`, projects
+save as `.lumen` (legacy `.nge` still loads).
 **Read `ROADMAP.md` before choosing what to work on.** It lists what is done,
 what is unverified, and what is next, in priority order.
 
@@ -10,9 +12,9 @@ what is unverified, and what is next, in priority order.
 Rust 1.85+ (stable is fine). Linux also needs `libxkbcommon-dev libgl-dev libx11-dev`.
 
 ```sh
-cargo run --release -p nge-app -- --demo     # desktop app with the demo document
-cargo run --release -p nge-app -- file.psd   # open .nge / .psd / .png / .jpg
-cargo run --release -p nge -- --help         # headless CLI (render, info, export-psd, bench)
+cargo run --release -p lumenply-app -- --demo  # desktop app with the demo document
+cargo run --release -p lumenply-app -- file.psd  # open .lumen / .psd / .ora / images
+cargo run --release -p lumenply -- --help      # headless CLI (render, info, export-psd, bench)
 cargo test --workspace                       # must stay green
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all                              # rustfmt.toml: max_width 110
@@ -57,7 +59,7 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
 
 ## Gotchas learned the hard way
 
-- **Verify UI changes by looking at them**: `cargo run --release -p nge-app -- --demo
+- **Verify UI changes by looking at them**: `cargo run --release -p lumenply-app -- --demo
   --screenshot /tmp/ui.png` renders a few frames, saves the window and exits —
   no macOS screen-recording permission needed. The dark theme is forced via
   `ctx.set_theme(ThemePreference::Dark)`; without it eframe follows the OS and

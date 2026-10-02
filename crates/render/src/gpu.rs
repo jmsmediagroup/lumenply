@@ -16,8 +16,8 @@
 //! uploaded per call. Persistent per-layer textures and dirty-rect uploads
 //! are the planned next step once this path is wired into the app.
 
-use nge_doc::{CompiledAdjustment, Document, Layer, LayerContent, Mask};
-use nge_tiles::{Raster, Rect, TileStore};
+use lumenply_doc::{CompiledAdjustment, Document, Layer, LayerContent, Mask};
+use lumenply_tiles::{Raster, Rect, TileStore};
 
 #[cfg(test)]
 use crate::composite_rect as cpu_composite_rect;
@@ -179,7 +179,7 @@ pub struct GpuCompositor {
     /// `cache_rect`, mirroring [`crate::BelowCache`] on the GPU: it kills
     /// the per-call re-upload of every lower layer while one layer is
     /// being edited. Driven by [`GpuCompositor::note_change`].
-    cache_key: Option<nge_doc::LayerId>,
+    cache_key: Option<lumenply_doc::LayerId>,
     cache_rect: Rect,
     backdrop: Option<wgpu::Texture>,
     device: wgpu::Device,
@@ -347,7 +347,7 @@ impl GpuCompositor {
                         LayerContent::Group(c) => ok(c),
                         LayerContent::Filter(_) => false,
                         LayerContent::Adjustment(a) => {
-                            l.blend == nge_doc::BlendMode::Normal
+                            l.blend == lumenply_doc::BlendMode::Normal
                                 && matches!(a.compile(), CompiledAdjustment::Lut(_))
                         }
                     }
@@ -359,7 +359,7 @@ impl GpuCompositor {
     /// Tell the cache which layer an edit touched (`None` = anything).
     /// Consecutive edits inside the same top-level layer keep the cached
     /// backdrop; clip chains never split (same rule as the CPU cache).
-    pub fn note_change(&mut self, doc: &Document, changed: Option<nge_doc::LayerId>) {
+    pub fn note_change(&mut self, doc: &Document, changed: Option<lumenply_doc::LayerId>) {
         let key = changed.and_then(|id| {
             let layers = doc.layers();
             let mut i = layers.iter().position(|l| contains_layer(l, id))?;
@@ -685,7 +685,7 @@ impl GpuCompositor {
             for x in 0..w as usize {
                 let px = &row[x * 16..x * 16 + 16];
                 let f = |i: usize| f32::from_le_bytes([px[i], px[i + 1], px[i + 2], px[i + 3]]);
-                out.pixels[y * w as usize + x] = nge_tiles::Rgba::new(f(0), f(4), f(8), f(12));
+                out.pixels[y * w as usize + x] = lumenply_tiles::Rgba::new(f(0), f(4), f(8), f(12));
             }
         }
         drop(data);
@@ -694,7 +694,7 @@ impl GpuCompositor {
     }
 }
 
-fn contains_layer(l: &Layer, id: nge_doc::LayerId) -> bool {
+fn contains_layer(l: &Layer, id: lumenply_doc::LayerId) -> bool {
     l.id == id
         || l.children()
             .is_some_and(|c| c.iter().any(|ch| contains_layer(ch, id)))
@@ -709,8 +709,8 @@ fn bytemuck_cast<T: Copy>(v: &[T]) -> &[u8] {
 mod tests {
     use super::*;
     use crate::gradient_mask;
-    use nge_doc::{Adjustment, BlendMode};
-    use nge_tiles::Rgba;
+    use lumenply_doc::{Adjustment, BlendMode};
+    use lumenply_tiles::Rgba;
 
     fn gpu() -> Option<GpuCompositor> {
         let g = GpuCompositor::new();
@@ -891,7 +891,7 @@ mod tests {
         let Some(mut gpu) = gpu() else { return };
         let mut doc = Document::new(64, 64);
         doc.add_pixel_layer("bg");
-        doc.add_filter(nge_doc::Filter::GaussianBlur { radius: 4.0 });
+        doc.add_filter(lumenply_doc::Filter::GaussianBlur { radius: 4.0 });
         assert!(!GpuCompositor::supports(&doc));
         assert!(gpu.composite_rect(&doc, doc.canvas()).is_none());
 

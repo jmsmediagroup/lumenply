@@ -30,7 +30,7 @@ impl App {
             .add_filter(
                 "Projects & images",
                 &[
-                    "nge", "psd", "ora", "png", "jpg", "jpeg", "tif", "tiff", "webp", "exr",
+                    "lumen", "nge", "psd", "ora", "png", "jpg", "jpeg", "tif", "tiff", "webp", "exr",
                 ],
             )
             .pick_file()
@@ -81,7 +81,7 @@ impl App {
     }
 
     pub(crate) fn pick_save(&mut self) {
-        if let Some(p) = self.pick_save_path("NGE project", "nge") {
+        if let Some(p) = self.pick_save_path("Lumenply project", "lumen") {
             self.save_path(&p);
         }
     }
@@ -100,8 +100,8 @@ impl App {
 
     pub(crate) fn pick_export_exr(&mut self) {
         if let Some(p) = self.pick_save_path("OpenEXR (linear float)", "exr") {
-            let flat = nge_render::composite_raster(self.editor.doc());
-            match nge_io::save_exr(&p, &flat) {
+            let flat = lumenply_render::composite_raster(self.editor.doc());
+            match lumenply_io::save_exr(&p, &flat) {
                 Ok(()) => self.status = format!("Exported {p}"),
                 Err(e) => self.status = format!("Could not export: {e}"),
             }
@@ -128,8 +128,8 @@ impl App {
             } else {
                 p.with_extension("png")
             };
-            let flat = nge_render::composite_raster(self.editor.doc());
-            match nge_io::save_16bit(&p, &flat) {
+            let flat = lumenply_render::composite_raster(self.editor.doc());
+            match lumenply_io::save_16bit(&p, &flat) {
                 Ok(()) => self.status = format!("Exported {}", p.display()),
                 Err(e) => self.status = format!("Could not export: {e}"),
             }
@@ -143,7 +143,7 @@ impl App {
     }
 
     pub(crate) fn export_ora(&mut self, path: &str) {
-        match nge_io::ora::save(path, self.editor.doc()) {
+        match lumenply_io::ora::save(path, self.editor.doc()) {
             Ok(rep) => {
                 self.status = if rep.warnings.is_empty() {
                     format!("Exported {path}")
@@ -167,7 +167,7 @@ impl App {
 
     pub(crate) fn open_path(&mut self, path: &str) {
         if is_ora_path(path) {
-            match nge_io::ora::load(path) {
+            match lumenply_io::ora::load(path) {
                 Ok(rep) => {
                     let n = rep.warnings.len();
                     self.set_doc(Editor::new(rep.value), None);
@@ -183,7 +183,7 @@ impl App {
             return;
         }
         if is_psd_path(path) {
-            match nge_io::psd::load(path) {
+            match lumenply_io::psd::load(path) {
                 Ok(rep) => {
                     let n = rep.warnings.len();
                     self.set_doc(Editor::new(rep.value), None);
@@ -213,7 +213,7 @@ impl App {
     }
 
     pub(crate) fn export_psd(&mut self, path: &str) {
-        match nge_io::psd::save(path, self.editor.doc()) {
+        match lumenply_io::psd::save(path, self.editor.doc()) {
             Ok(rep) => {
                 self.status = if rep.warnings.is_empty() {
                     format!("Exported {path}")
@@ -226,7 +226,7 @@ impl App {
     }
 
     pub(crate) fn open_image(&mut self, path: &str) {
-        match nge_io::load(path) {
+        match lumenply_io::load(path) {
             Ok(raster) => {
                 let (w, h) = (raster.width, raster.height);
                 let mut ed = Editor::new(Document::new(w, h));
@@ -240,7 +240,7 @@ impl App {
     }
 
     pub(crate) fn place_image(&mut self, path: &str) {
-        match nge_io::load(path) {
+        match lumenply_io::load(path) {
             Ok(raster) => {
                 let doc = self.editor.doc();
                 let x = (doc.width as i32 - raster.width as i32) / 2;
@@ -267,16 +267,16 @@ impl App {
     }
 
     pub(crate) fn export_png(&mut self, path: &str) {
-        let flat = nge_render::composite_raster(self.editor.doc());
-        match nge_io::save_png(path, &flat) {
+        let flat = lumenply_render::composite_raster(self.editor.doc());
+        match lumenply_io::save_png(path, &flat) {
             Ok(()) => self.status = format!("Exported {path}"),
             Err(e) => self.status = format!("Could not export: {e}"),
         }
     }
 
     pub(crate) fn export_jpeg(&mut self, path: &str, quality: u8) {
-        let flat = nge_render::composite_raster(self.editor.doc());
-        match nge_io::save_jpeg(path, &flat, quality) {
+        let flat = lumenply_render::composite_raster(self.editor.doc());
+        match lumenply_io::save_jpeg(path, &flat, quality) {
             Ok(()) => self.status = format!("Exported {path} (quality {quality})"),
             Err(e) => self.status = format!("Could not export: {e}"),
         }
@@ -315,7 +315,7 @@ impl App {
                             *previewed = true;
                             self.run_coalescing(
                                 &SelectColorRange {
-                                    color: self.brush_rgb.map(nge_io::srgb_to_linear_f),
+                                    color: self.brush_rgb.map(lumenply_io::srgb_to_linear_f),
                                     tolerance: *tol / 100.0,
                                 },
                                 "color-range",

@@ -1,25 +1,21 @@
-# NGE — next-gen open image editor
+# Lumenply — free photo editor
 
-> **Working name.** "NGE" is a placeholder until a real name clears a trademark search.
+**Public beta 0.9.0.** A free, open-source raster editor that aims to feel
+as familiar as Photoshop and run faster than GIMP. Non-destructive by
+default, with a tested GPU compositing path, reliable PSD round-trip and
+OpenRaster interchange.
 
-A free, open-source raster editor that aims to feel as familiar as Photoshop,
-run faster than GIMP, and work the same on desktop and in the browser.
-Non-destructive by default, GPU-composited, with reliable PSD round-trip and
-local AI tools.
+What's in: the Graphite & Signal dark UI with a command palette (Ctrl+K);
+sixteen tools including healing brush, clone stamp, pen paths and a
+quick-mask mode; layers with groups (isolated *and* pass-through), masks,
+clipping chains and non-destructive layer styles (shadow / glow / stroke);
+eleven adjustment layer types in the gamma-correct working space plus live
+filter layers; selections with feather, colour range and animated marching
+ants; drag-and-drop everything; autosave with crash recovery; `.lumen`
+projects (legacy `.lumen` loads), PSD, OpenRaster, 16-bit PNG/TIFF, WebP and
+OpenEXR.
 
-**Status: Phase 1 → 2.** The engine composites, paints, selects, transforms,
-filters, saves and reloads documents; the desktop shell (`nge-app`, egui)
-exposes it: canvas with zoom and pan, brush and eraser, clone stamp, paint
-bucket, gradient, eyedropper, move tool and on-canvas free transform, marquee and
-magic-wand selections with feather, layer
-groups with thumbnails, layer masks painted directly, eleven adjustment
-layer types with live controls, blur/sharpen filters with live preview,
-live filter layers, editable text layers, crop and canvas/image resize, image import
-(PNG/JPEG/PSD), PNG/JPEG/PSD export, and a clickable history with redo steps.
-Non-destructive editing (adjustment layers, masks) is in the core model from
-the start. GPU rendering and pen input are not in yet.
-
-![Layer groups, thumbnails and masks in nge-app](docs/screenshots/09-layer-groups-thumbnails.png)
+![Lumenply](docs/screenshots/23-graphite-ui.png)
 
 More screenshots in `docs/screenshots/`.
 
@@ -30,10 +26,10 @@ crates/
   tiles/    sparse copy-on-write 256×256 tile storage, Rect/Raster helpers
   doc/      document model: layer tree, groups, adjustment layers, masks, selections, blend modes
   render/   tiled compositor (CPU reference path; wgpu path to follow)
-  io/       PNG/JPEG load + save, sRGB ⇄ linear, native .nge project format
+  io/       PNG/JPEG load + save, sRGB ⇄ linear, native .lumen project format
   core/     command bus, snapshot undo/redo, editing commands, brush
-  cli/      `nge` headless front end: composite, paint, render, info, bench
-  app/      `nge-app` desktop shell (egui): the thin UI over `core::Editor`
+  cli/      `lumenply` headless front end: composite, paint, render, info, bench
+  app/      `lumenply-app` desktop shell (egui): the thin UI over `core::Editor`
 ```
 
 Dependency direction is strictly downward: `cli → core → render → doc → tiles`,
@@ -73,14 +69,14 @@ Rust 1.85 or newer (the egui shell needs it; the engine crates alone build on 1.
 
 ```sh
 cargo test --workspace                      # all crates
-cargo run -p nge-app -- --demo              # open the demo document in the editor
-cargo run -p nge-app -- my-file.nge         # open a project
-cargo run -p nge-app -- photo.jpg --place logo.png   # open an image, place another as a layer
+cargo run -p lumenply-app -- --demo              # open the demo document in the editor
+cargo run -p lumenply-app -- my-file.lumen         # open a project
+cargo run -p lumenply-app -- photo.jpg --place logo.png   # open an image, place another as a layer
 cargo build --release
-./target/release/nge paint -o demo.png --save demo.nge   # brush + masked adjustment layer
-./target/release/nge info demo.nge                        # print the layer tree
-./target/release/nge render demo.nge -o out.png
-./target/release/nge export-psd demo.nge -o demo.psd      # layered Photoshop file
+./target/release/nge paint -o demo.png --save demo.lumen   # brush + masked adjustment layer
+./target/release/nge info demo.lumen                        # print the layer tree
+./target/release/nge render demo.lumen -o out.png
+./target/release/nge export-psd demo.lumen -o demo.psd      # layered Photoshop file
 ./target/release/nge info file.psd                        # inspect a PSD's layer tree
 ./target/release/nge composite -o out.png --layer photo.jpg --layer grain.png:overlay:0.4
 ./target/release/nge bench --size 4096 --layers 12               # prints layer memory too

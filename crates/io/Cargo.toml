@@ -1,5 +1,5 @@
 [package]
-name = "nge-io"
+name = "lumenply-io"
 description = "Image codecs and colour conversion"
 version.workspace = true
 edition.workspace = true
@@ -9,14 +9,14 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-nge-tiles.workspace = true
+lumenply-tiles.workspace = true
 image.workspace = true
 thiserror.workspace = true
-nge-doc.workspace = true
+lumenply-doc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 zip.workspace = true
 quick-xml.workspace = true
 exr.workspace = true
 
-nge-render.workspace = true
+lumenply-render.workspace = true

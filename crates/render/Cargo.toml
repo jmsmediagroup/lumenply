@@ -1,5 +1,5 @@
 [package]
-name = "nge-render"
+name = "lumenply-render"
 description = "Tiled compositor (CPU path; GPU path via wgpu to follow)"
 version.workspace = true
 edition.workspace = true
@@ -9,8 +9,8 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-nge-tiles.workspace = true
-nge-doc.workspace = true
+lumenply-tiles.workspace = true
+lumenply-doc.workspace = true
 rayon.workspace = true
 wgpu.workspace = true
 pollster.workspace = true

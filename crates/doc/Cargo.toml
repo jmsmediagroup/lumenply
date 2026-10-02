@@ -1,5 +1,5 @@
 [package]
-name = "nge-doc"
+name = "lumenply-doc"
 description = "Document model: layer tree, blend modes, masks"
 version.workspace = true
 edition.workspace = true
@@ -9,5 +9,5 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-nge-tiles.workspace = true
+lumenply-tiles.workspace = true
 serde = { workspace = true }

@@ -11,7 +11,7 @@
 
 use std::str::FromStr;
 
-use nge_tiles::{Rect, Rgba, TileStore};
+use lumenply_tiles::{Rect, Rgba, TileStore};
 use serde::{Deserialize, Serialize};
 
 pub type LayerId = u64;
@@ -83,7 +83,7 @@ pub use adjust::{Adjustment, CompiledAdjustment};
 pub use selection::{CombineOp, Selection};
 
 /// A pixel filter: destructive when applied to a layer, live when it is a
-/// [`LayerContent::Filter`] layer. Kernels live in `nge-render`.
+/// [`LayerContent::Filter`] layer. Kernels live in `lumenply-render`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Filter {
@@ -169,7 +169,7 @@ pub fn box_radius(sigma_like: f32) -> i32 {
 }
 
 /// Non-destructive per-layer effects ("layer styles"), rendered from the
-/// layer's own coverage at composite time. Kernels live in `nge-render`.
+/// layer's own coverage at composite time. Kernels live in `lumenply-render`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LayerEffects {
@@ -285,7 +285,7 @@ impl Mask {
     /// Coverage at a pixel, 0.0 to 1.0.
     #[inline]
     pub fn value(&self, x: i32, y: i32) -> f32 {
-        let c = nge_tiles::TileCoord::containing(x, y);
+        let c = lumenply_tiles::TileCoord::containing(x, y);
         match self.tiles.tile(c) {
             Some(t) => {
                 let (ox, oy) = c.origin();
@@ -297,21 +297,21 @@ impl Mask {
 
     pub fn set_value(&mut self, x: i32, y: i32, v: f32) {
         let v = v.clamp(0.0, 1.0);
-        let c = nge_tiles::TileCoord::containing(x, y);
+        let c = lumenply_tiles::TileCoord::containing(x, y);
         if self.tiles.tile(c).is_none() {
             // A fresh tile must start at the mask's default, not transparent,
             // or painting one pixel would hide the rest of its tile.
             let d = self.default;
             self.tiles.insert(
                 c,
-                std::sync::Arc::new(nge_tiles::Tile::filled(Rgba::new(d, d, d, d))),
+                std::sync::Arc::new(lumenply_tiles::Tile::filled(Rgba::new(d, d, d, d))),
             );
         }
         self.tiles.set_pixel(x, y, Rgba::new(v, v, v, v));
     }
 }
 
-/// Editable text. The glyphs are rasterised into `cache` by `nge-render`
+/// Editable text. The glyphs are rasterised into `cache` by `lumenply-render`
 /// whenever the text changes; the cache is never saved to disk.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TextLayer {

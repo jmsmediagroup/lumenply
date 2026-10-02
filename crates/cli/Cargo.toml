@@ -1,5 +1,5 @@
 [package]
-name = "nge-cli"
+name = "lumenply-cli"
 description = "Headless command-line front end: composite, paint, benchmark"
 version.workspace = true
 edition.workspace = true
@@ -9,14 +9,14 @@ repository.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "nge"
+name = "lumenply"
 path = "src/main.rs"
 
 [dependencies]
-nge-tiles.workspace = true
-nge-doc.workspace = true
-nge-render.workspace = true
-nge-io.workspace = true
-nge-core.workspace = true
+lumenply-tiles.workspace = true
+lumenply-doc.workspace = true
+lumenply-render.workspace = true
+lumenply-io.workspace = true
+lumenply-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true

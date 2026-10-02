@@ -13,8 +13,8 @@
 
 use std::path::Path;
 
-use nge_doc::{Adjustment, BlendMode, Document, Layer, LayerContent, Mask};
-use nge_tiles::{Raster, Rect, Rgba, TileStore};
+use lumenply_doc::{Adjustment, BlendMode, Document, Layer, LayerContent, Mask};
+use lumenply_tiles::{Raster, Rect, Rgba, TileStore};
 
 use crate::{linear_to_srgb, srgb_to_linear, IoError};
 
@@ -728,7 +728,10 @@ fn collect_records(
                     LayerContent::Pixel(s) => s,
                     LayerContent::Text(t) => {
                         warnings.push(format!("text layer '{}' was exported as pixels", l.name));
-                        owned_store = t.cache.clone().unwrap_or_else(|| nge_render::text::rasterize(t));
+                        owned_store = t
+                            .cache
+                            .clone()
+                            .unwrap_or_else(|| lumenply_render::text::rasterize(t));
                         &owned_store
                     }
                     _ => unreachable!(),
@@ -887,7 +890,7 @@ pub fn save(path: impl AsRef<Path>, doc: &Document) -> Result<Report<()>, PsdErr
     file.extend_from_slice(&lm);
 
     // Composite image data (RLE, all channels share one count table).
-    let flat = nge_render::composite_raster(doc);
+    let flat = lumenply_render::composite_raster(doc);
     let mut planes = [
         vec![0u8; w * h],
         vec![0u8; w * h],
@@ -1342,7 +1345,7 @@ fn build_mask(rl: &RawLayer) -> Option<Mask> {
 /// Convenience for callers that only need a flat raster of a PSD.
 pub fn load_flat(path: impl AsRef<Path>) -> Result<Raster, PsdError> {
     let doc = load(path)?.value;
-    Ok(nge_render::composite_raster(&doc))
+    Ok(lumenply_render::composite_raster(&doc))
 }
 
 #[cfg(test)]
@@ -1491,7 +1494,7 @@ mod tests {
         grp.children_mut().unwrap().push(b);
         grp.children_mut().unwrap()[1].clip = true;
         grp.pass_through = true;
-        doc.add_adjustment(nge_doc::Adjustment::Invert);
+        doc.add_adjustment(lumenply_doc::Adjustment::Invert);
 
         let path = temp("rt.psd");
         let rep = save(&path, &doc).unwrap();
@@ -1531,8 +1534,8 @@ mod tests {
         assert_eq!(hidden.pixels().unwrap().get_pixel(250, 150), Rgba::WHITE);
 
         // The composite of the imported document matches the original, Invert included.
-        let o = nge_render::composite_raster(&doc);
-        let n = nge_render::composite_raster(&back);
+        let o = lumenply_render::composite_raster(&doc);
+        let n = lumenply_render::composite_raster(&back);
         let mut maxdiff = 0.0f32;
         let mut at = (0, [0.0; 4], [0.0; 4]);
         for (i, (x, y)) in o.pixels.iter().zip(n.pixels.iter()).enumerate() {

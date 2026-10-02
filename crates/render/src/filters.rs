@@ -5,9 +5,9 @@
 //! from darkening. Gaussian blur is three box passes, whose result is within
 //! a few percent of a true Gaussian and far cheaper.
 
-pub use nge_doc::Filter;
-use nge_doc::{box_radius, sane_radius};
-use nge_tiles::{Raster, Rect, Rgba, TileStore};
+pub use lumenply_doc::Filter;
+use lumenply_doc::{box_radius, sane_radius};
+use lumenply_tiles::{Raster, Rect, Rgba, TileStore};
 use rayon::prelude::*;
 
 /// Apply a filter to every painted pixel of `store`.

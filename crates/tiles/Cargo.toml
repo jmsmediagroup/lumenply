@@ -1,5 +1,5 @@
 [package]
-name = "nge-tiles"
+name = "lumenply-tiles"
 description = "Sparse copy-on-write tile storage for raster layers"
 version.workspace = true
 edition.workspace = true

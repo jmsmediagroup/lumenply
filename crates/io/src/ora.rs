@@ -11,8 +11,8 @@
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
-use nge_doc::{BlendMode, Document, Layer, LayerContent, LayerId};
-use nge_tiles::{Raster, Rect, Rgba, TileStore};
+use lumenply_doc::{BlendMode, Document, Layer, LayerContent, LayerId};
+use lumenply_tiles::{Raster, Rect, Rgba, TileStore};
 use quick_xml::events::Event;
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -122,7 +122,7 @@ pub fn save(path: impl AsRef<Path>, doc: &Document) -> Result<Report<()>, OraErr
     zip.write_all(xml.as_bytes())?;
 
     // Merged preview and thumbnail, required of writers by the spec.
-    let merged = nge_render::composite_raster(doc);
+    let merged = lumenply_render::composite_raster(doc);
     zip.start_file("mergedimage.png", stored)?;
     zip.write_all(&encode_png(&merged)?)?;
     let thumb = scale_to_fit(&merged, 256);
@@ -420,7 +420,7 @@ fn decode_layer_png<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, src: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nge_doc::{Adjustment, Mask};
+    use lumenply_doc::{Adjustment, Mask};
 
     fn temp(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join("nge-ora-test");

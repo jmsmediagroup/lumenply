@@ -305,16 +305,16 @@ impl App {
 
     /// Non-destructive layer effects: toggles and parameters, coalescing
     /// into one history step per drag.
-    fn effects_ui(&mut self, ui: &mut egui::Ui, id: LayerId, mut fx: nge_doc::LayerEffects) {
-        use nge_doc::{GlowFx, ShadowFx, StrokeFx};
+    fn effects_ui(&mut self, ui: &mut egui::Ui, id: LayerId, mut fx: lumenply_doc::LayerEffects) {
+        use lumenply_doc::{GlowFx, ShadowFx, StrokeFx};
         section_title(ui, "EFFECTS");
         let mut changed = false;
         let mut finished = false;
         let color_btn = |ui: &mut egui::Ui, c: &mut [f32; 3]| -> bool {
-            let mut srgb = c.map(nge_io::linear_to_srgb_f);
+            let mut srgb = c.map(lumenply_io::linear_to_srgb_f);
             let r = egui::color_picker::color_edit_button_rgb(ui, &mut srgb);
             if r.changed() {
-                *c = srgb.map(nge_io::srgb_to_linear_f);
+                *c = srgb.map(lumenply_io::srgb_to_linear_f);
             }
             r.changed()
         };

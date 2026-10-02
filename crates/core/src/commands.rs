@@ -1,11 +1,11 @@
 //! Built-in commands. Each is a plain data struct so it can be constructed
 //! from the UI, from a script, or deserialised from a macro file.
 
-use nge_doc::{
+use lumenply_doc::{
     Adjustment, BlendMode, CombineOp, Document, Filter, Layer, LayerContent, LayerId, Mask, Selection,
     TextLayer,
 };
-use nge_tiles::{Affine, Raster, Rect, Rgba, TileStore};
+use lumenply_tiles::{Affine, Raster, Rect, Rgba, TileStore};
 
 use crate::{Command, EditError, EditResult};
 
@@ -146,7 +146,7 @@ impl Command for AddTextLayer {
     fn apply(&self, doc: &mut Document) -> EditResult {
         let id = doc.alloc_id();
         let mut t = self.text.clone();
-        nge_render::text::refresh_cache(&mut t);
+        lumenply_render::text::refresh_cache(&mut t);
         insert_above(doc, Layer::text(id, t), self.above)
     }
 }
@@ -170,7 +170,7 @@ impl Command for SetText {
         // Old glyphs plus new glyphs.
         let old = doc.layer(self.layer)?.raster_store()?.bounds();
         let mut t = self.text.clone();
-        nge_render::text::refresh_cache(&mut t);
+        lumenply_render::text::refresh_cache(&mut t);
         let new = t.cache.as_ref()?.bounds();
         match (old, new) {
             (Some(a), Some(b)) => Some(a.union(&b).intersect(&doc.canvas())),
@@ -185,7 +185,7 @@ impl Command for SetText {
             .text_layer_mut()
             .ok_or_else(|| EditError::Invalid(format!("layer {} is not a text layer", self.layer)))?;
         *t = self.text.clone();
-        nge_render::text::refresh_cache(t);
+        lumenply_render::text::refresh_cache(t);
         let first_line: String = t.text.lines().next().unwrap_or("Text").chars().take(24).collect();
         if !first_line.is_empty() {
             l.name = first_line;
@@ -212,7 +212,7 @@ impl Command for RasterizeLayer {
         let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
         let store = match &mut l.content {
             LayerContent::Text(t) => {
-                nge_render::text::refresh_cache(t);
+                lumenply_render::text::refresh_cache(t);
                 t.cache.take().unwrap_or_default()
             }
             _ => {
@@ -275,7 +275,7 @@ impl Command for SetAdjustment {
     fn apply(&self, doc: &mut Document) -> EditResult {
         let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
         match &mut l.content {
-            nge_doc::LayerContent::Adjustment(a) => {
+            lumenply_doc::LayerContent::Adjustment(a) => {
                 *a = self.adjustment.clone();
                 Ok(())
             }
@@ -540,7 +540,7 @@ impl Command for NewLayerFromSelection {
             None => store.clone(),
             Some(sel) => {
                 // Keep only the covered pixels, weighted by coverage.
-                let mut out = nge_tiles::TileStore::new();
+                let mut out = lumenply_tiles::TileStore::new();
                 let bounds = sel.bounds_within(doc.canvas());
                 for c in store.coords() {
                     if c.rect().intersect(&bounds).is_empty() {
@@ -552,8 +552,8 @@ impl Command for NewLayerFromSelection {
                     let px = t.pixels_mut();
                     for (i, p) in px.iter_mut().enumerate() {
                         let (x, y) = (
-                            ox + (i % nge_tiles::TILE_SIZE) as i32,
-                            oy + (i / nge_tiles::TILE_SIZE) as i32,
+                            ox + (i % lumenply_tiles::TILE_SIZE) as i32,
+                            oy + (i / lumenply_tiles::TILE_SIZE) as i32,
                         );
                         let v = sel.value(x, y);
                         if v < 1.0 {
@@ -759,13 +759,13 @@ impl Command for TransformLayer {
         let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
         match &mut l.content {
             LayerContent::Pixel(store) => {
-                *store = nge_render::transform_store(store, &self.transform);
+                *store = lumenply_render::transform_store(store, &self.transform);
             }
             LayerContent::Text(t) => match self.transform.integer_translation() {
                 Some((dx, dy)) => {
                     t.x += dx as f32;
                     t.y += dy as f32;
-                    nge_render::text::refresh_cache(t);
+                    lumenply_render::text::refresh_cache(t);
                 }
                 None => {
                     return Err(EditError::Invalid(
@@ -776,7 +776,7 @@ impl Command for TransformLayer {
             _ => return Err(EditError::NotPixel(self.layer)),
         }
         if let Some(m) = l.mask.as_mut() {
-            *m = nge_render::transform_mask(m, &self.transform);
+            *m = lumenply_render::transform_mask(m, &self.transform);
         }
         Ok(())
     }
@@ -970,7 +970,7 @@ impl Command for UngroupLayer {
 /// this).
 pub struct SetLayerEffects {
     pub layer: LayerId,
-    pub effects: nge_doc::LayerEffects,
+    pub effects: lumenply_doc::LayerEffects,
 }
 
 impl Command for SetLayerEffects {
@@ -1089,7 +1089,7 @@ impl Command for ApplyFilter {
         let sel = doc.selection.clone();
         let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
         let store = l.pixels_mut().ok_or(EditError::NotPixel(self.layer))?;
-        let filtered = nge_render::apply_filter(store, &self.filter);
+        let filtered = lumenply_render::apply_filter(store, &self.filter);
         match sel {
             None => *store = filtered,
             Some(sel) => {
@@ -1201,10 +1201,10 @@ impl Command for ResizeImage {
         );
         doc.for_each_layer_mut(|l| {
             if let LayerContent::Pixel(store) = &mut l.content {
-                *store = nge_render::transform_store(store, &t);
+                *store = lumenply_render::transform_store(store, &t);
             }
             if let Some(m) = l.mask.as_mut() {
-                *m = nge_render::transform_mask(m, &t);
+                *m = lumenply_render::transform_mask(m, &t);
             }
         });
         doc.width = self.width;
@@ -1223,7 +1223,7 @@ fn shift_all(doc: &mut Document, dx: i32, dy: i32) {
             *store = store.translated(dx, dy);
         }
         if let Some(m) = l.mask.as_mut() {
-            *m = nge_render::transform_mask(m, &Affine::translate(dx as f32, dy as f32));
+            *m = lumenply_render::transform_mask(m, &Affine::translate(dx as f32, dy as f32));
         }
     });
 }
@@ -1262,7 +1262,9 @@ impl Command for PaintSelection {
         let mut sel = doc.selection.take().unwrap_or_else(Selection::none);
         let [cr, cg, cb, ca] = self.brush.color;
         let target = match self.brush.mode {
-            BrushMode::Paint | BrushMode::Dodge => nge_doc::adjust::luminance(cr, cg, cb).clamp(0.0, 1.0),
+            BrushMode::Paint | BrushMode::Dodge => {
+                lumenply_doc::adjust::luminance(cr, cg, cb).clamp(0.0, 1.0)
+            }
             BrushMode::Erase | BrushMode::Burn => 0.0,
         };
         for d in interpolate_dabs(&self.brush, &self.points) {
@@ -1297,7 +1299,7 @@ impl Command for SelectColorRange {
         if tol <= 0.0 {
             return Err(EditError::Invalid("tolerance must be positive".into()));
         }
-        let flat = nge_render::composite_raster(doc);
+        let flat = lumenply_render::composite_raster(doc);
         let mut mask = Mask::hide_all();
         let ramp = (tol * 0.5).max(1e-4);
         for y in 0..flat.height as i32 {
@@ -1395,7 +1397,7 @@ fn sampler<'a>(
 ) -> Result<Box<dyn Fn(i32, i32) -> Rgba + 'a>, EditError> {
     match source {
         SampleSource::Merged => {
-            let flat = nge_render::composite_raster(doc);
+            let flat = lumenply_render::composite_raster(doc);
             let (w, h) = (flat.width, flat.height);
             Ok(Box::new(move |x, y| {
                 if x < 0 || y < 0 || x as u32 >= w || y as u32 >= h {
@@ -1532,7 +1534,7 @@ impl Command for CloneStroke {
 /// Replace the document's work path (the pen tool coalesces its clicks
 /// through this, so drawing a path is one undo step).
 pub struct SetWorkPath {
-    pub path: Option<nge_doc::VectorPath>,
+    pub path: Option<lumenply_doc::VectorPath>,
 }
 
 impl Command for SetWorkPath {
@@ -1765,7 +1767,7 @@ impl Command for HealStroke {
 
 #[allow(clippy::too_many_arguments)]
 fn heal_dab(
-    store: &mut nge_tiles::TileStore,
+    store: &mut lumenply_tiles::TileStore,
     brush: &Brush,
     p: StrokePoint,
     canvas: Rect,
@@ -1983,17 +1985,17 @@ impl Command for RotateImage {
         let t = Affine::rotate(angle).then(&Affine::translate(tx, ty));
         doc.for_each_layer_mut(|l| {
             match &mut l.content {
-                LayerContent::Pixel(store) => *store = nge_render::transform_store(store, &t),
+                LayerContent::Pixel(store) => *store = lumenply_render::transform_store(store, &t),
                 LayerContent::Text(tl) => {
                     let (nx, ny) = t.apply(tl.x, tl.y);
                     tl.x = nx;
                     tl.y = ny;
-                    nge_render::text::refresh_cache(tl);
+                    lumenply_render::text::refresh_cache(tl);
                 }
                 _ => {}
             }
             if let Some(m) = l.mask.as_mut() {
-                *m = nge_render::transform_mask(m, &t);
+                *m = lumenply_render::transform_mask(m, &t);
             }
         });
         if q % 2 == 1 {
@@ -2028,17 +2030,17 @@ impl Command for FlipImage {
         };
         doc.for_each_layer_mut(|l| {
             match &mut l.content {
-                LayerContent::Pixel(store) => *store = nge_render::transform_store(store, &t),
+                LayerContent::Pixel(store) => *store = lumenply_render::transform_store(store, &t),
                 LayerContent::Text(tl) => {
                     let (nx, ny) = t.apply(tl.x, tl.y);
                     tl.x = nx;
                     tl.y = ny;
-                    nge_render::text::refresh_cache(tl);
+                    lumenply_render::text::refresh_cache(tl);
                 }
                 _ => {}
             }
             if let Some(m) = l.mask.as_mut() {
-                *m = nge_render::transform_mask(m, &t);
+                *m = lumenply_render::transform_mask(m, &t);
             }
         });
         doc.selection = None;
@@ -2349,13 +2351,13 @@ impl Command for PaintStroke {
                         let k = (ca * cover).clamp(0.0, 1.0);
                         let [r, g, b, a] = dst.to_straight();
                         let tone = |c: f32| {
-                            let e = nge_doc::adjust::srgb_encode(c);
+                            let e = lumenply_doc::adjust::srgb_encode(c);
                             let e = if mode == BrushMode::Dodge {
                                 e + (1.0 - e) * k
                             } else {
                                 e * (1.0 - k)
                             };
-                            nge_doc::adjust::srgb_decode(e)
+                            lumenply_doc::adjust::srgb_decode(e)
                         };
                         Rgba::from_straight(tone(r), tone(g), tone(b), a)
                     }
@@ -2401,7 +2403,7 @@ impl Command for PaintMask {
             .ok_or_else(|| EditError::Invalid(format!("layer {} has no mask", self.layer)))?;
         let [cr, cg, cb, ca] = self.brush.color;
         let target = match self.brush.mode {
-            BrushMode::Paint => nge_doc::adjust::luminance(cr, cg, cb).clamp(0.0, 1.0),
+            BrushMode::Paint => lumenply_doc::adjust::luminance(cr, cg, cb).clamp(0.0, 1.0),
             BrushMode::Erase | BrushMode::Burn => 0.0,
             BrushMode::Dodge => 1.0,
         };
@@ -2961,7 +2963,7 @@ mod tests {
         let m = doc.layer(id).unwrap().mask.as_ref().unwrap();
         assert!(m.value(30, 30) < 0.01, "black hides");
         assert_eq!(m.value(5, 5), 1.0);
-        let out = nge_render::composite_raster(&doc);
+        let out = lumenply_render::composite_raster(&doc);
         assert!(out.get(30, 30).a < 0.01 && out.get(5, 5).a > 0.99);
         SetMaskEnabled {
             layer: id,
@@ -2970,7 +2972,7 @@ mod tests {
         .apply(&mut doc)
         .unwrap();
         assert!(
-            nge_render::composite_raster(&doc).get(30, 30).a > 0.99,
+            lumenply_render::composite_raster(&doc).get(30, 30).a > 0.99,
             "disabled mask is ignored"
         );
         RemoveMask { layer: id }.apply(&mut doc).unwrap();
@@ -3240,7 +3242,7 @@ mod tests {
 
     #[test]
     fn work_path_fills_strokes_and_selects() {
-        use nge_doc::{PathNode, SubPath, VectorPath};
+        use lumenply_doc::{PathNode, SubPath, VectorPath};
         let mut doc = Document::new(100, 100);
         let id = doc.add_pixel_layer("L");
 
@@ -3636,8 +3638,8 @@ mod tests {
             .unwrap()
             .get_pixel(32, 32)
             .to_straight();
-        let expect = nge_doc::adjust::srgb_decode(
-            nge_doc::adjust::srgb_encode(0.5) + (1.0 - nge_doc::adjust::srgb_encode(0.5)) * 0.5,
+        let expect = lumenply_doc::adjust::srgb_decode(
+            lumenply_doc::adjust::srgb_encode(0.5) + (1.0 - lumenply_doc::adjust::srgb_encode(0.5)) * 0.5,
         );
         assert!((p[0] - expect).abs() < 1e-3, "dodge: {} vs {expect}", p[0]);
         assert!((p[3] - 1.0).abs() < 1e-5, "alpha untouched");
@@ -3659,7 +3661,7 @@ mod tests {
             .unwrap()
             .get_pixel(32, 32)
             .to_straight();
-        let expect = nge_doc::adjust::srgb_decode(nge_doc::adjust::srgb_encode(0.5) * 0.5);
+        let expect = lumenply_doc::adjust::srgb_decode(lumenply_doc::adjust::srgb_encode(0.5) * 0.5);
         assert!((p[0] - expect).abs() < 1e-3, "burn: {} vs {expect}", p[0]);
 
         // Jitter scatters but replays identically and stays inside the

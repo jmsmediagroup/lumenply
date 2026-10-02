@@ -1,5 +1,6 @@
 //! Session persistence: the autosave backup, crash recovery and the
-//! recent-files list. Everything lives in `~/.nge` (or `%USERPROFILE%\.nge`).
+//! recent-files list. Everything lives in `~/.lumenply` (migrated
+//! automatically from the pre-naming `~/.nge`).
 
 use std::path::Path;
 
@@ -128,11 +129,20 @@ impl Prefs {
 pub(crate) fn data_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(|h| PathBuf::from(h).join(".nge"))
+        .map(|h| {
+            let home = PathBuf::from(h);
+            let dir = home.join(".lumenply");
+            // One-time migration from the working-title directory.
+            let legacy = home.join(".nge");
+            if !dir.exists() && legacy.exists() {
+                let _ = std::fs::rename(&legacy, &dir);
+            }
+            dir
+        })
 }
 
 pub(crate) fn autosave_file() -> Option<PathBuf> {
-    data_dir().map(|d| d.join("autosave.nge"))
+    data_dir().map(|d| d.join("autosave.lumen"))
 }
 
 /// Sidecar remembering which file the autosaved document came from.

@@ -1,6 +1,6 @@
 //! Desktop editor shell built on egui.
 //!
-//! A thin layer over `nge_core::Editor`: every edit is a `Command`, so undo,
+//! A thin layer over `lumenply_core::Editor`: every edit is a `Command`, so undo,
 //! history and (later) scripting behave exactly as in the headless CLI.
 //! Compositing is still the CPU reference renderer; redraws are limited to
 //! the area a command reports as affected, which keeps brushing responsive.
@@ -13,13 +13,13 @@ use std::sync::OnceLock;
 use eframe::egui::{
     self, Align2, Color32, FontId, Key, Pos2, RichText, Sense, Shape, Stroke, TextureHandle, Vec2,
 };
-use nge_core::commands::*;
-use nge_core::{Command, Editor};
-use nge_doc::{
+use lumenply_core::commands::*;
+use lumenply_core::{Command, Editor};
+use lumenply_doc::{
     Adjustment, BlendMode, CombineOp, Document, Filter, Layer, LayerContent, LayerId, Selection, TextLayer,
 };
-use nge_io::project;
-use nge_tiles::{Affine, Raster, Rect};
+use lumenply_io::project;
+use lumenply_tiles::{Affine, Raster, Rect};
 
 mod canvas;
 mod dialogs;
@@ -47,11 +47,11 @@ fn main() -> Result<(), eframe::Error> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1600.0, 1000.0])
             .with_min_inner_size([900.0, 600.0])
-            .with_title("NGE"),
+            .with_title("Lumenply"),
         ..Default::default()
     };
     eframe::run_native(
-        "NGE",
+        "Lumenply",
         options,
         Box::new(move |cc| Ok(Box::new(App::new(cc, &args)))),
     )
@@ -207,7 +207,7 @@ struct App {
     /// Set once the user confirms quitting with unsaved changes.
     allow_close: bool,
     /// Composite cache for everything below the layer being edited.
-    below: nge_render::BelowCache,
+    below: lumenply_render::BelowCache,
     /// When the last autosave backup was written (or the session began).
     last_autosave: std::time::Instant,
     /// Recently opened or saved files, newest first.
@@ -236,15 +236,18 @@ struct App {
 }
 
 impl App {
-    /// `nge-app [--demo | file.nge | image.png] [--place image.png]...`
+    /// `lumenply-app [--demo | file.nge | image.png] [--place image.png]...`
     fn new(cc: &eframe::CreationContext<'_>, args: &[String]) -> Self {
         theme::install(&cc.egui_ctx);
 
         let mut status = String::from("Ready");
         let first = args.first().filter(|a| *a != "--place").map(String::as_str);
         let (editor, path) = match first {
-            Some("--demo") => (nge_core::demo::build(1200, 800).expect("demo document"), None),
-            Some(p) if is_image_path(p) => match nge_io::load(p) {
+            Some("--demo") => (
+                lumenply_core::demo::build(1200, 800).expect("demo document"),
+                None,
+            ),
+            Some(p) if is_image_path(p) => match lumenply_io::load(p) {
                 Ok(raster) => {
                     let mut ed = Editor::new(Document::new(raster.width, raster.height));
                     let _ = ed.execute(&AddPixelLayer::from_raster("Background", raster, 0, 0));
@@ -255,7 +258,7 @@ impl App {
                     (blank(1200, 800), None)
                 }
             },
-            Some(p) if is_psd_path(p) => match nge_io::psd::load(p) {
+            Some(p) if is_psd_path(p) => match lumenply_io::psd::load(p) {
                 Ok(rep) => {
                     if !rep.warnings.is_empty() {
                         status = format!("Imported with notes: {}", rep.warnings.join("; "));
@@ -333,7 +336,7 @@ impl App {
             hist_thumbs: Vec::new(),
             palette: None,
             allow_close: false,
-            below: nge_render::BelowCache::new(),
+            below: lumenply_render::BelowCache::new(),
             last_autosave: std::time::Instant::now(),
             recent: session::load_recent(),
             histogram: [0; histogram::BINS],
@@ -463,7 +466,7 @@ impl App {
         self.path = path;
         self.saved_rev = self.editor.history().len();
         self.hist_thumbs.clear();
-        self.below = nge_render::BelowCache::new();
+        self.below = lumenply_render::BelowCache::new();
         self.cancel_interaction();
         self.select_top();
         self.mark(None);
@@ -516,9 +519,9 @@ impl App {
             finished = true;
         }
         let mut rgb = [
-            nge_io::linear_to_srgb(t.color[0]) as f32 / 255.0,
-            nge_io::linear_to_srgb(t.color[1]) as f32 / 255.0,
-            nge_io::linear_to_srgb(t.color[2]) as f32 / 255.0,
+            lumenply_io::linear_to_srgb(t.color[0]) as f32 / 255.0,
+            lumenply_io::linear_to_srgb(t.color[1]) as f32 / 255.0,
+            lumenply_io::linear_to_srgb(t.color[2]) as f32 / 255.0,
         ];
         if egui::color_picker::color_edit_button_rgb(ui, &mut rgb).changed() {
             t.color = linear_rgba(rgb, t.color[3]);
@@ -882,7 +885,7 @@ impl eframe::App for App {
         } else {
             ""
         };
-        let title = format!("{name}{unsaved} — NGE");
+        let title = format!("{name}{unsaved} — Lumenply");
         if self.last_title != title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.last_title = title;
@@ -904,7 +907,7 @@ impl eframe::App for App {
 
 fn blank(w: u32, h: u32) -> Editor {
     let mut ed = Editor::new(Document::new(w, h));
-    let paper = Raster::filled(w, h, nge_tiles::Rgba::WHITE);
+    let paper = Raster::filled(w, h, lumenply_tiles::Rgba::WHITE);
     let _ = ed.execute(&AddPixelLayer::from_raster("Background", paper, 0, 0));
     ed
 }

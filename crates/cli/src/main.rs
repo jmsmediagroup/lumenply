@@ -1,4 +1,4 @@
-//! `nge`: a headless front end for the engine. Useful for batch jobs, for
+//! `lumenply`: a headless front end for the engine. Useful for batch jobs, for
 //! testing without a GUI, and for the CI performance gates.
 
 use std::path::PathBuf;
@@ -6,14 +6,18 @@ use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use nge_core::commands::AddPixelLayer;
-use nge_core::Editor;
-use nge_doc::{BlendMode, Document, Layer, LayerContent};
-use nge_io::project;
-use nge_tiles::{Raster, Rgba};
+use lumenply_core::commands::AddPixelLayer;
+use lumenply_core::Editor;
+use lumenply_doc::{BlendMode, Document, Layer, LayerContent};
+use lumenply_io::project;
+use lumenply_tiles::{Raster, Rgba};
 
 #[derive(Parser)]
-#[command(name = "nge", version, about = "Next-gen open image editor (headless CLI)")]
+#[command(
+    name = "lumenply",
+    version,
+    about = "Lumenply — free photo editor (headless CLI)"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -30,7 +34,7 @@ enum Cmd {
         out: PathBuf,
         #[arg(short, long = "layer", required = true)]
         layers: Vec<String>,
-        /// Also save the layered document as an .nge project.
+        /// Also save the layered document as a .lumen project.
         #[arg(long)]
         save: Option<PathBuf>,
     },
@@ -42,17 +46,17 @@ enum Cmd {
         width: u32,
         #[arg(long, default_value_t = 768)]
         height: u32,
-        /// Also save the layered document as an .nge project.
+        /// Also save the layered document as a .lumen project.
         #[arg(long)]
         save: Option<PathBuf>,
     },
-    /// Render an .nge project to PNG.
+    /// Render a .lumen project to PNG.
     Render {
         project: PathBuf,
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// Print the layer tree of an .nge project.
+    /// Print the layer tree of a .lumen project.
     Info { project: PathBuf },
     /// Time the compositor on a synthetic document (the Phase 1 gate).
     Bench {
@@ -65,7 +69,7 @@ enum Cmd {
     },
     /// Write a project (or the demo) as a layered Photoshop PSD.
     ExportPsd {
-        /// An .nge project, or omit for the demo document.
+        /// An .lumen project, or omit for the demo document.
         project: Option<PathBuf>,
         #[arg(short, long)]
         out: PathBuf,
@@ -86,9 +90,9 @@ fn main() -> Result<()> {
         Cmd::ExportPsd { project, out } => {
             let doc = match project {
                 Some(p) => load_any(&p)?,
-                None => nge_core::demo::build(1200, 800)?.doc().clone(),
+                None => lumenply_core::demo::build(1200, 800)?.doc().clone(),
             };
-            let rep = nge_io::psd::save(&out, &doc)?;
+            let rep = lumenply_io::psd::save(&out, &doc)?;
             for w in &rep.warnings {
                 eprintln!("warning: {w}");
             }
@@ -98,13 +102,13 @@ fn main() -> Result<()> {
         Cmd::Render { project, out } => {
             let doc = load_any(&project)?;
             let t = Instant::now();
-            let flat = nge_render::composite_raster(&doc);
+            let flat = lumenply_render::composite_raster(&doc);
             eprintln!(
                 "rendered {} layers in {:.1} ms",
                 doc.layer_count(),
                 t.elapsed().as_secs_f64() * 1e3
             );
-            nge_io::save_png(&out, &flat)?;
+            lumenply_io::save_png(&out, &flat)?;
             println!("wrote {}", out.display());
             Ok(())
         }
@@ -129,11 +133,11 @@ fn main() -> Result<()> {
     }
 }
 
-/// Open an .nge project or a .psd file.
+/// Open a .lumen project or a .psd file.
 fn load_any(path: &PathBuf) -> Result<Document> {
     let lower = path.to_string_lossy().to_ascii_lowercase();
     if lower.ends_with(".psd") {
-        let rep = nge_io::psd::load(path)?;
+        let rep = lumenply_io::psd::load(path)?;
         for w in &rep.warnings {
             eprintln!("warning: {w}");
         }
@@ -186,7 +190,7 @@ fn composite(out: PathBuf, specs: Vec<String>, save: Option<PathBuf>) -> Result<
             Some(o) => o.parse().with_context(|| format!("bad opacity in '{spec}'"))?,
             None => 1.0,
         };
-        let raster = nge_io::load(path).with_context(|| format!("loading {path}"))?;
+        let raster = lumenply_io::load(path).with_context(|| format!("loading {path}"))?;
         let ed = editor.get_or_insert_with(|| Editor::new(Document::new(raster.width, raster.height)));
         let mut cmd = AddPixelLayer::from_raster(path, raster, 0, 0);
         cmd.blend = blend;
@@ -198,7 +202,7 @@ fn composite(out: PathBuf, specs: Vec<String>, save: Option<PathBuf>) -> Result<
     };
 
     let t = Instant::now();
-    let flat = nge_render::composite_raster(ed.doc());
+    let flat = lumenply_render::composite_raster(ed.doc());
     eprintln!(
         "composited {} layers at {}x{} in {:.1} ms",
         specs.len(),
@@ -206,7 +210,7 @@ fn composite(out: PathBuf, specs: Vec<String>, save: Option<PathBuf>) -> Result<
         flat.height,
         t.elapsed().as_secs_f64() * 1e3
     );
-    nge_io::save_png(&out, &flat)?;
+    lumenply_io::save_png(&out, &flat)?;
     println!("wrote {}", out.display());
     if let Some(p) = save {
         project::save(&p, ed.doc())?;
@@ -217,9 +221,9 @@ fn composite(out: PathBuf, specs: Vec<String>, save: Option<PathBuf>) -> Result<
 
 fn paint(out: PathBuf, width: u32, height: u32, save: Option<PathBuf>) -> Result<()> {
     let t = Instant::now();
-    let ed = nge_core::demo::build(width, height)?;
+    let ed = lumenply_core::demo::build(width, height)?;
     eprintln!("built demo document in {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
-    nge_io::save_png(&out, &nge_render::composite_raster(ed.doc()))?;
+    lumenply_io::save_png(&out, &lumenply_render::composite_raster(ed.doc()))?;
     println!("wrote {} (history: {:?})", out.display(), ed.history());
     if let Some(p) = save {
         project::save(&p, ed.doc())?;
@@ -236,19 +240,19 @@ fn bench(size: u32, layers: u32, runs: u32) -> Result<()> {
         let fill = Raster::filled(size, size, Rgba::from_straight(shade, 1.0 - shade, 0.5, 0.6));
         let layer = doc.layer_mut(id).unwrap();
         layer.blend = BlendMode::ALL[i as usize % BlendMode::ALL.len()];
-        *layer.pixels_mut().unwrap() = nge_tiles::TileStore::from_raster(&fill, 0, 0);
+        *layer.pixels_mut().unwrap() = lumenply_tiles::TileStore::from_raster(&fill, 0, 0);
     }
-    nge_core::compact_storage(&mut doc);
+    lumenply_core::compact_storage(&mut doc);
     let mp = (size as f64 * size as f64) / 1e6;
     println!(
         "{layers} full {size}x{size} layers ({mp:.1} MP), mixed blend modes, {} threads, {:.0} MB of layer pixels",
         rayon_threads(),
-        nge_core::storage_bytes(&doc) as f64 / 1e6
+        lumenply_core::storage_bytes(&doc) as f64 / 1e6
     );
     let mut best = f64::MAX;
     for run in 1..=runs {
         let t = Instant::now();
-        let out = nge_render::composite(&doc);
+        let out = lumenply_render::composite(&doc);
         let ms = t.elapsed().as_secs_f64() * 1e3;
         best = best.min(ms);
         println!("run {run}: {ms:.1} ms ({} tiles)", out.len());
