@@ -228,6 +228,27 @@ fn gradient_fill_spans_the_canvas_and_follows_canvas_changes() {
 }
 
 #[test]
+fn a_solid_fill_costs_one_tile_of_history() {
+    // 1024² is 16 tiles, all interior: one shared 16-bit tile of 512 KiB.
+    let mut ed = Editor::new(Document::new(1024, 1024));
+    let mut add = AddFillLayer::new(Fill::Solid {
+        color: [1.0, 0.0, 0.0],
+    });
+    add.mask_selection = false;
+    ed.execute(&add).unwrap();
+    assert_eq!(ed.history_bytes(), 0, "nothing was replaced");
+    let id = top_id(&ed);
+    ed.execute(&SetFill {
+        layer: id,
+        fill: Fill::Solid {
+            color: [0.0, 0.0, 1.0],
+        },
+    })
+    .unwrap();
+    assert_eq!(ed.history_bytes(), 256 * 256 * 4 * 2, "the old colour's one tile");
+}
+
+#[test]
 fn fill_clipped_to_a_layer_paints_only_inside_it() {
     // Base: opaque pixels on the left half only.
     let mut ed = Editor::new(Document::new(4, 4));
