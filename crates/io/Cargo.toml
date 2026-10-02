@@ -16,6 +16,7 @@ lumenply-doc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 zip.workspace = true
+flate2.workspace = true
 quick-xml.workspace = true
 exr.workspace = true
 qcms.workspace = true

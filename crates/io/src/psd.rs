@@ -16,7 +16,7 @@ use std::path::Path;
 use lumenply_doc::{Adjustment, BlendMode, Document, Layer, LayerContent, Mask};
 use lumenply_tiles::{Raster, Rect, Rgba, TileStore};
 
-use crate::{linear_to_srgb, srgb_to_linear, IoError};
+use crate::{linear_to_srgb, IoError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PsdError {
@@ -216,11 +216,38 @@ fn encode_channel_rle(plane: &[u8], w: usize, h: usize) -> Vec<u8> {
     out
 }
 
-fn decode_channel(rd: &mut Rd, w: usize, h: usize, depth_bytes: usize) -> Result<Vec<u8>, PsdError> {
+/// Raw plane bytes → samples scaled to the full u16 range (8-bit values
+/// multiply by 257, so 255 → 65535 exactly; 16-bit values are big-endian).
+fn bytes_to_samples(bytes: &[u8], depth_bytes: usize) -> Vec<u16> {
+    if depth_bytes == 2 {
+        bytes
+            .chunks_exact(2)
+            .map(|p| u16::from_be_bytes([p[0], p[1]]))
+            .collect()
+    } else {
+        bytes.iter().map(|&b| b as u16 * 257).collect()
+    }
+}
+
+/// Inflate a zlib stream to at most `cap` bytes (a lying stream must not
+/// size an unbounded allocation).
+fn inflate(src: &[u8], cap: usize) -> Result<Vec<u8>, PsdError> {
+    use std::io::Read;
+    let mut out = Vec::with_capacity(cap.min(1 << 20));
+    let mut dec = flate2::read::ZlibDecoder::new(src).take(cap as u64 + 1);
+    dec.read_to_end(&mut out)
+        .map_err(|e| PsdError::Corrupt(format!("zip channel: {e}")))?;
+    if out.len() > cap {
+        return Err(PsdError::Corrupt("zip channel inflates past its plane".into()));
+    }
+    Ok(out)
+}
+
+fn decode_channel(rd: &mut Rd, w: usize, h: usize, depth_bytes: usize) -> Result<Vec<u16>, PsdError> {
     let compression = rd.u16()?;
     let plane_len = w * h * depth_bytes;
     match compression {
-        0 => Ok(rd.bytes(plane_len)?.to_vec()),
+        0 => Ok(bytes_to_samples(rd.bytes(plane_len)?, depth_bytes)),
         1 => {
             let mut counts = Vec::with_capacity(h);
             for _ in 0..h {
@@ -234,7 +261,36 @@ fn decode_channel(rd: &mut Rd, w: usize, h: usize, depth_bytes: usize) -> Result
                 let row = rd.bytes(c)?;
                 out.extend(unpackbits(row, w * depth_bytes)?);
             }
-            Ok(out)
+            Ok(bytes_to_samples(&out, depth_bytes))
+        }
+        // ZIP, without (2) and with (3) per-row delta prediction —
+        // Photoshop's usual coding for 16-bit layer channels.
+        2 | 3 => {
+            let rest = &rd.buf[rd.pos..];
+            rd.pos = rd.buf.len();
+            let bytes = inflate(rest, plane_len)?;
+            if bytes.len() != plane_len {
+                return Err(PsdError::Corrupt(format!(
+                    "zip channel inflated to {} of {plane_len} bytes",
+                    bytes.len()
+                )));
+            }
+            let mut samples = bytes_to_samples(&bytes, depth_bytes);
+            if compression == 3 {
+                // Undo the delta coding along each row, on the sample type
+                // the file stores (bytes for 8-bit, u16 for 16-bit).
+                for row in samples.chunks_exact_mut(w) {
+                    for i in 1..row.len() {
+                        if depth_bytes == 2 {
+                            row[i] = row[i].wrapping_add(row[i - 1]);
+                        } else {
+                            let v = ((row[i] / 257) as u8).wrapping_add((row[i - 1] / 257) as u8);
+                            row[i] = v as u16 * 257;
+                        }
+                    }
+                }
+            }
+            Ok(samples)
         }
         other => Err(PsdError::Unsupported(format!("compression method {other}"))),
     }
@@ -961,14 +1017,14 @@ pub fn save(path: impl AsRef<Path>, doc: &Document) -> Result<Report<()>, PsdErr
 struct RawLayer {
     name: String,
     bounds: Rect,
-    channels: Vec<(i16, Vec<u8>)>, // decoded planes
+    channels: Vec<(i16, Vec<u16>)>, // decoded planes, full-range samples
     blend: BlendMode,
     blend_known: bool,
     pass_through: bool,
     clip: bool,
     opacity: f32,
     visible: bool,
-    mask: Option<(Rect, Vec<u8>, u8, bool)>,
+    mask: Option<(Rect, Vec<u16>, u8, bool)>,
     section: u32, // 0 none, 1/2 group open, 3 close
     is_adjustment: bool,
     adjustment: Option<Adjustment>,
@@ -1020,11 +1076,12 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     if !(3..=56).contains(&channels) {
         return Err(PsdError::Corrupt(format!("{channels} channels in an RGB file")));
     }
-    if depth != 8 {
+    if depth != 8 && depth != 16 {
         return Err(PsdError::Unsupported(format!(
-            "{depth}-bit depth; only 8-bit is supported yet"
+            "{depth}-bit depth; only 8- and 16-bit are supported yet"
         )));
     }
+    let depth_bytes = depth as usize / 8;
     if mode != 3 {
         return Err(PsdError::Unsupported(format!(
             "colour mode {mode}; only RGB is supported yet"
@@ -1172,7 +1229,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     };
                     if w > 0 && h > 0 && len >= 2 {
                         let mut sub = Rd::new(data);
-                        match decode_channel(&mut sub, w, h, 1) {
+                        match decode_channel(&mut sub, w, h, depth_bytes) {
                             Ok(plane) => {
                                 if id == -2 {
                                     if let Some(m) = layer.mask.as_mut() {
@@ -1198,9 +1255,12 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
         let (w, h) = (width as usize, height as usize);
         let compression = rd.u16()?;
         let nch = channels as usize; // header-validated: 3..=56
-        let planes: Vec<Vec<u8>> = match compression {
+        let planes: Vec<Vec<u16>> = match compression {
             0 => (0..nch)
-                .map(|_| rd.bytes(w * h).map(|b| b.to_vec()))
+                .map(|_| {
+                    rd.bytes(w * h * depth_bytes)
+                        .map(|b| bytes_to_samples(b, depth_bytes))
+                })
                 .collect::<Result<_, _>>()?,
             1 => {
                 let mut counts = Vec::with_capacity(h * nch);
@@ -1210,12 +1270,13 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let mut planes = Vec::new();
                 for c in 0..nch {
                     let remaining = buf.len().saturating_sub(rd.pos);
-                    let mut plane = Vec::with_capacity((w * h).min(remaining.saturating_mul(128)));
+                    let mut plane =
+                        Vec::with_capacity((w * h * depth_bytes).min(remaining.saturating_mul(128)));
                     for y in 0..h {
                         let row = rd.bytes(counts[c * h + y])?;
-                        plane.extend(unpackbits(row, w)?);
+                        plane.extend(unpackbits(row, w * depth_bytes)?);
                     }
-                    planes.push(plane);
+                    planes.push(bytes_to_samples(&plane, depth_bytes));
                 }
                 planes
             }
@@ -1232,14 +1293,14 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
         let n = (width * height) as usize;
         for i in 0..n {
             let a = if planes.len() > 3 {
-                planes[3][i] as f32 / 255.0
+                planes[3][i] as f32 / 65535.0
             } else {
                 1.0
             };
             r.pixels[i] = Rgba::from_straight(
-                srgb_to_linear(planes[0][i]),
-                srgb_to_linear(planes[1][i]),
-                srgb_to_linear(planes[2][i]),
+                crate::srgb_to_linear_f(planes[0][i] as f32 / 65535.0),
+                crate::srgb_to_linear_f(planes[1][i] as f32 / 65535.0),
+                crate::srgb_to_linear_f(planes[2][i] as f32 / 65535.0),
                 a,
             );
         }
@@ -1329,12 +1390,12 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     let a = get(-1);
                     let mut raster = Raster::new(b.w, b.h);
                     for i in 0..n {
-                        let ch = |p: Option<&[u8]>| p.map_or(0u8, |p| p[i]);
-                        let alpha = a.map_or(1.0, |p| p[i] as f32 / 255.0);
+                        let ch = |p: Option<&[u16]>| p.map_or(0.0, |p| p[i] as f32 / 65535.0);
+                        let alpha = a.map_or(1.0, |p| p[i] as f32 / 65535.0);
                         raster.pixels[i] = Rgba::from_straight(
-                            srgb_to_linear(ch(r)),
-                            srgb_to_linear(ch(g)),
-                            srgb_to_linear(ch(bl)),
+                            crate::srgb_to_linear_f(ch(r)),
+                            crate::srgb_to_linear_f(ch(g)),
+                            crate::srgb_to_linear_f(ch(bl)),
                             alpha,
                         );
                     }
@@ -1368,7 +1429,7 @@ fn build_mask(rl: &RawLayer) -> Option<Mask> {
     if r.w > 0 && r.h > 0 && plane.len() == (r.w * r.h) as usize {
         for y in 0..r.h as i32 {
             for x in 0..r.w as i32 {
-                let v = plane[(y as u32 * r.w + x as u32) as usize] as f32 / 255.0;
+                let v = plane[(y as u32 * r.w + x as u32) as usize] as f32 / 65535.0;
                 m.set_value(r.x + x, r.y + y, v);
             }
         }
@@ -1396,6 +1457,17 @@ mod tests {
     /// Minimal PSD bytes: a header plus a layer-info section holding
     /// `records` (already encoded) followed by `channel_data`.
     fn craft_psd(channels: u16, w: u32, h: u32, records: &[u8], channel_data: &[u8]) -> Vec<u8> {
+        craft_psd_depth(8, channels, w, h, records, channel_data)
+    }
+
+    fn craft_psd_depth(
+        depth: u16,
+        channels: u16,
+        w: u32,
+        h: u32,
+        records: &[u8],
+        channel_data: &[u8],
+    ) -> Vec<u8> {
         let mut f = Vec::new();
         f.extend_from_slice(b"8BPS");
         put_u16(&mut f, 1); // version
@@ -1403,7 +1475,7 @@ mod tests {
         put_u16(&mut f, channels);
         put_u32(&mut f, h);
         put_u32(&mut f, w);
-        put_u16(&mut f, 8); // depth
+        put_u16(&mut f, depth);
         put_u16(&mut f, 3); // RGB
         put_u32(&mut f, 0); // colour mode data
         put_u32(&mut f, 0); // resources
@@ -1459,6 +1531,72 @@ mod tests {
         let path = temp(name);
         std::fs::write(&path, bytes).unwrap();
         load(&path)
+    }
+
+    #[test]
+    fn sixteen_bit_psds_load_at_full_precision() {
+        // Flat file: header depth 16, no layers, raw composite. The red
+        // plane ramps through exact 16-bit values no 8-bit file can hold.
+        let reds: [u16; 4] = [0, 16384, 32768, 65535];
+        let mut f = craft_psd_depth(16, 3, 2, 2, &[], &[]);
+        put_u16(&mut f, 0); // composite compression: raw
+        for &v in &reds {
+            f.extend_from_slice(&v.to_be_bytes());
+        }
+        for _ in 0..2 {
+            // green and blue planes: zero
+            f.extend_from_slice(&[0u8; 8]);
+        }
+        let doc = load_bytes("flat16.psd", &f).unwrap().value;
+        let px = doc.layers()[0].pixels().unwrap();
+        for (i, &v) in reds.iter().enumerate() {
+            let got = px.get_pixel(i as i32 % 2, i as i32 / 2).to_straight()[0];
+            let want = crate::srgb_to_linear_f(v as f32 / 65535.0);
+            assert!((got - want).abs() < 2e-4, "16-bit sample {v}: {got} vs {want}");
+        }
+
+        // Layered file: one 2x2 layer whose channels are ZIP-with-
+        // prediction coded, Photoshop's usual choice for 16-bit layers.
+        let zip_pred = |samples: &[u16], w: usize| -> Vec<u8> {
+            let mut bytes = Vec::new();
+            for row in samples.chunks(w) {
+                let mut prev = 0u16;
+                for (i, &s) in row.iter().enumerate() {
+                    let d = if i == 0 { s } else { s.wrapping_sub(prev) };
+                    bytes.extend_from_slice(&d.to_be_bytes());
+                    prev = s;
+                }
+            }
+            use std::io::Write;
+            let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+            enc.write_all(&bytes).unwrap();
+            let mut out = vec![0, 3]; // compression = 3 (zip with prediction)
+            out.extend(enc.finish().unwrap());
+            out
+        };
+        let zero = zip_pred(&[0, 0, 0, 0], 2);
+        let red = zip_pred(&reds, 2);
+        let mut data = Vec::new();
+        let mut chans = Vec::new();
+        for (id, payload) in [(0i16, &red), (1, &zero), (2, &zero)] {
+            chans.push((id, payload.len() as u32));
+            data.extend_from_slice(payload);
+        }
+        let rec = craft_record(&chans, None, (0, 0, 2, 2));
+        let mut psd = craft_psd_depth(16, 3, 2, 2, &rec, &data);
+        // A trailing raw composite keeps the file valid for strict readers.
+        put_u16(&mut psd, 0);
+        psd.extend_from_slice(&[0u8; 2 * 2 * 2 * 3]);
+        let doc = load_bytes("layered16.psd", &psd).unwrap().value;
+        let px = doc.layers()[0].pixels().unwrap();
+        let got = px.get_pixel(0, 1).to_straight()[0];
+        let want = crate::srgb_to_linear_f(32768.0 / 65535.0);
+        assert!(
+            (got - want).abs() < 2e-4,
+            "zip-predicted 16-bit channel: {got} vs {want}"
+        );
+        assert!(px.get_pixel(1, 1).to_straight()[0] > 0.999, "65535 is white");
+        assert!(px.get_pixel(0, 0).to_straight()[1] < 1e-4, "green stays 0");
     }
 
     #[test]

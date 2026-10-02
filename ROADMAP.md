@@ -115,8 +115,10 @@ None of these could be tested in the container.
 - [x] WebP import; OpenEXR import/export (linear f32 both ways — lossless for
       this engine's native pixels; bit-exact round-trip tested)
 - [ ] AVIF/HEIF; camera RAW via rawler or LibRaw
-- [ ] PSD: 16-bit, PSB (large documents), Black & White/Exposure/Vibrance descriptors,
-      text layers as editable PSD text, live filters as smart filters (or rasterised with a note)
+- [~] PSD: 16-bit import (raw, RLE and ZIP ± prediction channels, full
+      precision, psd-tools-cross-checked). Still open: 16-bit export, PSB
+      (large documents), Black & White/Exposure/Vibrance descriptors,
+      text layers as editable PSD text, live filters as smart filters
 - [x] OpenRaster (.ora) import/export for GIMP/Krita interchange (layers, groups,
       opacity, visibility, the ten blend modes; masks baked in, adjustments and
       live filters skipped with warnings)
