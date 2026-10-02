@@ -79,7 +79,7 @@ impl FromStr for BlendMode {
 pub mod adjust;
 pub mod selection;
 
-pub use adjust::{Adjustment, CompiledAdjustment};
+pub use adjust::{Adjustment, CompiledAdjustment, LevelsChannel};
 pub use selection::{CombineOp, Selection};
 
 /// A pixel filter: destructive when applied to a layer, live when it is a

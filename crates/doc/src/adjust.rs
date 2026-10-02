@@ -25,7 +25,7 @@ pub enum Adjustment {
         lightness: f32,
     },
     /// Remap input range `[in_black, in_white]` through `gamma` onto
-    /// `[out_black, out_white]`.
+    /// `[out_black, out_white]`, then each channel through its own remap.
     Levels {
         in_black: f32,
         in_white: f32,
@@ -33,6 +33,9 @@ pub enum Adjustment {
         gamma: f32,
         out_black: f32,
         out_white: f32,
+        /// Per-channel (R, G, B) remaps applied after the master one.
+        #[serde(default, skip_serializing_if = "channels_identity")]
+        channels: [LevelsChannel; 3],
     },
     /// A master curve through control points `[x, y]` in `[0, 1]`, sorted by
     /// `x`, interpolated with a monotone cubic so it never overshoots.
@@ -76,6 +79,47 @@ pub enum Adjustment {
     },
 }
 
+/// One channel's levels remap (same parameters as the master set).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LevelsChannel {
+    pub in_black: f32,
+    pub in_white: f32,
+    pub gamma: f32,
+    pub out_black: f32,
+    pub out_white: f32,
+}
+
+impl Default for LevelsChannel {
+    fn default() -> Self {
+        LevelsChannel {
+            in_black: 0.0,
+            in_white: 1.0,
+            gamma: 1.0,
+            out_black: 0.0,
+            out_white: 1.0,
+        }
+    }
+}
+
+impl LevelsChannel {
+    pub fn is_identity(&self) -> bool {
+        *self == LevelsChannel::default()
+    }
+
+    /// The remap itself, in the (gamma) domain levels work in.
+    pub fn map(&self, x: f32) -> f32 {
+        let span = (self.in_white - self.in_black).max(1e-4);
+        let g = 1.0 / self.gamma.max(1e-3);
+        let t = ((x - self.in_black) / span).clamp(0.0, 1.0).powf(g);
+        self.out_black + (self.out_white - self.out_black) * t
+    }
+}
+
+fn channels_identity(c: &[LevelsChannel; 3]) -> bool {
+    c.iter().all(LevelsChannel::is_identity)
+}
+
 impl Adjustment {
     pub fn name(&self) -> &'static str {
         match self {
@@ -109,6 +153,7 @@ impl Adjustment {
             gamma: 1.0,
             out_black: 0.0,
             out_white: 1.0,
+            channels: [LevelsChannel::default(); 3],
         }
     }
 
@@ -155,16 +200,36 @@ impl Adjustment {
                 gamma,
                 out_black,
                 out_white,
+                channels,
             } => {
-                let span = (in_white - in_black).max(1e-4);
-                let g = 1.0 / gamma.max(1e-3);
-                wrap(
-                    &|x| {
-                        let t = ((x - in_black) / span).clamp(0.0, 1.0).powf(g);
-                        out_black + (out_white - out_black) * t
-                    },
-                    self.gamma_space(),
-                )
+                let master = LevelsChannel {
+                    in_black: *in_black,
+                    in_white: *in_white,
+                    gamma: *gamma,
+                    out_black: *out_black,
+                    out_white: *out_white,
+                };
+                if channels_identity(channels) {
+                    wrap(&|x| master.map(x), self.gamma_space())
+                } else {
+                    // One LUT per channel: the master remap, then the
+                    // channel's own, gamma-wrapped like every levels step.
+                    let g = self.gamma_space();
+                    let per = |ch: &LevelsChannel| {
+                        build_lut(|x| {
+                            if g {
+                                srgb_decode(ch.map(master.map(srgb_encode(x))))
+                            } else {
+                                ch.map(master.map(x))
+                            }
+                        })
+                    };
+                    CompiledAdjustment::LutRgb(Box::new([
+                        *per(&channels[0]),
+                        *per(&channels[1]),
+                        *per(&channels[2]),
+                    ]))
+                }
             }
             Adjustment::Curves { points } => {
                 let spline = MonotoneCubic::new(points);
@@ -259,6 +324,8 @@ pub enum CompiledAdjustment {
     /// Per-pixel maths; the flag says whether it runs on gamma values.
     Direct(Adjustment, bool),
     Lut(Box<[f32; LUT_SIZE]>),
+    /// Separate tables for R, G and B (per-channel Levels).
+    LutRgb(Box<[[f32; LUT_SIZE]; 3]>),
 }
 
 impl CompiledAdjustment {
@@ -269,6 +336,11 @@ impl CompiledAdjustment {
                 lut_lookup(lut, rgb[0]),
                 lut_lookup(lut, rgb[1]),
                 lut_lookup(lut, rgb[2]),
+            ],
+            CompiledAdjustment::LutRgb(luts) => [
+                lut_lookup(&luts[0], rgb[0]),
+                lut_lookup(&luts[1], rgb[1]),
+                lut_lookup(&luts[2], rgb[2]),
             ],
             CompiledAdjustment::Direct(adj, gamma) => {
                 let [r, g, b] = if *gamma {
@@ -587,6 +659,7 @@ mod tests {
             gamma: 1.0,
             out_black: 0.0,
             out_white: 1.0,
+            channels: Default::default(),
         };
         assert!(close(in_gamma(&crush, [0.25; 3])[0], 0.0));
         assert!(close(in_gamma(&crush, [0.5; 3])[0], 0.5));
@@ -598,8 +671,61 @@ mod tests {
             gamma: 2.0,
             out_black: 0.0,
             out_white: 1.0,
+            channels: Default::default(),
         };
         assert!(close(in_gamma(&bright, [0.25; 3])[0], 0.5)); // 0.25^(1/2)
+    }
+
+    #[test]
+    fn per_channel_levels_remap_each_channel_alone() {
+        // Red: crush [0.25, 0.75]; green: gamma 2; blue: identity. The
+        // master set stays identity, so each channel shows only its own map.
+        let adj = Adjustment::Levels {
+            in_black: 0.0,
+            in_white: 1.0,
+            gamma: 1.0,
+            out_black: 0.0,
+            out_white: 1.0,
+            channels: [
+                LevelsChannel {
+                    in_black: 0.25,
+                    in_white: 0.75,
+                    ..LevelsChannel::default()
+                },
+                LevelsChannel {
+                    gamma: 2.0,
+                    ..LevelsChannel::default()
+                },
+                LevelsChannel::default(),
+            ],
+        };
+        assert!(matches!(adj.compile(), CompiledAdjustment::LutRgb(_)));
+        let out = in_gamma(&adj, [0.5, 0.25, 0.4]);
+        assert!(close(out[0], 0.5), "red midpoint of [0.25,0.75]: {out:?}");
+        assert!(close(out[1], 0.5), "green 0.25^(1/2): {out:?}");
+        assert!(close(out[2], 0.4), "blue untouched: {out:?}");
+
+        // Master and channel compose: master gamma 2 lifts 0.25 to 0.5,
+        // then the red crush maps 0.5 to its midpoint 0.5.
+        let both = Adjustment::Levels {
+            in_black: 0.0,
+            in_white: 1.0,
+            gamma: 2.0,
+            out_black: 0.0,
+            out_white: 1.0,
+            channels: [
+                LevelsChannel {
+                    in_black: 0.25,
+                    in_white: 0.75,
+                    ..LevelsChannel::default()
+                },
+                LevelsChannel::default(),
+                LevelsChannel::default(),
+            ],
+        };
+        let out = in_gamma(&both, [0.25; 3]);
+        assert!(close(out[0], 0.5), "master then channel: {out:?}");
+        assert!(close(out[1], 0.5), "master alone on green: {out:?}");
     }
 
     #[test]

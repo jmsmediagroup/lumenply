@@ -99,6 +99,7 @@ impl App {
                     gamma: 1.0,
                     out_black: 0.0,
                     out_white: 1.0,
+                    channels: Default::default(),
                 });
                 self.status = format!(
                     "Auto contrast: black {:.2}, white {:.2} (as an adjustment layer)",

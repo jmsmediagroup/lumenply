@@ -504,12 +504,32 @@ impl App {
                 gamma,
                 out_black,
                 out_white,
+                channels,
             } => {
-                finished |= slider_row(ui, "Input black", in_black, 0.0..=1.0, "");
-                finished |= slider_row(ui, "Input white", in_white, 0.0..=1.0, "");
-                finished |= slider_row(ui, "Gamma", gamma, 0.1..=4.0, "");
-                finished |= slider_row(ui, "Output black", out_black, 0.0..=1.0, "");
-                finished |= slider_row(ui, "Output white", out_white, 0.0..=1.0, "");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.levels_ch, 0, "Master");
+                    ui.selectable_value(&mut self.levels_ch, 1, "R");
+                    ui.selectable_value(&mut self.levels_ch, 2, "G");
+                    ui.selectable_value(&mut self.levels_ch, 3, "B");
+                });
+                let (ib, iw, g, ob, ow) = match self.levels_ch {
+                    0 => (in_black, in_white, gamma, out_black, out_white),
+                    n => {
+                        let c = &mut channels[n - 1];
+                        (
+                            &mut c.in_black,
+                            &mut c.in_white,
+                            &mut c.gamma,
+                            &mut c.out_black,
+                            &mut c.out_white,
+                        )
+                    }
+                };
+                finished |= slider_row(ui, "Input black", ib, 0.0..=1.0, "");
+                finished |= slider_row(ui, "Input white", iw, 0.0..=1.0, "");
+                finished |= slider_row(ui, "Gamma", g, 0.1..=4.0, "");
+                finished |= slider_row(ui, "Output black", ob, 0.0..=1.0, "");
+                finished |= slider_row(ui, "Output white", ow, 0.0..=1.0, "");
             }
             Adjustment::Curves { points } => {
                 finished |= curve_editor(ui, points, &mut self.curve_drag);

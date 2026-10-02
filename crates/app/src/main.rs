@@ -203,6 +203,8 @@ struct App {
     xform_scale: f32,
     xform_angle: f32,
     cb_tone: usize,
+    /// Levels channel being edited: 0 master, 1-3 = R, G, B.
+    levels_ch: usize,
 
     dialog: Option<Dialog>,
     filter_previewed: bool,
@@ -383,6 +385,7 @@ impl App {
             xform_scale: 100.0,
             xform_angle: 0.0,
             cb_tone: 1,
+            levels_ch: 0,
             dialog: None,
             saved_rev: 0,
             hist_thumbs: Vec::new(),

@@ -381,6 +381,7 @@ fn adjustment_block(adj: &Adjustment) -> Option<Vec<u8>> {
             gamma,
             out_black,
             out_white,
+            channels,
         } => {
             put_u16(&mut d, 2); // version
             let rec = |d: &mut Vec<u8>, ib: i16, iw: i16, ob: i16, ow: i16, g: i16| {
@@ -396,7 +397,18 @@ fn adjustment_block(adj: &Adjustment) -> Option<Vec<u8>> {
                 i16_of(*out_white, 255.0, 0, 255),
                 i16_of(*gamma, 100.0, 10, 999),
             );
-            for _ in 1..29 {
+            // Records 1-3 are the R, G and B channels.
+            for ch in channels {
+                rec(
+                    &mut d,
+                    i16_of(ch.in_black, 255.0, 0, 253),
+                    i16_of(ch.in_white, 255.0, 2, 255),
+                    i16_of(ch.out_black, 255.0, 0, 255),
+                    i16_of(ch.out_white, 255.0, 0, 255),
+                    i16_of(ch.gamma, 100.0, 10, 999),
+                );
+            }
+            for _ in 4..29 {
                 rec(&mut d, 0, 255, 0, 255, 100);
             }
             b"levl"
@@ -569,17 +581,40 @@ fn parse_adjustment(key: &[u8], data: &[u8]) -> Result<Option<Adjustment>, PsdEr
             if version != 2 {
                 return Ok(None);
             }
-            let ib = d.i16()?;
-            let iw = d.i16()?;
-            let ob = d.i16()?;
-            let ow = d.i16()?;
-            let g = d.i16()?;
+            let mut rec = || -> Result<[f32; 5], PsdError> {
+                let ib = d.i16()?;
+                let iw = d.i16()?;
+                let ob = d.i16()?;
+                let ow = d.i16()?;
+                let g = d.i16()?;
+                Ok([
+                    f(ib, 255.0),
+                    f(iw, 255.0),
+                    f(g, 100.0),
+                    f(ob, 255.0),
+                    f(ow, 255.0),
+                ])
+            };
+            let m = rec()?;
+            // Records 1-3 are the R, G and B channels when present.
+            let mut channels = [lumenply_doc::adjust::LevelsChannel::default(); 3];
+            for ch in &mut channels {
+                let Ok(v) = rec() else { break };
+                *ch = lumenply_doc::adjust::LevelsChannel {
+                    in_black: v[0],
+                    in_white: v[1],
+                    gamma: v[2],
+                    out_black: v[3],
+                    out_white: v[4],
+                };
+            }
             Adjustment::Levels {
-                in_black: f(ib, 255.0),
-                in_white: f(iw, 255.0),
-                gamma: f(g, 100.0),
-                out_black: f(ob, 255.0),
-                out_white: f(ow, 255.0),
+                in_black: m[0],
+                in_white: m[1],
+                gamma: m[2],
+                out_black: m[3],
+                out_white: m[4],
+                channels,
             }
         }
         b"curv" => {
@@ -1577,6 +1612,18 @@ mod tests {
                 gamma: 1.5,
                 out_black: 0.05,
                 out_white: 0.95,
+                channels: [
+                    lumenply_doc::LevelsChannel {
+                        in_black: 0.2,
+                        gamma: 0.8,
+                        ..Default::default()
+                    },
+                    Default::default(),
+                    lumenply_doc::LevelsChannel {
+                        out_white: 0.9,
+                        ..Default::default()
+                    },
+                ],
             },
             Adjustment::Curves {
                 points: vec![[0.0, 0.0], [0.25, 0.15], [0.75, 0.85], [1.0, 1.0]],
@@ -1641,9 +1688,16 @@ mod tests {
                 in_black,
                 gamma,
                 out_white,
+                channels,
                 ..
             } => {
-                assert!(close(*in_black, 0.1) && close(*gamma, 1.5) && close(*out_white, 0.95))
+                assert!(close(*in_black, 0.1) && close(*gamma, 1.5) && close(*out_white, 0.95));
+                assert!(
+                    close(channels[0].in_black, 0.2) && close(channels[0].gamma, 0.8),
+                    "red channel levels lost: {channels:?}"
+                );
+                assert!(channels[1].is_identity(), "green stays identity");
+                assert!(close(channels[2].out_white, 0.9), "blue channel levels lost");
             }
             _ => panic!("levels lost"),
         }

@@ -803,6 +803,7 @@ mod tests {
             gamma: 1.3,
             out_black: 0.05,
             out_white: 1.0,
+            channels: Default::default(),
         });
 
         let g = doc.add_group("iso");
@@ -846,6 +847,7 @@ mod tests {
             gamma: 1.2,
             out_black: 0.0,
             out_white: 1.0,
+            channels: Default::default(),
         });
         let top = doc.add_pixel_layer("top");
         doc.layer_mut(top).unwrap().pixels_mut().unwrap().set_pixel(
