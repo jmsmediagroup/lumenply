@@ -273,8 +273,9 @@ None of these could be tested in the container.
       gradient fills
 - [x] Saved selections (Photoshop's alpha channels): Select ▸ Save selection /
       Load selection (New/Add/Subtract/Intersect, Invert, Delete), undoable,
-      saved in .lumen (channels/ tiles). Still open: PSD alpha-channel round
-      trip, a Channels panel
+      saved in .lumen (channels/ tiles) and PSD (named alpha channels after
+      RGB + transparency, resources 1006/1045; psd-tools-verified both
+      depths). Still open: a Channels panel
 - [x] Image ▸ Trim (transparent or top-left-colour borders), Reveal all (grow
       the canvas to every layer's pixels, e.g. after a non-destructive crop),
       Rotate by angle (canvas grows to fit, transparent corners) — all through

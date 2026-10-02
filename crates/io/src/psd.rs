@@ -1219,19 +1219,28 @@ fn save_depth(path: impl AsRef<Path>, doc: &Document, deep: bool) -> Result<Repo
     file.extend_from_slice(b"8BPS");
     put_u16(&mut file, 1); // version
     file.extend_from_slice(&[0; 6]);
-    put_u16(&mut file, 4); // channels in composite: RGBA
+    // RGB, the composite's transparency, then one alpha channel per saved
+    // selection.
+    put_u16(&mut file, 4 + doc.saved_selections.len() as u16);
     put_u32(&mut file, doc.height);
     put_u32(&mut file, doc.width);
     put_u16(&mut file, if deep { 16 } else { 8 }); // depth
     put_u16(&mut file, 3); // RGB
     put_u32(&mut file, 0); // colour mode data
-    file.extend_from_slice(&crate::psd_guides::image_resources(doc)); // guides (1032)
+                           // Guides (1032) and the alpha channels' names (1006, 1045).
+    file.extend_from_slice(&crate::psd_channels::resources_section(
+        &crate::psd_guides::image_resources(doc),
+        doc,
+    ));
 
     // Layer and mask information.
     let mut records = Vec::new();
     collect_records(doc.layers(), canvas, &mut records, &mut warnings, deep);
     let mut layer_info = Vec::new();
-    put_u16(&mut layer_info, records.len() as u16);
+    // Negative: the composite's fourth channel is its transparency, not an
+    // alpha channel Photoshop should list in the Channels panel.
+    let count = records.len() as i16;
+    put_u16(&mut layer_info, if count > 0 { (-count) as u16 } else { 0 });
     for r in &records {
         layer_info.extend_from_slice(&r.record);
     }
@@ -1268,13 +1277,27 @@ fn save_depth(path: impl AsRef<Path>, doc: &Document, deep: bool) -> Result<Repo
                 file.extend_from_slice(&v.to_be_bytes());
             }
         }
+        for sel in &doc.saved_selections {
+            for v in crate::psd_channels::plane(sel, canvas) {
+                file.extend_from_slice(&q(v).to_be_bytes());
+            }
+        }
     } else {
-        let mut planes = [
+        let mut planes = vec![
             vec![0u8; w * h],
             vec![0u8; w * h],
             vec![0u8; w * h],
             vec![0u8; w * h],
         ];
+        for sel in &doc.saved_selections {
+            let plane = crate::psd_channels::plane(sel, canvas);
+            planes.push(
+                plane
+                    .iter()
+                    .map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
+                    .collect(),
+            );
+        }
         for (i, p) in flat.pixels.iter().enumerate() {
             let [cr, cg, cb, a] = p.to_straight();
             planes[0][i] = linear_to_srgb(cr);
@@ -1393,7 +1416,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     let cmd_len = rd.u32()? as usize;
     rd.skip(cmd_len)?;
     let res_len = rd.u32()? as usize;
-    let guides = crate::psd_guides::read_guides(rd.bytes(res_len)?);
+    let resources = rd.bytes(res_len)?;
+    let guides = crate::psd_guides::read_guides(resources);
+    let alpha_names = crate::psd_channels::read_names(resources);
 
     let mut warnings = Vec::new();
     let lm_len = rd.len_of(psb)?;
@@ -1599,8 +1624,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     }
     rd.pos = lm_start + lm_len;
 
-    // Composite (used only when the file has no layers).
-    let composite = if raw.is_empty() && rd.pos + 2 <= buf.len() {
+    // Composite: the image itself when the file has no layers, and the
+    // alpha channels (saved selections) when it names any.
+    let composite = if (raw.is_empty() || !alpha_names.is_empty()) && rd.pos + 2 <= buf.len() {
         let (w, h) = (width as usize, height as usize);
         let compression = rd.u16()?;
         let nch = channels as usize; // header-validated: 3..=56
@@ -1642,11 +1668,27 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
 
     let mut doc = Document::new(width, height);
     doc.guides = guides;
-    if let Some(planes) = composite {
+    // The named alpha channels are the composite's last planes.
+    let n_alpha = composite
+        .as_ref()
+        .map_or(0, |p| alpha_names.len().min(p.len().saturating_sub(3)));
+    if let Some(planes) = &composite {
+        let start = planes.len() - n_alpha;
+        for (k, name) in alpha_names.iter().take(n_alpha).enumerate() {
+            doc.saved_selections.push(crate::psd_channels::from_plane(
+                name.clone(),
+                &planes[start + k],
+                width,
+                height,
+            ));
+        }
+    }
+    if let Some(planes) = composite.filter(|_| raw.is_empty()) {
         let mut r = Raster::new(width, height);
         let n = (width * height) as usize;
         for i in 0..n {
-            let a = if planes.len() > 3 {
+            // A fourth plane is transparency unless it is a named channel.
+            let a = if planes.len() > 3 + n_alpha {
                 planes[3][i] as f32 / 65535.0
             } else {
                 1.0

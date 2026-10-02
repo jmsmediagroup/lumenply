@@ -9,6 +9,7 @@
 pub mod ora;
 pub mod project;
 pub mod psd;
+mod psd_channels;
 mod psd_guides;
 pub mod raw;
 
