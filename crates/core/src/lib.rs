@@ -23,6 +23,7 @@ pub mod layer_ops;
 pub mod liquify;
 pub mod locks;
 pub mod paste;
+pub mod path_ops;
 pub mod quick_select;
 pub mod refine;
 mod retouch;

@@ -28,6 +28,7 @@ mod brand;
 mod brush_panel;
 mod camera_raw;
 mod canvas;
+mod channels_panel;
 mod clipboard;
 mod color_picker;
 mod crop;
@@ -39,13 +40,17 @@ mod gradient_ui;
 mod guides;
 mod histogram;
 mod history;
+mod info_panel;
 mod layer_actions;
 mod layers;
 mod liquify;
 mod macos_open;
 mod menu;
+mod navigator;
 mod options_bar;
 mod palette;
+mod panels;
+mod paths_panel;
 mod pen;
 mod properties;
 mod quick_select_tool;
@@ -427,6 +432,8 @@ struct App {
     brushes: brush_panel::BrushLibrary,
     /// On-canvas text editing with the Text tool (text_edit.rs).
     typer: text_edit::TypeTool,
+    /// Channels / Paths / Navigator / Info display state (panels.rs).
+    panels: panels::PanelState,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -594,6 +601,7 @@ impl App {
             gradient: Default::default(),
             brushes: brush_panel::BrushLibrary::load(),
             typer: text_edit::TypeTool::default(),
+            panels: Default::default(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -1139,6 +1147,7 @@ impl App {
                 i.consume_key(M::COMMAND, Key::Num1),
             )
         });
+        self.panel_keys(ctx);
         for (hit, id) in [
             (zoom_in, "zoom-in"),
             (zoom_out, "zoom-out"),
@@ -1292,14 +1301,15 @@ impl App {
             )
             .show(ctx, |ui| {
                 raise_controls(ui);
-                let rows = self.layer_rows().len().max(1) as f32;
+                let rows = self.dock_rows() as f32;
                 let quick_id = egui::Id::new("dock-quick-add-h");
                 let quick_h = ctx.data(|d| d.get_temp::<f32>(quick_id)).unwrap_or(96.0);
                 // Layers get their full height up to ~45% of the dock (never
                 // fewer than three rows); Properties gets the rest.
                 let avail = ui.available_height();
-                let layers_full = layers::HEADER_H + rows * layers::ROW_PITCH + layers::FOOTER_H;
-                let layers_min = layers::HEADER_H + 3.0 * layers::ROW_PITCH + layers::FOOTER_H;
+                let tabs = panels::TABS_H;
+                let layers_full = tabs + layers::HEADER_H + rows * layers::ROW_PITCH + layers::FOOTER_H;
+                let layers_min = tabs + layers::HEADER_H + 3.0 * layers::ROW_PITCH + layers::FOOTER_H;
                 let layers_auto = layers_full.min(layers_min.max(avail * 0.45));
                 // The divider below Properties can be dragged; double-click
                 // returns to the automatic split.
@@ -1354,7 +1364,7 @@ impl App {
                 let h = ui.cursor().top() - top;
                 ctx.data_mut(|d| d.insert_temp(quick_id, h));
                 ui.separator();
-                self.layers_ui(ui);
+                self.dock_tabs_ui(ui);
             });
     }
 }
@@ -1427,6 +1437,7 @@ impl App {
             self.tool_palette(ctx);
             self.side_panel(ctx);
             self.canvas(ctx);
+            self.floating_panels(ctx);
         }
         self.dialogs(ctx);
         self.palette_ui(ctx);
@@ -1437,7 +1448,9 @@ impl App {
             self.status = "Autosaved a backup".into();
         }
         if self.dirty && !self.no_doc {
+            let area = self.dirty_rect;
             self.refresh(ctx);
+            self.panels_refreshed(ctx, area);
             ctx.request_repaint();
         }
         let name = self

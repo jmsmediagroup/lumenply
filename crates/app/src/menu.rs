@@ -263,6 +263,7 @@ impl App {
                     menu(ui, "Layer", |ui| self.layer_menu(ui));
                     menu(ui, "Filter", |ui| self.filter_menu(ui));
                     menu(ui, "View", |ui| self.view_menu(ui));
+                    menu(ui, "Window", |ui| self.window_menu(ui));
                     menu(ui, "Help", |ui| self.help_menu(ui));
 
                     ui.add_space(10.0);

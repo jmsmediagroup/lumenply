@@ -110,6 +110,8 @@ pub(crate) struct Prefs {
     /// The brush as it was at the last exit (tip, shape, dynamics),
     /// restored at launch.
     pub current_brush: Option<Box<BrushPreset>>,
+    /// The dock's tab and the floating panels (panels.rs).
+    pub panels: crate::panels::PanelPrefs,
 }
 
 /// One saved brush setup (the shape parameters; colour stays with the
@@ -171,6 +173,7 @@ impl Default for Prefs {
             grid_subdivisions: 4,
             gradient_presets: Vec::new(),
             current_brush: None,
+            panels: Default::default(),
         }
     }
 }
