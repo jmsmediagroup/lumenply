@@ -120,6 +120,7 @@ impl App {
             }
         }
         self.below = below;
+        self.update_histogram();
         self.capture_history_thumb(ctx);
         self.dirty = false;
     }

@@ -120,7 +120,9 @@ None of these could be tested in the container.
 - [ ] Layer styles (drop shadow, stroke, glow) as non-destructive effects
 - [ ] Smart objects (embedded documents with transforms)
 - [ ] Clipping masks; pass-through blend mode for groups
-- [ ] Histogram panel; auto levels/colour
+- [x] Histogram panel (composite luminance, in Properties); auto contrast as a
+      Levels adjustment layer
+- [ ] Per-channel auto levels/colour (needs per-channel Levels first)
 - [x] More filters: noise (position-seeded), motion blur, median, high pass —
       destructive or live, with dialog previews and palette entries
 - [ ] Text: font picker (system fonts), italic, alignment, kerning/tracking, text on canvas
@@ -139,7 +141,8 @@ None of these could be tested in the container.
 - [x] Autosave every 2 min to ~/.nge (atomic, off-thread), crash-recovery prompt
       at startup, recent-files menu
 - [x] Unsaved-changes prompt on close
-- [ ] Docking panels (egui_dock); drag-to-reorder layers; layer context menu
+- [ ] Docking panels (egui_dock); drag-to-reorder layers
+- [x] Layer context menu (rename, reorder, flip, mask, ungroup, delete)
 - [ ] Preferences: theme, canvas colour, undo limit, memory limit
 - [x] Split `crates/app/src/main.rs` into modules (theme, tools, menu, options bar,
       canvas, layers, properties, history, status, dialogs, palette)

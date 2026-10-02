@@ -72,6 +72,7 @@ impl App {
             m("Flip image horizontal", "", "img-flip-h"),
             m("Flip image vertical", "", "img-flip-v"),
             m("Crop to selection", "", "crop"),
+            m("Auto contrast", "", "auto-contrast"),
             m("Fit on screen", "0", "fit"),
             m("Actual pixels", "1", "actual"),
         ];
@@ -292,6 +293,7 @@ impl App {
                     _ => self.status = "Crop needs a selection".into(),
                 }
             }
+            "auto-contrast" => self.auto_contrast(),
             "fit" => self.view_cmd = Some(ViewCmd::Fit),
             "actual" => self.view_cmd = Some(ViewCmd::Actual),
             "filter-gauss" => self.dialog = Some(Dialog::Filter(Filter::GaussianBlur { radius: 8.0 })),

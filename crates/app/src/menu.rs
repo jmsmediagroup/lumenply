@@ -292,6 +292,10 @@ impl App {
                         }
                         ui.close_menu();
                     }
+                    if ui.button("Auto contrast").clicked() {
+                        self.auto_contrast();
+                        ui.close_menu();
+                    }
                     if ui.button("Canvas size...").clicked() {
                         self.dialog = Some(Dialog::CanvasSize(w, h, (0.5, 0.5)));
                         ui.close_menu();

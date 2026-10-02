@@ -23,6 +23,7 @@ use nge_tiles::{Affine, Raster, Rect};
 
 mod canvas;
 mod dialogs;
+mod histogram;
 mod history;
 mod layers;
 mod menu;
@@ -146,6 +147,8 @@ struct App {
     last_autosave: std::time::Instant,
     /// Recently opened or saved files, newest first.
     recent: Vec<String>,
+    /// Luminance histogram of the composite, updated on refresh.
+    histogram: [u32; histogram::BINS],
 }
 
 impl App {
@@ -248,6 +251,7 @@ impl App {
             below: nge_render::BelowCache::new(),
             last_autosave: std::time::Instant::now(),
             recent: session::load_recent(),
+            histogram: [0; histogram::BINS],
             filter_previewed: false,
             status,
         };

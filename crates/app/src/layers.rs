@@ -78,6 +78,7 @@ impl App {
         let mut rename_commit = None;
         let mut rename_cancel = false;
         let mut mask_click = None;
+        let mut ctx_action: Option<(&'static str, LayerId)> = None;
         let mut renaming = self.renaming.take();
 
         egui::ScrollArea::vertical()
@@ -250,6 +251,52 @@ impl App {
                             MUTED,
                         );
                     }
+                    resp.context_menu(|ui| {
+                        if ui.button("Rename").clicked() {
+                            rename_start = Some((row.id, row.name.clone()));
+                            ui.close_menu();
+                        }
+                        for (label, act) in [
+                            ("Move up", "up"),
+                            ("Move down", "down"),
+                            ("Flip horizontal", "fliph"),
+                            ("Flip vertical", "flipv"),
+                        ] {
+                            if ui.button(label).clicked() {
+                                ctx_action = Some((act, row.id));
+                                ui.close_menu();
+                            }
+                        }
+                        ui.separator();
+                        if row.masked {
+                            if ui.button("Remove mask").clicked() {
+                                ctx_action = Some(("rmmask", row.id));
+                                ui.close_menu();
+                            }
+                            let label = if row.mask_enabled {
+                                "Disable mask"
+                            } else {
+                                "Enable mask"
+                            };
+                            if ui.button(label).clicked() {
+                                ctx_action =
+                                    Some((if row.mask_enabled { "maskoff" } else { "maskon" }, row.id));
+                                ui.close_menu();
+                            }
+                        } else if ui.button("Add mask").clicked() {
+                            ctx_action = Some(("addmask", row.id));
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if row.kind == Kind::Group && ui.button("Ungroup").clicked() {
+                            ctx_action = Some(("ungroup", row.id));
+                            ui.close_menu();
+                        }
+                        if ui.button("Delete").clicked() {
+                            ctx_action = Some(("delete", row.id));
+                            ui.close_menu();
+                        }
+                    });
                     if resp.double_clicked() {
                         rename_start = Some((row.id, row.name.clone()));
                     } else if resp.clicked() {
@@ -299,6 +346,31 @@ impl App {
             } else {
                 self.set_active(Some(id));
                 self.editing_mask = true;
+            }
+        }
+        if let Some((act, id)) = ctx_action {
+            // Context-menu actions act on the clicked row.
+            self.set_active(Some(id));
+            match act {
+                "up" => self.reorder_active(1),
+                "down" => self.reorder_active(-1),
+                "fliph" => self.flip_active(true),
+                "flipv" => self.flip_active(false),
+                "delete" => self.delete_active(),
+                "ungroup" => self.ungroup_active(),
+                "addmask" => {
+                    self.run(&AddMask { layer: id });
+                    self.editing_mask = true;
+                }
+                "rmmask" => {
+                    self.run(&RemoveMask { layer: id });
+                    self.editing_mask = false;
+                }
+                "maskon" | "maskoff" => self.run(&SetMaskEnabled {
+                    layer: id,
+                    enabled: act == "maskon",
+                }),
+                _ => {}
             }
         }
         if let Some((layer, visible)) = toggle_vis {

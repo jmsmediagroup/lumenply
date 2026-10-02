@@ -2,6 +2,7 @@ use super::*;
 
 impl App {
     pub(crate) fn properties_ui(&mut self, ui: &mut egui::Ui) {
+        self.histogram_ui(ui);
         let Some(id) = self.active else {
             section_title(ui, "PROPERTIES");
             ui.label(RichText::new("No layer selected").weak());
