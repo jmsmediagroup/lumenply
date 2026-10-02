@@ -98,17 +98,6 @@ impl App {
         }
     }
 
-    pub(crate) fn pick_open_image(&mut self) {
-        if let Some(p) = self
-            .file_dialog()
-            .set_title("Open image")
-            .add_filter("Images", IMAGE_EXT)
-            .pick_file()
-        {
-            self.open_image(&p.to_string_lossy());
-        }
-    }
-
     pub(crate) fn pick_place(&mut self) {
         if let Some(p) = self
             .file_dialog()

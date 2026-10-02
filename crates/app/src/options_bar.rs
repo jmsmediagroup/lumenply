@@ -357,13 +357,14 @@ impl App {
                                     .selected_text(format!("Paths ({})", names.len()))
                                     .width(130.0)
                                     .show_ui(ui, |ui| {
+                                        popup_style(ui);
                                         for (i, name) in names.iter().enumerate() {
                                             ui.horizontal(|ui| {
                                                 if ui.selectable_label(false, name).clicked() {
                                                     load = Some(i);
                                                 }
                                                 if ui
-                                                    .small_button("✕")
+                                                    .small_button("×")
                                                     .on_hover_text("Delete this saved path")
                                                     .clicked()
                                                 {
@@ -426,12 +427,13 @@ impl App {
             .selected_text(format!("Presets ({})", self.prefs.brush_presets.len()))
             .width(120.0)
             .show_ui(ui, |ui| {
+                popup_style(ui);
                 for (i, p) in self.prefs.brush_presets.iter().enumerate() {
                     ui.horizontal(|ui| {
                         if ui.selectable_label(false, &p.name).clicked() {
                             apply = Some(i);
                         }
-                        if ui.small_button("✕").on_hover_text("Delete this preset").clicked() {
+                        if ui.small_button("×").on_hover_text("Delete this preset").clicked() {
                             delete = Some(i);
                         }
                     });

@@ -16,8 +16,141 @@ impl App {
     }
 
     /// Menus, popups, context menus and combo boxes (`popups:...`).
-    fn debug_popups(&mut self, _ctx: &egui::Context, _tok: &str) -> bool {
-        false
+    ///
+    /// Pointer tokens replay real input (see [`App::debug_popups_input`]),
+    /// so a menu opens, and an item fires, through exactly the code a
+    /// user's click runs: `popups:click=T`, `popups:rclick=T`,
+    /// `popups:hover=T`, `popups:wait`, `popups:esc`, `popups:key=Enter`
+    /// (any egui key name), `popups:type=text`, `popups:sleep=ms` (real
+    /// time, for tooltip delays). A target `T` is
+    /// `X:Y` in points or a name recorded by [`theme::note_target`]: a
+    /// menu title ("File", "Export"), a menu item label ("Undo"), or an
+    /// icon menu id ("add-adj", "layer-more", "export-button").
+    fn debug_popups(&mut self, ctx: &egui::Context, tok: &str) -> bool {
+        let Some(rest) = tok.strip_prefix("popups:") else {
+            return false;
+        };
+        let (verb, target) = rest.split_once('=').unwrap_or((rest, ""));
+        let t = target.to_string();
+        // The pointer glides the last few points over three frames, as a
+        // real mouse does: egui only counts it as having moved (which
+        // tooltips wait for after a click) once it has a velocity.
+        let glide = |t: &String| vec![("move+8", t.clone()), ("move+4", t.clone()), ("move", t.clone())];
+        let steps: Vec<(&str, String)> = match verb {
+            "click" => [glide(&t), vec![("press-l", t.clone()), ("release-l", t)]].concat(),
+            "rclick" => [glide(&t), vec![("press-r", t.clone()), ("release-r", t)]].concat(),
+            "hover" => [glide(&t), vec![("wait", String::new())]].concat(),
+            "wait" => vec![("wait", String::new())],
+            "esc" => vec![("key", "Escape".into())],
+            "key" => vec![("key", t)],
+            "type" => vec![("type", t)],
+            "sleep" => vec![("sleep", t)],
+            _ => return false,
+        };
+        let id = egui::Id::new("popups:steps");
+        let queued = ctx.data_mut(|d| {
+            let q = d.get_temp_mut_or_default::<Vec<(String, String)>>(id);
+            q.extend(steps.into_iter().map(|(v, t)| (v.to_string(), t)));
+            q.len() as u32
+        });
+        // Leave room for every step, the menu's sizing pass and its fade-in.
+        if let Some((_, frames)) = &mut self.shot {
+            *frames = (*frames).max(queued + 12);
+        }
+        true
+    }
+
+    /// Feed one queued `popups:` pointer step into the frame's raw input.
+    /// Does nothing unless `--screenshot-do` queued steps. Once a replay
+    /// has started, the real pointer is ignored (the OS cursor entering or
+    /// leaving the window would otherwise clear hovers mid-capture) and the
+    /// replayed pointer stays where it was last put.
+    pub(crate) fn debug_popups_input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let id = egui::Id::new("popups:steps");
+        let last_id = egui::Id::new("popups:pointer");
+        let (step, replaying) = ctx.data_mut(|d| {
+            let q = d.get_temp_mut_or_default::<Vec<(String, String)>>(id);
+            let step = (!q.is_empty()).then(|| q.remove(0));
+            let replaying = step.is_some() || d.get_temp::<bool>(id.with("started")).unwrap_or(false);
+            (step, replaying)
+        });
+        if !replaying {
+            return;
+        }
+        ctx.data_mut(|d| d.insert_temp(id.with("started"), true));
+        raw.events.retain(|e| {
+            !matches!(
+                e,
+                egui::Event::PointerMoved(_)
+                    | egui::Event::PointerButton { .. }
+                    | egui::Event::PointerGone
+                    | egui::Event::MouseMoved(_)
+            )
+        });
+        if let Some(p) = ctx.data(|d| d.get_temp::<Pos2>(last_id)) {
+            raw.events.push(egui::Event::PointerMoved(p));
+        }
+        let Some((verb, target)) = step else {
+            return;
+        };
+        match verb.as_str() {
+            // Real time passing, for tooltip delays.
+            "sleep" => {
+                let ms = target.parse().unwrap_or(600);
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+                return;
+            }
+            "type" => {
+                raw.events.push(egui::Event::Text(target));
+                return;
+            }
+            "key" => {
+                if let Some(key) = Key::from_name(&target) {
+                    for pressed in [true, false] {
+                        raw.events.push(egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        });
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+        let pos = match target.split_once(':') {
+            Some((x, y)) => x.parse().ok().zip(y.parse().ok()).map(|(x, y)| egui::pos2(x, y)),
+            None => theme::target_rect(ctx, &target).map(|r| r.center()),
+        };
+        let button = |b: egui::PointerButton, pressed: bool, pos: Pos2| egui::Event::PointerButton {
+            pos,
+            button: b,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let pos = match verb.strip_prefix("move+").and_then(|d| d.parse::<f32>().ok()) {
+            Some(dx) => pos.map(|p| p + egui::vec2(dx, 0.0)),
+            None => pos,
+        };
+        let event = match (verb.as_str(), pos) {
+            (v, Some(p)) if v.starts_with("move") => egui::Event::PointerMoved(p),
+            ("press-l", Some(p)) => button(egui::PointerButton::Primary, true, p),
+            ("release-l", Some(p)) => button(egui::PointerButton::Primary, false, p),
+            ("press-r", Some(p)) => button(egui::PointerButton::Secondary, true, p),
+            ("release-r", Some(p)) => button(egui::PointerButton::Secondary, false, p),
+            ("wait", _) => return,
+            (_, None) => {
+                eprintln!("popups: no target named {target:?}");
+                return;
+            }
+            _ => return,
+        };
+        if let Some(p) = pos {
+            ctx.data_mut(|d| d.insert_temp(last_id, p));
+        }
+        raw.events.push(event);
     }
 
     /// Panels, rails, bars and dialogs layout (`layout:...`).

@@ -135,6 +135,7 @@ pub(crate) fn install(ctx: &egui::Context) {
     style.text_styles.insert(Small, FontId::proportional(10.5));
     style.text_styles.insert(Heading, FontId::proportional(16.0));
     style.text_styles.insert(Monospace, FontId::monospace(12.5));
+    install_popups(&mut style);
     ctx.set_style(style);
 }
 
@@ -180,4 +181,375 @@ pub(crate) fn slider_row(
         });
     });
     finished
+}
+
+// ---- Popups & menus ------------------------------------------------------------------
+//
+// Every dropdown, popup, context menu and combo list goes through these
+// helpers, so they share one look and one rule: a popup sizes to its
+// content and an item never wraps (egui otherwise wraps text at the
+// popup's current width, which for a popup sized to a 26 px icon button
+// stacks the label one letter per line).
+
+/// A hovered item in any menu, popup or list: a neutral lift off the
+/// RAISED popup surface. The warm tint is kept for the current value.
+pub(crate) const MENU_HOVER: Color32 = Color32::from_rgb(0x34, 0x3A, 0x42);
+/// An item while the pointer is pressed on it.
+const MENU_PRESS: Color32 = Color32::from_rgb(0x3C, 0x43, 0x4C);
+/// Height of one item row.
+pub(crate) const MENU_ITEM_H: f32 = 26.0;
+/// No menu or popup list is narrower than this.
+const MENU_MIN_W: f32 = 180.0;
+/// Label inset from the edge of the item's highlight.
+pub(crate) const MENU_PAD_X: f32 = 10.0;
+/// Minimum space between an item's label and its shortcut.
+const MENU_SHORTCUT_GAP: f32 = 32.0;
+/// Width kept at the right of a toggle item for its check mark.
+const MENU_CHECK_W: f32 = 18.0;
+/// Corner radius of an item's highlight (the frame itself uses 8).
+pub(crate) const MENU_ITEM_ROUNDING: f32 = 5.0;
+
+/// Popup-wide values, applied once from [`install`]. The frame margin is
+/// shared with tooltips, which use the same popup frame.
+pub(crate) fn install_popups(style: &mut egui::Style) {
+    style.spacing.menu_margin = egui::Margin::same(6.0);
+    style.spacing.menu_spacing = 4.0;
+    style.visuals.menu_rounding = egui::Rounding::same(8.0);
+}
+
+/// Style the inside of a menu, popup or combo list: one line per item,
+/// a sensible minimum width, the shared item height, padding and
+/// colours. The helpers below call it; a `ComboBox::show_ui` closure
+/// calls it first thing.
+pub(crate) fn popup_style(ui: &mut egui::Ui) {
+    let s = ui.style_mut();
+    s.wrap_mode = Some(egui::TextWrapMode::Extend);
+    s.spacing.button_padding = egui::vec2(MENU_PAD_X, 3.0);
+    s.spacing.item_spacing = egui::vec2(8.0, 1.0);
+    s.spacing.interact_size.y = MENU_ITEM_H;
+    let w = &mut s.visuals.widgets;
+    for v in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+        v.bg_stroke = Stroke::NONE;
+        v.rounding = egui::Rounding::same(MENU_ITEM_ROUNDING);
+        v.expansion = 0.0;
+        v.fg_stroke = Stroke::new(1.0, TEXT);
+    }
+    w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+    w.hovered.weak_bg_fill = MENU_HOVER;
+    w.hovered.bg_fill = MENU_HOVER;
+    w.active.weak_bg_fill = MENU_PRESS;
+    w.active.bg_fill = MENU_PRESS;
+    w.open.weak_bg_fill = MENU_HOVER;
+    w.open.bg_fill = MENU_HOVER;
+    // The current value in a list (a combo's selection) wears the active
+    // layer row's look: warm tint, signal-coloured text.
+    s.visuals.selection.bg_fill = ACCENT_TINT;
+    s.visuals.selection.stroke = Stroke::new(1.0, ACCENT);
+    ui.set_min_width(MENU_MIN_W);
+}
+
+/// One menu row: label on the left, the shortcut right-aligned in muted
+/// text, and for toggles a check mark at the far right. Sizes to its
+/// content; the menu stretches it to the full width.
+struct MenuItem<'a> {
+    label: &'a str,
+    shortcut: &'a str,
+    checked: Option<bool>,
+}
+
+impl egui::Widget for MenuItem<'_> {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let label = ui.painter().layout_no_wrap(self.label.to_owned(), font, TEXT);
+        let keys = (!self.shortcut.is_empty()).then(|| {
+            ui.painter()
+                .layout_no_wrap(self.shortcut.to_owned(), FontId::proportional(12.0), MUTED)
+        });
+        let check_w = if self.checked.is_some() { MENU_CHECK_W } else { 0.0 };
+        let mut width = 2.0 * MENU_PAD_X + label.size().x + check_w;
+        if let Some(k) = &keys {
+            width += MENU_SHORTCUT_GAP + k.size().x;
+        }
+        let (rect, resp) = ui.allocate_at_least(egui::vec2(width, MENU_ITEM_H), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), self.label));
+        if ui.is_rect_visible(rect) {
+            let p = ui.painter();
+            if ui.is_enabled() && (resp.hovered() || resp.has_focus() || resp.highlighted()) {
+                let fill = if resp.is_pointer_button_down_on() {
+                    MENU_PRESS
+                } else {
+                    MENU_HOVER
+                };
+                p.rect_filled(rect, MENU_ITEM_ROUNDING, fill);
+            }
+            let cy = rect.center().y;
+            let text_y = cy - label.size().y / 2.0;
+            p.galley(egui::pos2(rect.left() + MENU_PAD_X, text_y), label, TEXT);
+            // The shortcut keeps the shared right edge so shortcuts line
+            // up down the menu; a toggle's check sits just left of it.
+            let mut right = rect.right() - MENU_PAD_X;
+            if let Some(k) = keys {
+                right -= k.size().x;
+                p.galley(egui::pos2(right, cy - k.size().y / 2.0), k, MUTED);
+                right -= 8.0;
+            }
+            if self.checked == Some(true) {
+                paint_check(p, egui::pos2(right - 6.0, cy), ACCENT);
+            }
+        }
+        resp
+    }
+}
+
+/// A small check mark centred on `c`.
+fn paint_check(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let pts = vec![
+        c + egui::vec2(-5.0, 0.0),
+        c + egui::vec2(-1.5, 3.5),
+        c + egui::vec2(5.0, -4.0),
+    ];
+    p.add(Shape::line(pts, Stroke::new(1.8, color)));
+}
+
+fn add_menu_item(ui: &mut egui::Ui, enabled: bool, item: MenuItem) -> egui::Response {
+    let label = item.label;
+    let r = ui.add_enabled(enabled, item);
+    note_target(ui.ctx(), label, r.rect);
+    if r.clicked() {
+        ui.close_menu();
+    }
+    r
+}
+
+/// A menu item that closes its menu when clicked; true when it was.
+pub(crate) fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
+    menu_item_if(ui, true, label, shortcut)
+}
+
+/// [`menu_item`], greyed out and inert unless `enabled`.
+pub(crate) fn menu_item_if(ui: &mut egui::Ui, enabled: bool, label: &str, shortcut: &str) -> bool {
+    menu_item_response(ui, enabled, label, shortcut).clicked()
+}
+
+/// [`menu_item_if`] returning the response, for hover text.
+pub(crate) fn menu_item_response(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    shortcut: &str,
+) -> egui::Response {
+    let item = MenuItem {
+        label,
+        shortcut,
+        checked: None,
+    };
+    add_menu_item(ui, enabled, item)
+}
+
+/// A toggle item: a check mark at the right while `checked`.
+pub(crate) fn menu_check(ui: &mut egui::Ui, checked: bool, label: &str, shortcut: &str) -> egui::Response {
+    let item = MenuItem {
+        label,
+        shortcut,
+        checked: Some(checked),
+    };
+    add_menu_item(ui, true, item)
+}
+
+/// A greyed line of explanation inside a menu ("Nothing yet").
+pub(crate) fn menu_note(ui: &mut egui::Ui, text: &str) {
+    let item = MenuItem {
+        label: text,
+        shortcut: "",
+        checked: None,
+    };
+    ui.add_enabled(false, item);
+}
+
+/// A small muted caption that heads a group of items.
+pub(crate) fn menu_heading(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(MENU_PAD_X);
+        ui.label(RichText::new(text).small().strong().color(MUTED));
+    });
+    ui.add_space(2.0);
+}
+
+/// The hairline between groups of items.
+pub(crate) fn menu_separator(ui: &mut egui::Ui) {
+    ui.add(egui::Separator::default().spacing(9.0));
+}
+
+/// A menu-bar menu, or a submenu inside another menu.
+pub(crate) fn menu<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+    let r = ui.menu_button(title, |ui| {
+        popup_style(ui);
+        add(ui)
+    });
+    note_target(ui.ctx(), title, r.response.rect);
+    r.inner
+}
+
+/// A menu opened by clicking `trigger` (an icon button, a chip, the
+/// Export button). It behaves like a menu-bar menu (Esc or a click
+/// outside closes it, items close it) but opens below the trigger, or
+/// above when there is no room, and end-aligns when it would run off the
+/// right edge.
+pub(crate) fn button_menu<R>(trigger: &egui::Response, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+    let ctx = trigger.ctx.clone();
+    let bar_id = trigger.id.with("popups:menu");
+    let mut bar = egui::menu::BarState::load(&ctx, bar_id);
+    egui::menu::MenuRoot::stationary_click_interaction(trigger, &mut bar);
+    if let Some(root) = bar.as_ref() {
+        place_menu(&ctx, root, trigger.rect, ctx.style().spacing.menu_spacing);
+    }
+    let inner = bar.show(trigger, |ui| {
+        popup_style(ui);
+        add(ui)
+    });
+    bar.store(&ctx, bar_id);
+    inner.map(|r| r.inner)
+}
+
+/// Drop-in for `egui::menu::menu_custom_button` with the shared popup
+/// style and [`button_menu`]'s placement.
+pub(crate) fn menu_custom_button<R>(
+    ui: &mut egui::Ui,
+    button: egui::Button<'_>,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let resp = ui.add(button);
+    let inner = button_menu(&resp, add);
+    egui::InnerResponse::new(inner, resp)
+}
+
+/// A right-click menu on `resp` (which must sense clicks). Opens at the
+/// pointer, flipping left or up instead of sliding under the pointer when
+/// it would cross the window edge.
+pub(crate) fn context_menu(resp: &egui::Response, add: impl FnOnce(&mut egui::Ui)) {
+    let ctx = resp.ctx.clone();
+    // egui's own id, so this stays the one context menu open app-wide.
+    let bar_id = egui::Id::new("__egui::context_menu");
+    let anchor_id = egui::Id::new("popups:context-anchor");
+    if resp.secondary_clicked() {
+        if let Some(p) = ctx.input(|i| i.pointer.interact_pos()) {
+            ctx.data_mut(|d| d.insert_temp(anchor_id, p));
+        }
+    }
+    let mut bar = egui::menu::BarState::load(&ctx, bar_id);
+    egui::menu::MenuRoot::context_click_interaction(resp, &mut bar);
+    if let Some(root) = bar.as_ref().filter(|r| r.id == resp.id) {
+        if let Some(p) = ctx.data(|d| d.get_temp::<egui::Pos2>(anchor_id)) {
+            place_menu(&ctx, root, egui::Rect::from_min_size(p, Vec2::ZERO), 0.0);
+        }
+    }
+    bar.show(resp, |ui| {
+        popup_style(ui);
+        add(ui)
+    });
+    bar.store(&ctx, bar_id);
+}
+
+/// Put an open menu next to `anchor`: below it and start-aligned when it
+/// fits, else above and/or end-aligned, always inside the window.
+fn place_menu(ctx: &egui::Context, root: &egui::menu::MenuRoot, anchor: egui::Rect, gap: f32) {
+    // egui names a menu's area after its root id; its size is known from
+    // the previous frame (or the sizing pass on the first).
+    let area = root.id.with("__menu");
+    let mut state = root.menu_state.write();
+    let size = ctx
+        .memory(|m| m.area_rect(area))
+        .map_or(state.rect.size(), |r| r.size());
+    let pos = menu_pos(anchor, size, ctx.screen_rect().shrink(4.0), gap);
+    state.rect = egui::Rect::from_min_size(pos, size);
+}
+
+/// Where a menu of `size` goes beside `anchor` within `screen`: below
+/// and start-aligned when that fits, else above and/or end-aligned, and
+/// clamped inside `screen` when it fits neither way.
+fn menu_pos(anchor: egui::Rect, size: Vec2, screen: egui::Rect, gap: f32) -> egui::Pos2 {
+    let x = if anchor.left() + size.x <= screen.right() {
+        anchor.left()
+    } else {
+        anchor.right() - size.x
+    };
+    let y = if anchor.bottom() + gap + size.y <= screen.bottom() {
+        anchor.bottom() + gap
+    } else {
+        anchor.top() - gap - size.y
+    };
+    egui::pos2(
+        x.clamp(screen.left(), (screen.right() - size.x).max(screen.left())),
+        y.clamp(screen.top(), (screen.bottom() - size.y).max(screen.top())),
+    )
+}
+
+/// A shortcut written the way this platform writes it: "Shift+Cmd+Z" on
+/// macOS ("⇧⌘Z" when the UI font has the symbols), "Ctrl+Shift+Z"
+/// elsewhere.
+pub(crate) fn shortcut_text(ctx: &egui::Context, modifiers: egui::Modifiers, key: Key) -> String {
+    ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, key))
+}
+
+/// Remember where a named menu, item or trigger was drawn this frame, so
+/// `--screenshot-do popups:click=<name>` can aim real pointer input at it.
+pub(crate) fn note_target(ctx: &egui::Context, name: &str, rect: egui::Rect) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("popups:target").with(name), rect));
+}
+
+/// Where [`note_target`] last saw `name`.
+pub(crate) fn target_rect(ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
+    ctx.data(|d| d.get_temp(egui::Id::new("popups:target").with(name)))
+}
+
+#[cfg(test)]
+mod popup_tests {
+    use super::*;
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> egui::Rect {
+        egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h))
+    }
+
+    #[test]
+    fn menus_open_below_and_flip_at_the_window_edges() {
+        let screen = rect(4.0, 4.0, 1592.0, 992.0); // a 1600x1000 window less the margin
+        let size = egui::vec2(200.0, 300.0);
+        // Room below and to the right: below, start-aligned, `gap` under it.
+        let p = menu_pos(rect(100.0, 100.0, 26.0, 26.0), size, screen, 4.0);
+        assert_eq!(p, egui::pos2(100.0, 130.0));
+        // A button in the bottom-right corner (the layers panel's icons):
+        // above the button and end-aligned with it.
+        let p = menu_pos(rect(1500.0, 900.0, 26.0, 26.0), size, screen, 4.0);
+        assert_eq!(p, egui::pos2(1326.0, 596.0));
+        // A right-click near the corner: the menu's corner sits on the
+        // pointer instead of sliding underneath it.
+        let p = menu_pos(
+            rect(1560.0, 780.0, 0.0, 0.0),
+            egui::vec2(190.0, 280.0),
+            screen,
+            0.0,
+        );
+        assert_eq!(p, egui::pos2(1370.0, 500.0));
+    }
+
+    #[test]
+    fn a_menu_too_big_for_either_side_stays_inside_the_window() {
+        let screen = rect(4.0, 4.0, 1592.0, 992.0);
+        let p = menu_pos(
+            rect(100.0, 500.0, 26.0, 26.0),
+            egui::vec2(200.0, 900.0),
+            screen,
+            4.0,
+        );
+        assert_eq!(p, egui::pos2(100.0, 4.0));
+        // Wider than the window: pinned to the left edge.
+        let p = menu_pos(
+            rect(800.0, 100.0, 26.0, 26.0),
+            egui::vec2(1700.0, 100.0),
+            screen,
+            4.0,
+        );
+        assert_eq!(p, egui::pos2(4.0, 130.0));
+    }
 }

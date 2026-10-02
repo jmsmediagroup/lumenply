@@ -1093,6 +1093,10 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.debug_popups_input(ctx, raw);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_file_drop(ctx);
         // Intercept closing the window while there are unsaved changes.

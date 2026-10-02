@@ -286,76 +286,67 @@ impl App {
                         FontId::proportional(14.0),
                         TEXT,
                     );
-                    resp.context_menu(|ui| {
-                        if ui.button("Rename").clicked() {
+                    context_menu(&resp, |ui| {
+                        // Where the row sits among its siblings decides
+                        // whether it can move or clip.
+                        let doc = self.editor.doc();
+                        let siblings = match row.parent {
+                            None => Some(doc.layers()),
+                            Some(g) => doc.layer(g).and_then(|l| l.children()),
+                        };
+                        let (pos, count) = siblings
+                            .and_then(|l| l.iter().position(|x| x.id == row.id).map(|i| (i, l.len())))
+                            .unwrap_or((0, 1));
+                        let pixel = row.kind == Kind::Pixel && row.chip.is_none();
+                        let smart = row.chip == Some("Smart");
+                        if menu_item(ui, "Rename", "") {
                             rename_start = Some((row.id, row.name.clone()));
-                            ui.close_menu();
                         }
-                        for (label, act) in [
-                            ("Move up", "up"),
-                            ("Move down", "down"),
-                            ("Flip horizontal", "fliph"),
-                            ("Flip vertical", "flipv"),
-                        ] {
-                            if ui.button(label).clicked() {
+                        let mut act = |ui: &mut egui::Ui, enabled: bool, label: &str, act: &'static str| {
+                            let r = menu_item_response(ui, enabled, label, "");
+                            if r.clicked() {
                                 ctx_action = Some((act, row.id));
-                                ui.close_menu();
                             }
-                        }
-                        ui.separator();
-                        {
-                            let label = if row.clip {
-                                "Release clip"
-                            } else {
-                                "Clip to layer below"
-                            };
-                            if ui.button(label).clicked() {
-                                ctx_action = Some((if row.clip { "unclip" } else { "clip" }, row.id));
-                                ui.close_menu();
-                            }
+                            r
+                        };
+                        menu_separator(ui);
+                        act(ui, pos + 1 < count, "Move up", "up")
+                            .on_disabled_hover_text("Already at the top");
+                        act(ui, pos > 0, "Move down", "down").on_disabled_hover_text("Already at the bottom");
+                        menu_separator(ui);
+                        if row.clip {
+                            act(ui, true, "Release clip", "unclip");
+                        } else {
+                            act(ui, pos > 0, "Clip to layer below", "clip")
+                                .on_disabled_hover_text("Nothing below to clip to");
                         }
                         if row.masked {
-                            if ui.button("Remove mask").clicked() {
-                                ctx_action = Some(("rmmask", row.id));
-                                ui.close_menu();
-                            }
-                            let label = if row.mask_enabled {
-                                "Disable mask"
+                            act(ui, true, "Remove mask", "rmmask");
+                            if row.mask_enabled {
+                                act(ui, true, "Disable mask", "maskoff");
                             } else {
-                                "Enable mask"
-                            };
-                            if ui.button(label).clicked() {
-                                ctx_action =
-                                    Some((if row.mask_enabled { "maskoff" } else { "maskon" }, row.id));
-                                ui.close_menu();
+                                act(ui, true, "Enable mask", "maskon");
                             }
-                        } else if ui.button("Add mask").clicked() {
-                            ctx_action = Some(("addmask", row.id));
-                            ui.close_menu();
+                        } else {
+                            act(ui, true, "Add mask", "addmask");
                         }
-                        ui.separator();
-                        if row.kind == Kind::Group && ui.button("Ungroup").clicked() {
-                            ctx_action = Some(("ungroup", row.id));
-                            ui.close_menu();
+                        menu_separator(ui);
+                        if row.kind == Kind::Group {
+                            act(ui, true, "Ungroup", "ungroup");
                         }
-                        if row.chip == Some("Smart") {
-                            if ui.button("Rasterize").clicked() {
-                                ctx_action = Some(("rasterize", row.id));
-                                ui.close_menu();
-                            }
-                        } else if row.kind == Kind::Pixel
-                            && ui
-                                .button("Convert to smart object")
-                                .on_hover_text("Transforms re-render from the source: no quality loss")
-                                .clicked()
-                        {
-                            ctx_action = Some(("smart", row.id));
-                            ui.close_menu();
+                        if smart || row.kind == Kind::Text {
+                            act(ui, true, "Rasterize", "rasterize");
                         }
-                        if ui.button("Delete").clicked() {
-                            ctx_action = Some(("delete", row.id));
-                            ui.close_menu();
+                        if pixel {
+                            act(ui, true, "Convert to smart object", "smart")
+                                .on_hover_text("Transforms re-render from the source: no quality loss");
                         }
+                        act(ui, pixel, "Flip horizontal", "fliph")
+                            .on_disabled_hover_text("Flips apply to pixel layers");
+                        act(ui, pixel, "Flip vertical", "flipv")
+                            .on_disabled_hover_text("Flips apply to pixel layers");
+                        menu_separator(ui);
+                        act(ui, true, "Delete layer", "delete");
                     });
                     if resp.double_clicked() {
                         rename_start = Some((row.id, row.name.clone()));
@@ -504,10 +495,6 @@ impl App {
         let mut add_adj = None;
         let mut add_filter = None;
         let has_mask = self.active_has_mask();
-        let mask_enabled = self
-            .active_layer()
-            .and_then(|l| l.mask.as_ref())
-            .is_some_and(|m| m.enabled);
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             if ui.add(IconButton::new(icon_plus, "New layer")).clicked() {
@@ -524,14 +511,14 @@ impl App {
             }
             icon_menu(ui, "add-adj", icon_adjustment, "New adjustment layer", |ui| {
                 for (name, adj) in adjustment_presets() {
-                    if ui.button(name).clicked() {
+                    if menu_item(ui, name, "") {
                         add_adj = Some(adj);
                     }
                 }
             });
             icon_menu(ui, "add-filter", icon_filter, "New live filter layer", |ui| {
                 for (name, f) in filter_presets() {
-                    if ui.button(name).clicked() {
+                    if menu_item(ui, name, "") {
                         add_filter = Some(f);
                     }
                 }
@@ -551,27 +538,9 @@ impl App {
             if ui.add(IconButton::new(icon_down, "Move layer down")).clicked() {
                 action = Some("down");
             }
-            let is_group = self.active_is_group();
-            icon_menu(ui, "layer-more", icon_more, "More", |ui| {
-                if ui.add_enabled(is_group, egui::Button::new("Ungroup")).clicked() {
-                    action = Some("ungroup");
-                }
-                if ui
-                    .add_enabled(has_mask, egui::Button::new("Remove mask"))
-                    .clicked()
-                {
-                    action = Some("rmmask");
-                }
-                if has_mask {
-                    let label = if mask_enabled {
-                        "Disable mask"
-                    } else {
-                        "Enable mask"
-                    };
-                    if ui.button(label).clicked() {
-                        action = Some(if mask_enabled { "maskoff" } else { "maskon" });
-                    }
-                }
+            // The active layer's own actions, as on its right-click menu.
+            icon_menu(ui, "layer-more", icon_more, "More layer actions", |ui| {
+                self.layer_more_menu(ui)
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
@@ -648,7 +617,10 @@ fn kind_chip(p: &egui::Painter, right: egui::Pos2, label: &str, ink: Color32) ->
     size.x
 }
 
-/// An [`IconButton`] that opens a popup of actions below itself.
+/// An [`IconButton`] that opens a menu of actions. The menu sizes to its
+/// items (a popup sized to the 26 px button wrapped every label one
+/// letter per line) and opens above the button when there is no room
+/// below, as at the foot of the layers panel.
 fn icon_menu(
     ui: &mut egui::Ui,
     id: &str,
@@ -657,11 +629,8 @@ fn icon_menu(
     content: impl FnOnce(&mut egui::Ui),
 ) {
     let resp = ui.add(IconButton::new(draw, tip));
-    let popup = ui.make_persistent_id(id);
-    if resp.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(popup));
-    }
-    egui::popup::popup_below_widget(ui, popup, &resp, egui::PopupCloseBehavior::CloseOnClick, content);
+    note_target(ui.ctx(), id, resp.rect);
+    button_menu(&resp, content);
 }
 
 /// A square button drawn with one of the original line icons below.
