@@ -138,7 +138,9 @@ impl Default for CropTool {
             frame: None,
             ratio: None,
             fields: (0.0, 0.0),
-            delete_cropped: true,
+            // Non-destructive by default: cropped-off pixels stay on their
+            // layers until the user asks for them to go.
+            delete_cropped: false,
             drag: None,
             hover: None,
         }
@@ -859,7 +861,7 @@ impl App {
     /// Debug tokens: `crop:frame=X0:Y0:X1:Y1` sets the frame (and picks
     /// the tool), `crop:angle=DEG` turns it, `crop:drag` shows it mid-drag
     /// (thirds, size pill), `crop:ratio=W:H` sets a ratio, `crop:commit`
-    /// and `crop:cancel` press the buttons, `crop:keep` unticks "Delete
+    /// and `crop:cancel` press the buttons, `crop:delete` ticks "Delete
     /// cropped pixels".
     pub(crate) fn debug_crop(&mut self, _ctx: &egui::Context, tok: &str) -> bool {
         let Some(rest) = tok.strip_prefix("crop:") else {
@@ -904,8 +906,8 @@ impl App {
             self.commit_crop();
         } else if rest == "cancel" {
             self.cancel_crop();
-        } else if rest == "keep" {
-            self.crop.delete_cropped = false;
+        } else if rest == "delete" {
+            self.crop.delete_cropped = true;
         } else if rest != "tool" {
             return false;
         }
@@ -1112,6 +1114,12 @@ mod tests {
         assert_eq!((app.editor.doc().width, app.editor.doc().height), (1500, 1000));
         assert_eq!(app.editor.history().last().copied(), Some("Crop"));
         assert_eq!(app.editor.history().len(), steps + 1, "one undo step");
+        // Non-destructive by default: the photo's cropped-off pixels stay.
+        let bg = app.editor.doc().layers()[0].pixels().unwrap();
+        assert!(
+            bg.get_pixel(-10, -10).a > 0.99,
+            "pixels beyond the new edge are kept"
+        );
         let fresh = app.crop.frame.expect("a fresh frame on the new canvas");
         assert_eq!(fresh.rect(), Rect::new(0, 0, 1500, 1000));
         // Leaving the tool drops the frame; Esc-style reset restores it.
