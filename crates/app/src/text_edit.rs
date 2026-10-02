@@ -197,6 +197,33 @@ pub(crate) fn nav_target(
     }
 }
 
+/// Command chords that still work while typing: zoom keys act at once
+/// (`false`), and Save, Open and Close commit the text first (`true`).
+/// Everything else typed with Cmd is an editing key or ignored.
+pub(crate) fn passthrough_action(
+    prefs: &session::Prefs,
+    key: Key,
+    m: egui::Modifiers,
+) -> Option<(&'static str, bool)> {
+    if !m.command || m.alt {
+        return None;
+    }
+    let view = match key {
+        Key::Equals | Key::Plus => Some("zoom-in"),
+        Key::Minus => Some("zoom-out"),
+        Key::Num0 => Some("fit"),
+        Key::Num1 => Some("actual"),
+        _ => None,
+    };
+    if let Some(id) = view.filter(|_| !m.shift || key == Key::Plus) {
+        return Some((id, false));
+    }
+    ["save", "open", "close"].into_iter().find_map(|id| {
+        let (c, k) = session::resolve_chord(prefs, id)?;
+        (k == key && c.shift == m.shift).then_some((id, true))
+    })
+}
+
 /// Paste text the way the layer stores it: newlines only.
 pub(crate) fn normalize_paste(s: &str) -> String {
     s.replace("\r\n", "\n").replace('\r', "\n")
@@ -300,6 +327,8 @@ pub(crate) struct TextSession {
     pub key: String,
     /// The session made the layer (closing it empty removes it).
     pub created: bool,
+    /// The layer's text as the session found it (Cancel puts it back).
+    original: TextLayer,
     /// The document tab the session belongs to.
     tab: usize,
     goal_x: Option<f32>,
@@ -320,6 +349,7 @@ impl TextSession {
     fn new(layer: LayerId, t: TextLayer, buf: Buffer, key: String, created: bool, tab: usize) -> Self {
         TextSession {
             layer,
+            original: t.clone(),
             lay: layout(&t),
             t,
             buf,
@@ -507,6 +537,35 @@ impl App {
         }
     }
 
+    /// Cancel the session: put the text back as it was before it (new
+    /// text disappears). Leaves no history step when nothing else edited
+    /// the document meanwhile; otherwise restoring is one more step.
+    pub(crate) fn cancel_text_edit(&mut self) {
+        let Some(s) = self.typer.session.take() else {
+            return;
+        };
+        // The open run goes without a trace; whatever came before it
+        // (another edit closed an earlier run) is restored as a step.
+        if self.editor.discard_coalescing(&s.key) {
+            self.below.note_change(self.editor.doc(), None);
+            let r = self.editor.last_affected();
+            self.mark(r);
+            self.fix_active();
+        }
+        if self.editor.doc().layer(s.layer).is_some() {
+            if s.created {
+                self.run(&RemoveLayer { layer: s.layer });
+                self.fix_active();
+            } else if self.editor.doc().layer(s.layer).and_then(|l| l.text_layer()) != Some(&s.original) {
+                self.run(&SetText {
+                    layer: s.layer,
+                    text: s.original.clone(),
+                });
+            }
+        }
+        self.status = "Text edit cancelled".into();
+    }
+
     /// Once a frame: close the session when the tool, the active layer or
     /// the document changed, and follow edits made to the layer elsewhere
     /// (the options bar, Properties, undo).
@@ -664,6 +723,12 @@ impl App {
                 } => {
                     if let Some(a) = key_action(key, modifiers, mac) {
                         self.text_key(now, a);
+                    } else if let Some((id, commit)) = passthrough_action(&self.prefs, key, modifiers) {
+                        // View keys work mid-edit; file keys commit first.
+                        if commit {
+                            self.commit_text_edit();
+                        }
+                        self.run_menu_action(id);
                     }
                 }
                 _ => {}
@@ -1347,6 +1412,28 @@ mod tests {
     }
 
     #[test]
+    fn zoom_and_file_chords_pass_through_while_typing() {
+        let prefs = session::Prefs::default();
+        let cmd = M {
+            command: true,
+            mac_cmd: cfg!(target_os = "macos"),
+            ctrl: !cfg!(target_os = "macos"),
+            ..M::NONE
+        };
+        assert_eq!(
+            passthrough_action(&prefs, Key::Equals, cmd),
+            Some(("zoom-in", false))
+        );
+        assert_eq!(passthrough_action(&prefs, Key::Num0, cmd), Some(("fit", false)));
+        assert_eq!(passthrough_action(&prefs, Key::S, cmd), Some(("save", true)));
+        assert_eq!(passthrough_action(&prefs, Key::W, cmd), Some(("close", true)));
+        // Plain letters type; Shift+Cmd+S is not Save; Cmd+T stays inert.
+        assert_eq!(passthrough_action(&prefs, Key::S, M::NONE), None);
+        assert_eq!(passthrough_action(&prefs, Key::S, M { shift: true, ..cmd }), None);
+        assert_eq!(passthrough_action(&prefs, Key::T, cmd), None);
+    }
+
+    #[test]
     fn navigation_moves_by_character_word_and_line() {
         let t = TextLayer::new("one two\nthree", 0.0, 50.0, 20.0, BLACK);
         let lay = layout(&t);
@@ -1860,6 +1947,33 @@ mod tests {
         let [w, h] = s.t.box_size.expect("paragraph text");
         assert!((s.t.x - 10.0).abs() < 0.5 && (s.t.y - 10.0).abs() < 0.5);
         assert!((w - 100.0).abs() < 0.5 && (h - 50.0).abs() < 0.5, "{w} × {h}");
+    }
+
+    #[test]
+    fn cancel_puts_the_text_back_without_a_history_step() {
+        let (mut app, ctx, id) = app();
+        let steps = app.editor.history().len();
+        app.begin_text_edit(&ctx, id, EditStart::End);
+        app.text_change(1.0, true, |b| b.insert(" there"));
+        assert_eq!(text_of(&app, id).as_deref(), Some("Hello there"));
+        app.cancel_text_edit();
+        assert_eq!(text_of(&app, id).as_deref(), Some("Hello"));
+        assert_eq!(app.editor.history().len(), steps);
+        // New text cancelled after typing: gone, no step.
+        app.begin_new_text(&ctx, 30.0, 140.0, None);
+        let new = app.active.unwrap();
+        app.text_change(2.0, true, |b| b.insert("temp"));
+        app.cancel_text_edit();
+        assert!(app.editor.doc().layer(new).is_none());
+        assert_eq!(app.editor.history().len(), steps);
+        // Cancelled after another edit closed the run: restoring is a step.
+        app.begin_text_edit(&ctx, id, EditStart::End);
+        app.text_change(3.0, true, |b| b.insert("!"));
+        app.editor.end_coalescing();
+        app.text_change(4.0, false, |b| b.insert("?"));
+        app.cancel_text_edit();
+        assert_eq!(text_of(&app, id).as_deref(), Some("Hello"));
+        assert_eq!(app.editor.history().len(), steps + 2, "typing, then the restore");
     }
 
     #[test]

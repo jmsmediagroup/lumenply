@@ -115,9 +115,10 @@ impl App {
                 " px",
                 66.0,
             ));
-            muted(ui, "Leading");
-            finished |= leading_field(ui, &mut t, 58.0);
+            // On a narrow window Leading and Tracking stay in Properties.
             if !narrow {
+                muted(ui, "Leading");
+                finished |= leading_field(ui, &mut t, 58.0);
                 muted(ui, "Tracking");
                 finished |= edit_finished(&value_field(
                     ui,
@@ -133,6 +134,18 @@ impl App {
             self.commit_text(id, &before, t, finished);
             bar_separator(ui);
             self.new_text_button(ui);
+            if self.text_editing() {
+                let r = chip(ui, false, RichText::new("Cancel"), 0.0)
+                    .on_hover_text("Put the text back as it was before this edit");
+                if r.clicked() {
+                    self.cancel_text_edit();
+                }
+                let r = chip(ui, true, RichText::new("Commit"), 0.0)
+                    .on_hover_text("Finish editing the text (Esc or Cmd+Enter)");
+                if r.clicked() {
+                    self.commit_text_edit();
+                }
+            }
             if self.text_editing() {
                 hint_full = "Esc or Cmd+Enter commits · Cmd-drag moves the text";
                 hint_short = "Esc commits";
