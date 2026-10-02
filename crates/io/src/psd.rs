@@ -18,6 +18,8 @@ use lumenply_tiles::{Raster, Rect, Rgba, TileStore};
 
 use crate::{linear_to_srgb, IoError};
 
+mod extra;
+
 #[derive(Debug, thiserror::Error)]
 pub enum PsdError {
     #[error("not a PSD file: {0}")]
@@ -599,6 +601,10 @@ fn adjustment_block(adj: &Adjustment) -> Option<Vec<u8>> {
             desc_long(&mut d, b"bwPresetKind", 3); // custom
             b"blwh"
         }
+        other => {
+            let (key, data) = extra::adjustment_block(other)?;
+            return Some(additional_block(key, &data));
+        }
     };
     Some(additional_block(key, &d))
 }
@@ -862,7 +868,7 @@ fn parse_adjustment(key: &[u8], data: &[u8]) -> Result<Option<Adjustment>, PsdEr
                 blue: w(b"Bl  ", 0.2),
             }
         }
-        _ => return Ok(None),
+        other => return Ok(extra::parse_adjustment(other, data)),
     }))
 }
 

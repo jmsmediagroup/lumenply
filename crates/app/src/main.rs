@@ -22,6 +22,7 @@ use lumenply_doc::{
 use lumenply_io::project;
 use lumenply_tiles::{Affine, Raster, Rect};
 
+mod adjust_ui;
 mod brand;
 mod canvas;
 mod color_picker;
@@ -1344,6 +1345,10 @@ fn adjustment_presets() -> Vec<(&'static str, Adjustment)> {
         ("Threshold", Adjustment::Threshold { level: 0.5 }),
         ("Posterize", Adjustment::Posterize { levels: 4 }),
         ("Invert", Adjustment::Invert),
+        ("Gradient Map", Adjustment::gradient_map_default()),
+        ("Channel Mixer", Adjustment::channel_mixer_default()),
+        ("Photo Filter", Adjustment::photo_filter_default()),
+        ("Selective Color", Adjustment::selective_color_default()),
     ]
 }
 

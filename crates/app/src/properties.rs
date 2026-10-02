@@ -790,6 +790,7 @@ impl App {
                 finished |= slider_row_ex(ui, "Levels", &mut v, 2.0..=32.0, "", o);
                 *levels = (v.round() as u32).clamp(2, 32);
             }
+            other => finished |= crate::adjust_ui::adjustment_ui(ui, id, other),
         }
         if adj != before {
             self.run_coalescing(
