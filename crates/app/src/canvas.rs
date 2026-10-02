@@ -1274,7 +1274,12 @@ impl App {
                     if let (Some(layer), false) = (self.active, self.stroke.is_empty()) {
                         let cmd = self.stroke_command(layer, self.stroke.clone());
                         let mut preview = self.editor.doc().clone();
-                        if cmd.apply(&mut preview).is_ok() {
+                        // The preview obeys layer locks as the commit will
+                        // (a transparency-locked layer keeps its alpha).
+                        let applied = cmd.apply(&mut preview).is_ok()
+                            && lumenply_core::locks::enforce(self.editor.doc(), &mut preview, cmd.as_ref())
+                                .is_ok();
+                        if applied {
                             if self.quick_mask {
                                 // The stroke edits the selection, not pixels:
                                 // refresh the red overlay from the preview.
