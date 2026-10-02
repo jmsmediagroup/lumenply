@@ -460,7 +460,66 @@ impl App {
                         ui.close_menu();
                     }
                 });
+
+                ui.add_space(10.0);
+                self.document_tab(ui);
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let export =
+                        egui::Button::new(RichText::new("Export").color(ACCENT_INK).strong()).fill(ACCENT);
+                    egui::menu::menu_custom_button(ui, export, |ui| {
+                        if ui.button("PNG...").clicked() {
+                            self.dialog = Some(Dialog::Export(self.suggest_path("png")));
+                            ui.close_menu();
+                        }
+                        if ui.button("JPEG...").clicked() {
+                            self.dialog = Some(Dialog::ExportJpeg(self.suggest_path("jpg"), 90));
+                            ui.close_menu();
+                        }
+                        if ui.button("PSD...").clicked() {
+                            self.dialog = Some(Dialog::ExportPsd(self.suggest_path("psd")));
+                            ui.close_menu();
+                        }
+                    });
+                    ui.add_enabled(
+                        false,
+                        egui::Button::new(RichText::new("Search tools, filters...   Ctrl K").color(MUTED))
+                            .min_size(egui::vec2(220.0, 0.0)),
+                    )
+                    .on_disabled_hover_text("Command palette — not built yet");
+                });
             });
         });
+    }
+}
+
+impl App {
+    /// The single open document, shown as a tab: name plus an unsaved dot.
+    /// (Multiple documents are not supported yet.)
+    fn document_tab(&mut self, ui: &mut egui::Ui) {
+        let name = self
+            .path
+            .as_ref()
+            .map(|p| file_name(&p.to_string_lossy()))
+            .unwrap_or_else(|| "untitled".into());
+        let unsaved = self.editor.history().len() != self.saved_rev;
+        let text = RichText::new(name).color(TEXT);
+        let resp = ui.add(egui::Button::new(text).fill(RAISED).rounding(6.0));
+        if unsaved {
+            let c = resp.rect.right_center() + egui::vec2(-7.0, 0.0);
+            ui.painter().circle_filled(c, 3.0, ACCENT);
+        }
+        let resp = resp.on_hover_text(if unsaved { "Unsaved changes" } else { "Saved" });
+        if resp.clicked() {
+            // Nothing to switch to yet; keep the click harmless.
+        }
+    }
+
+    /// A sensible default path for an export dialog, next to the project.
+    fn suggest_path(&self, ext: &str) -> String {
+        match &self.path {
+            Some(p) => p.with_extension(ext).to_string_lossy().into_owned(),
+            None => format!("untitled.{ext}"),
+        }
     }
 }

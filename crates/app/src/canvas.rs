@@ -118,6 +118,7 @@ impl App {
                 self.refresh_thumbs(ctx, true);
             }
         }
+        self.capture_history_thumb(ctx);
         self.dirty = false;
     }
 

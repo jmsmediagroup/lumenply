@@ -55,6 +55,23 @@ impl Tool {
         }
     }
 
+    /// The shortcut letter shown on the tool rail.
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Tool::Move => "V",
+            Tool::Brush => "B",
+            Tool::Eraser => "E",
+            Tool::Clone => "S",
+            Tool::Bucket | Tool::Gradient => "G",
+            Tool::Text => "T",
+            Tool::Eyedropper => "I",
+            Tool::RectSelect | Tool::EllipseSelect => "M",
+            Tool::Lasso | Tool::PolyLasso => "L",
+            Tool::Wand => "W",
+            Tool::Hand => "H",
+        }
+    }
+
     pub(crate) fn tip(self) -> &'static str {
         match self {
             Tool::Move => "Move (V)",
@@ -84,15 +101,24 @@ impl App {
             .show(ctx, |ui| {
                 for tool in Tool::ALL {
                     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(40.0), Sense::click());
-                    let bg = if self.tool == tool {
+                    let active = self.tool == tool;
+                    let bg = if active {
                         ACCENT
                     } else if resp.hovered() {
                         Color32::from_rgb(0x32, 0x38, 0x3F)
                     } else {
-                        RAISED
+                        PANEL
                     };
                     ui.painter().rect_filled(rect, 6.0, bg);
-                    draw_icon(ui.painter(), rect.shrink(10.0), tool);
+                    let ink = if active { ACCENT_INK } else { TEXT };
+                    draw_icon(ui.painter(), rect.shrink(11.0), tool, ink);
+                    ui.painter().text(
+                        rect.right_bottom() + egui::vec2(-4.0, -2.0),
+                        Align2::RIGHT_BOTTOM,
+                        tool.key(),
+                        FontId::monospace(8.5),
+                        if active { ACCENT_INK } else { MUTED },
+                    );
                     if resp.on_hover_text(tool.tip()).clicked() {
                         self.tool = tool;
                         self.lasso.clear();
@@ -105,8 +131,7 @@ impl App {
     }
 }
 
-pub(crate) fn draw_icon(p: &egui::Painter, r: egui::Rect, tool: Tool) {
-    let c = Color32::WHITE;
+pub(crate) fn draw_icon(p: &egui::Painter, r: egui::Rect, tool: Tool, c: Color32) {
     let s = Stroke::new(1.6, c);
     match tool {
         Tool::Brush => {

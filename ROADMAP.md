@@ -123,6 +123,10 @@ None of these could be tested in the container.
 
 ## 6. Usability
 
+- [ ] Multiple open documents (the top bar shows a single document tab for now)
+- [ ] Search field / command palette (field present but disabled; palette planned)
+
+
 - [ ] Native file dialogs (`rfd`) instead of typed paths
 - [ ] Autosave and crash recovery; recent files; unsaved-changes prompt on close
 - [ ] Docking panels (egui_dock); drag-to-reorder layers; layer context menu

@@ -6,6 +6,22 @@ impl App {
     pub(crate) fn options_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("options").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(self.tool.name())
+                        .family(egui::FontFamily::Name("semibold".into()))
+                        .color(TEXT),
+                );
+                if self.editing_mask {
+                    let chip = RichText::new("ON MASK").small().color(ACCENT);
+                    ui.add(
+                        egui::Button::new(chip)
+                            .fill(PANEL)
+                            .stroke(Stroke::new(1.0, ACCENT))
+                            .sense(Sense::hover()),
+                    )
+                    .on_hover_text("Edits paint on the layer mask (white reveals, black hides)");
+                }
+                ui.separator();
                 if let Some(x) = self.xform.clone() {
                     ui.label(RichText::new("Free Transform").strong());
                     ui.separator();

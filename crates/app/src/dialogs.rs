@@ -90,6 +90,7 @@ impl App {
         match project::save(path, self.editor.doc()) {
             Ok(()) => {
                 self.path = Some(PathBuf::from(path));
+                self.saved_rev = self.editor.history().len();
                 self.status = format!("Saved {path}");
             }
             Err(e) => self.status = format!("Could not save: {e}"),

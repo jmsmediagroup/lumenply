@@ -123,6 +123,10 @@ struct App {
     dialog: Option<Dialog>,
     filter_previewed: bool,
     status: String,
+    /// History length at the last save, for the unsaved-changes dot.
+    saved_rev: usize,
+    /// One thumbnail per history step (step 0 is the opened state).
+    hist_thumbs: Vec<egui::TextureHandle>,
 }
 
 impl App {
@@ -217,6 +221,8 @@ impl App {
             xform_angle: 0.0,
             cb_tone: 1,
             dialog: None,
+            saved_rev: 0,
+            hist_thumbs: Vec::new(),
             filter_previewed: false,
             status,
         };
@@ -314,6 +320,8 @@ impl App {
     fn set_doc(&mut self, editor: Editor, path: Option<PathBuf>) {
         self.editor = editor;
         self.path = path;
+        self.saved_rev = self.editor.history().len();
+        self.hist_thumbs.clear();
         self.cancel_interaction();
         self.select_top();
         self.mark(None);
@@ -621,15 +629,13 @@ impl App {
             .default_width(330.0)
             .min_width(290.0)
             .show(ctx, |ui| {
-                self.layers_ui(ui);
-                ui.separator();
                 egui::ScrollArea::vertical()
                     .id_salt("props")
                     .max_height(330.0)
                     .auto_shrink([false, true])
                     .show(ui, |ui| self.properties_ui(ui));
                 ui.separator();
-                self.history_ui(ui);
+                self.layers_ui(ui);
             });
     }
 }
@@ -640,6 +646,7 @@ impl eframe::App for App {
         self.menu_bar(ctx);
         self.options_bar(ctx);
         self.status_bar(ctx);
+        self.history_strip(ctx);
         self.tool_palette(ctx);
         self.side_panel(ctx);
         self.canvas(ctx);

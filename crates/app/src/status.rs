@@ -5,13 +5,13 @@ impl App {
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let doc = self.editor.doc();
-                ui.label(format!("{:.0}%", self.zoom * 100.0));
+                ui.label(RichText::new(format!("{:.0}%", self.zoom * 100.0)).monospace());
                 ui.separator();
-                ui.label(format!("{} × {} px", doc.width, doc.height));
+                ui.label(RichText::new(format!("{} × {} px", doc.width, doc.height)).monospace());
                 ui.separator();
                 match self.cursor_doc {
-                    Some((x, y)) => ui.label(format!("x {x}  y {y}")),
-                    None => ui.label("x –  y –"),
+                    Some((x, y)) => ui.label(RichText::new(format!("x {x}  y {y}")).monospace()),
+                    None => ui.label(RichText::new("x –  y –").monospace()),
                 };
                 ui.separator();
                 match &doc.selection {
