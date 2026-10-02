@@ -339,8 +339,9 @@ impl GpuCompositor {
     pub fn supports(doc: &Document) -> bool {
         fn ok(layers: &[Layer]) -> bool {
             layers.iter().all(|l| {
-                // Clip chains stay on the CPU for now.
+                // Clip chains and layer effects stay on the CPU for now.
                 !l.clip
+                    && l.effects.is_empty()
                     && match &l.content {
                         LayerContent::Pixel(_) | LayerContent::Text(_) => true,
                         LayerContent::Group(c) => ok(c),

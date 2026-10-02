@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lumenply logo — Lit L</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&amp;family=IBM+Plex+Sans:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#141619}a:hover{color:#4B525C}
+</style>
+</helmet>
+<div style="width: 1120px; height: 720px; box-sizing: border-box; padding: 48px; background: #E9EBEE; color: #141619; font-family: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif; display: grid; grid-template-columns: 400px minmax(0, 1fr); grid-template-rows: 400px minmax(0, 1fr); gap: 32px">
+  <sc-for list="{{tile}}" as="m" hint-placeholder-count="1">
+    <div style="width: 400px; height: 400px; border-radius: 28px; background: {{m.bg}}; display: flex; align-items: center; justify-content: center">
+      <svg width="240" height="240" viewBox="0 0 64 64" role="img" aria-label="Lumenply mark"><rect x="10" y="8" width="15" height="48" rx="5" fill="{{m.ink1}}"></rect><rect x="10" y="41" width="42" height="15" rx="5" fill="{{m.accent}}" stroke="{{m.bg}}" stroke-width="5" paint-order="stroke"></rect><circle cx="45" cy="20" r="8" fill="{{m.accent}}"></circle></svg>
+    </div>
+  </sc-for>
+  <div style="display: flex; flex-direction: column; gap: 32px">
+    <sc-for list="{{lockups}}" as="m" hint-placeholder-count="2">
+      <div style="height: 184px; box-sizing: border-box; border-radius: 22px; background: {{m.bg}}; box-shadow: inset 0 0 0 1px {{m.line}}; display: flex; align-items: center; gap: 22px; padding: 0 48px">
+        <svg width="76" height="76" viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="8" width="15" height="48" rx="5" fill="{{m.ink1}}"></rect><rect x="10" y="41" width="42" height="15" rx="5" fill="{{m.accent}}" stroke="{{m.bg}}" stroke-width="5" paint-order="stroke"></rect><circle cx="45" cy="20" r="8" fill="{{m.accent}}"></circle></svg>
+        <span style="font-size: 64px; line-height: 1; font-weight: 600; letter-spacing: -0.03em; color: {{m.text}}">Lumenply</span>
+      </div>
+    </sc-for>
+  </div>
+  <div style="grid-column: 1 / span 2; display: flex; align-items: flex-end; gap: 40px">
+    <sc-for list="{{icons}}" as="m" hint-placeholder-count="4">
+      <div style="display: flex; flex-direction: column; align-items: flex-start; gap: 10px">
+        <svg width="{{m.px}}" height="{{m.px}}" viewBox="-10 -10 84 84" aria-hidden="true"><rect x="-10" y="-10" width="84" height="84" rx="19" fill="{{m.bg}}"></rect><rect x="10" y="8" width="15" height="48" rx="5" fill="{{m.ink1}}"></rect><rect x="10" y="41" width="42" height="15" rx="5" fill="{{m.accent}}" stroke="{{m.bg}}" stroke-width="5" paint-order="stroke"></rect><circle cx="45" cy="20" r="8" fill="{{m.accent}}"></circle></svg>
+        <span style="font: 13px 'IBM Plex Mono', monospace; color: #4B525C">{{m.label}}</span>
+      </div>
+    </sc-for>
+    <div style="flex-grow: 1"></div>
+    <sc-for list="{{tab}}" as="m" hint-placeholder-count="1">
+      <div style="display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 18px; border-radius: 10px 10px 0 0; background: #FFFFFF; box-shadow: inset 0 0 0 1px #D6D9DE; margin-bottom: 30px">
+        <svg width="16" height="16" viewBox="-10 -10 84 84" aria-hidden="true"><rect x="-10" y="-10" width="84" height="84" rx="19" fill="{{m.bg}}"></rect><rect x="10" y="8" width="15" height="48" rx="5" fill="{{m.ink1}}"></rect><rect x="10" y="41" width="42" height="15" rx="5" fill="{{m.accent}}" stroke="{{m.bg}}" stroke-width="5" paint-order="stroke"></rect><circle cx="45" cy="20" r="8" fill="{{m.accent}}"></circle></svg>
+        <span style="font-size: 13px; color: #141619">Lumenply — free photo editor</span>
+      </div>
+    </sc-for>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#FFB547","options":["#FFB547","#5CC8FF","#4FE0A8","#FF8A6B"]},"$preview":{"width":1120,"height":720}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const accent = this.props.accent ?? '#FFB547';
+    const h = accent.replace('#', '');
+    const mix = (i) => Math.round(parseInt(h.slice(i, i + 2), 16) * 0.45 + 255 * 0.55);
+    const glow = 'rgb(' + mix(0) + ', ' + mix(2) + ', ' + mix(4) + ')';
+    const dark = { bg: '#141619', line: '#2E3339', text: '#ECEEF1', accent, glow, ink1: '#ECEEF1', ink2: '#ECEEF1' };
+    const light = { bg: '#FFFFFF', line: '#D6D9DE', text: '#141619', accent, glow, ink1: '#141619', ink2: '#141619' };
+    const icons = [128, 64, 32, 16].map((px) => ({ ...dark, px, label: px + ' px' }));
+    return { tile: [dark], lockups: [light, dark], icons, tab: [dark] };
+  }
+}
+</script>
+</body>
+</html>

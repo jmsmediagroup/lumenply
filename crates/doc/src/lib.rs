@@ -168,6 +168,94 @@ pub fn box_radius(sigma_like: f32) -> i32 {
     ((sane_radius(sigma_like) / 3f32.sqrt()).round() as i32).max(1)
 }
 
+/// Non-destructive per-layer effects ("layer styles"), rendered from the
+/// layer's own coverage at composite time. Kernels live in `nge-render`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LayerEffects {
+    pub drop_shadow: Option<ShadowFx>,
+    pub outer_glow: Option<GlowFx>,
+    pub stroke: Option<StrokeFx>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShadowFx {
+    pub dx: f32,
+    pub dy: f32,
+    pub blur: f32,
+    /// Straight linear RGB.
+    pub color: [f32; 3],
+    pub opacity: f32,
+}
+
+impl Default for ShadowFx {
+    fn default() -> Self {
+        ShadowFx {
+            dx: 4.0,
+            dy: 4.0,
+            blur: 6.0,
+            color: [0.0, 0.0, 0.0],
+            opacity: 0.6,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GlowFx {
+    pub blur: f32,
+    pub color: [f32; 3],
+    pub opacity: f32,
+}
+
+impl Default for GlowFx {
+    fn default() -> Self {
+        GlowFx {
+            blur: 8.0,
+            color: [1.0, 0.9, 0.4],
+            opacity: 0.8,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StrokeFx {
+    /// Outline width in pixels, grown outward from the coverage edge.
+    pub size: f32,
+    pub color: [f32; 3],
+    pub opacity: f32,
+}
+
+impl Default for StrokeFx {
+    fn default() -> Self {
+        StrokeFx {
+            size: 3.0,
+            color: [1.0, 1.0, 1.0],
+            opacity: 1.0,
+        }
+    }
+}
+
+impl LayerEffects {
+    pub fn is_empty(&self) -> bool {
+        self.drop_shadow.is_none() && self.outer_glow.is_none() && self.stroke.is_none()
+    }
+
+    /// How far (px) any effect reaches outside the layer's coverage.
+    pub fn pad(&self) -> i32 {
+        let mut p = 0.0f32;
+        if let Some(s) = &self.drop_shadow {
+            p = p.max(sane_radius(s.blur) * 2.0 + s.dx.abs().max(s.dy.abs()));
+        }
+        if let Some(g) = &self.outer_glow {
+            p = p.max(sane_radius(g.blur) * 2.0);
+        }
+        if let Some(st) = &self.stroke {
+            p = p.max(sane_radius(st.size) + 2.0);
+        }
+        p.ceil() as i32 + 2
+    }
+}
+
 /// A per-layer mask. Coverage lives in the alpha channel of a sparse
 /// [`TileStore`]; pixels with no tile take `default` (1.0 reveals, 0.0 hides).
 #[derive(Clone, Debug)]
@@ -294,6 +382,8 @@ pub struct Layer {
     /// 0.0 (invisible) to 1.0 (opaque).
     pub opacity: f32,
     pub blend: BlendMode,
+    /// Non-destructive effects rendered from this layer's coverage.
+    pub effects: LayerEffects,
     /// Clip to the layer below: this layer shows only where the base of
     /// its clip chain has coverage, and the chain composites as one unit
     /// with the base's blend and opacity. Ignored on the bottom sibling.
@@ -366,6 +456,7 @@ impl Layer {
             visible: true,
             opacity: 1.0,
             blend: BlendMode::Normal,
+            effects: LayerEffects::default(),
             clip: false,
             pass_through: false,
             mask: None,

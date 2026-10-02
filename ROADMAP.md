@@ -133,7 +133,11 @@ None of these could be tested in the container.
       axis, mirror across the centre; W/H/Rotate/Skew fields in the options bar)
 - [ ] Perspective and warp transforms (non-affine; needs a mesh resampler)
 - [ ] Brush engine: presets, textures, spacing jitter, smudge, dodge/burn, sponge
-- [ ] Layer styles (drop shadow, stroke, glow) as non-destructive effects
+- [x] Layer styles: drop shadow, outer glow and stroke as non-destructive
+      per-layer effects (EFFECTS section in Properties, tile-seam-safe,
+      saved in .nge; PSD/ORA warn instead of silently dropping)
+- [ ] More styles: inner shadow/glow, bevel, gradient/pattern overlay;
+      effects on clip-chain members and pass-through groups
 - [ ] Smart objects (embedded documents with transforms)
 - [x] Clipping masks (clip chains composite as a unit gated by the base's alpha
       and carrying its blend/opacity; context menu + palette; PSD clipping byte

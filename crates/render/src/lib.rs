@@ -265,6 +265,21 @@ pub fn render_tile_over(
             }
         };
 
+        let fx = &layer.effects;
+        if !fx.is_empty() {
+            // Effects render from the layer's own (masked) coverage over a
+            // padded neighbourhood: shadow and glow under the layer,
+            // stroke over it.
+            let masked = match mask {
+                Some(m) => apply_mask(src.clone(), m, coord),
+                None => src.clone(),
+            };
+            let d = dst.get_or_insert_with(Tile::new);
+            render_effects_under(d, layer, coord, canvas);
+            blend_tile(d, &masked, layer.blend, layer.opacity);
+            render_stroke_over(d, layer, coord, canvas);
+            continue;
+        }
         let d = dst.get_or_insert_with(Tile::new);
         match mask {
             Some(m) => {
@@ -275,6 +290,204 @@ pub fn render_tile_over(
         }
     }
     dst
+}
+
+/// The layer's masked coverage over `area` (alpha only, 0..1).
+fn coverage_raster(layer: &Layer, area: Rect, canvas: Rect) -> Vec<f32> {
+    let (w, h) = (area.w as usize, area.h as usize);
+    let mut out = vec![0f32; w * h];
+    let mask = layer.mask.as_ref().filter(|m| m.enabled);
+    match &layer.content {
+        LayerContent::Pixel(_) | LayerContent::Text(_) => {
+            if let Some(store) = layer.raster_store() {
+                for gy in 0..h {
+                    for gx in 0..w {
+                        let (x, y) = (area.x + gx as i32, area.y + gy as i32);
+                        let mut a = store.get_pixel(x, y).a;
+                        if let Some(m) = mask {
+                            a *= m.value(x, y);
+                        }
+                        out[gy * w + gx] = a;
+                    }
+                }
+            }
+        }
+        LayerContent::Group(children) => {
+            let flat = composite_layers(children, area, canvas);
+            for gy in 0..h {
+                for gx in 0..w {
+                    let (x, y) = (area.x + gx as i32, area.y + gy as i32);
+                    let mut a = flat.get_pixel(x, y).a;
+                    if let Some(m) = mask {
+                        a *= m.value(x, y);
+                    }
+                    out[gy * w + gx] = a;
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Gaussian-ish blur of a scalar field (three box passes, like the filters).
+fn blur_field(src: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
+    let mut raster = Raster::new(w as u32, h as u32);
+    for (i, &a) in src.iter().enumerate() {
+        raster.pixels[i] = Rgba::new(0.0, 0.0, 0.0, a);
+    }
+    let blurred = filter_raster(&raster, &Filter::GaussianBlur { radius }, (0, 0));
+    blurred.pixels.iter().map(|p| p.a).collect()
+}
+
+/// Shadow and glow, blended under the layer (onto `dst` before the layer).
+fn render_effects_under(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: Rect) {
+    let fx = &layer.effects;
+    if fx.drop_shadow.is_none() && fx.outer_glow.is_none() {
+        return;
+    }
+    let pad = fx.pad();
+    let (ox, oy) = coord.origin();
+    let area = Rect::new(
+        ox - pad,
+        oy - pad,
+        TILE_SIZE as u32 + 2 * pad as u32,
+        TILE_SIZE as u32 + 2 * pad as u32,
+    );
+    let cov = coverage_raster(layer, area, canvas);
+    let (w, h) = (area.w as usize, area.h as usize);
+    let at = |field: &[f32], x: i32, y: i32| -> f32 {
+        if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+            0.0
+        } else {
+            field[y as usize * w + x as usize]
+        }
+    };
+    struct FxPass {
+        field: Vec<f32>,
+        offset: (f32, f32),
+        color: [f32; 3],
+        opacity: f32,
+    }
+    let mut passes: Vec<FxPass> = Vec::new();
+    if let Some(sfx) = &fx.drop_shadow {
+        passes.push(FxPass {
+            field: blur_field(&cov, w, h, sfx.blur),
+            offset: (sfx.dx, sfx.dy),
+            color: sfx.color,
+            opacity: sfx.opacity,
+        });
+    }
+    if let Some(g) = &fx.outer_glow {
+        passes.push(FxPass {
+            field: blur_field(&cov, w, h, g.blur),
+            offset: (0.0, 0.0),
+            color: g.color,
+            opacity: g.opacity,
+        });
+    }
+    for FxPass {
+        field,
+        offset: (dx, dy),
+        color,
+        opacity,
+    } in passes
+    {
+        let mut tile = Tile::new();
+        let px = tile.pixels_mut();
+        for row in 0..TILE_SIZE {
+            for col in 0..TILE_SIZE {
+                let gx = col as i32 + pad - dx.round() as i32;
+                let gy = row as i32 + pad - dy.round() as i32;
+                let a = at(&field, gx, gy) * opacity;
+                if a > 0.0 {
+                    px[row * TILE_SIZE + col] =
+                        Rgba::from_straight(color[0], color[1], color[2], a.clamp(0.0, 1.0));
+                }
+            }
+        }
+        blend_tile(dst, &tile, BlendMode::Normal, layer.opacity);
+    }
+}
+
+/// The outline stroke, blended over the layer: a ring grown outward from
+/// the coverage edge by a chamfer distance transform.
+fn render_stroke_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: Rect) {
+    let Some(stroke) = &layer.effects.stroke else {
+        return;
+    };
+    let size = nge_doc::sane_radius(stroke.size);
+    if size <= 0.0 {
+        return;
+    }
+    let pad = layer.effects.pad();
+    let (ox, oy) = coord.origin();
+    let area = Rect::new(
+        ox - pad,
+        oy - pad,
+        TILE_SIZE as u32 + 2 * pad as u32,
+        TILE_SIZE as u32 + 2 * pad as u32,
+    );
+    let cov = coverage_raster(layer, area, canvas);
+    let (w, h) = (area.w as usize, area.h as usize);
+    // Two-pass 3-4 chamfer distance (in pixels / 3) to coverage >= 0.5.
+    const BIG: f32 = 1e6;
+    let mut d: Vec<f32> = cov.iter().map(|&a| if a >= 0.5 { 0.0 } else { BIG }).collect();
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            let mut best = d[i];
+            if x > 0 {
+                best = best.min(d[i - 1] + 3.0);
+            }
+            if y > 0 {
+                best = best.min(d[i - w] + 3.0);
+                if x > 0 {
+                    best = best.min(d[i - w - 1] + 4.0);
+                }
+                if x + 1 < w {
+                    best = best.min(d[i - w + 1] + 4.0);
+                }
+            }
+            d[i] = best;
+        }
+    }
+    for y in (0..h).rev() {
+        for x in (0..w).rev() {
+            let i = y * w + x;
+            let mut best = d[i];
+            if x + 1 < w {
+                best = best.min(d[i + 1] + 3.0);
+            }
+            if y + 1 < h {
+                best = best.min(d[i + w] + 3.0);
+                if x > 0 {
+                    best = best.min(d[i + w - 1] + 4.0);
+                }
+                if x + 1 < w {
+                    best = best.min(d[i + w + 1] + 4.0);
+                }
+            }
+            d[i] = best;
+        }
+    }
+    let mut tile = Tile::new();
+    let px = tile.pixels_mut();
+    for row in 0..TILE_SIZE {
+        for col in 0..TILE_SIZE {
+            let i = (row + pad as usize) * w + col + pad as usize;
+            let dist = d[i] / 3.0;
+            if dist <= 0.0 {
+                continue; // inside the coverage: the stroke grows outward
+            }
+            let ring = (size + 0.5 - dist).clamp(0.0, 1.0) * stroke.opacity;
+            if ring > 0.0 {
+                px[row * TILE_SIZE + col] =
+                    Rgba::from_straight(stroke.color[0], stroke.color[1], stroke.color[2], ring);
+            }
+        }
+    }
+    blend_tile(dst, &tile, BlendMode::Normal, layer.opacity);
 }
 
 /// A layer's own content for one tile — pixels, the text cache, or an
@@ -556,6 +769,84 @@ mod tests {
         assert!(close(p[0], 0.75), "got {p:?}");
         let untouched = straight(out.get(0, 0));
         assert!(close(untouched[0], 1.0));
+    }
+
+    #[test]
+    fn layer_effects_render_shadow_glow_and_stroke() {
+        use nge_doc::{LayerEffects, ShadowFx, StrokeFx};
+        let mut doc = Document::new(96, 96);
+        let id = doc.add_pixel_layer("square");
+        for y in 40..56 {
+            for x in 40..56 {
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(0.2, 0.6, 0.9, 1.0),
+                );
+            }
+        }
+        doc.layer_mut(id).unwrap().effects = LayerEffects {
+            drop_shadow: Some(ShadowFx {
+                dx: 8.0,
+                dy: 8.0,
+                blur: 2.0,
+                color: [0.0, 0.0, 0.0],
+                opacity: 1.0,
+            }),
+            outer_glow: None,
+            stroke: Some(StrokeFx {
+                size: 3.0,
+                color: [1.0, 0.0, 0.0],
+                opacity: 1.0,
+            }),
+        };
+        let out = composite_raster(&doc);
+
+        // Shadow: below-right of the square, dark and present.
+        let sh = out.get(60, 60);
+        assert!(sh.a > 0.5, "shadow coverage at the offset: {sh:?}");
+        let shc = straight(sh);
+        assert!(shc[0] < 0.1, "shadow is dark: {shc:?}");
+        // No shadow far away.
+        assert!(out.get(20, 20).a < 1e-3);
+
+        // The layer itself renders over its own shadow.
+        let body = straight(out.get(48, 48));
+        assert!(close(body[2], 0.9), "body colour intact: {body:?}");
+
+        // Stroke: a red ring just outside the square, not inside.
+        let ring = straight(out.get(38, 48));
+        assert!(
+            ring[0] > 0.9 && ring[1] < 0.1,
+            "stroke outside the edge: {ring:?}"
+        );
+        let inside = straight(out.get(44, 48));
+        assert!(close(inside[2], 0.9), "no stroke inside: {inside:?}");
+        // The ring ends ~3px out.
+        assert!(out.get(35, 48).a < 0.6, "ring width bounded");
+
+        // Tile-seam safety: the same document shifted across the 256-tile
+        // boundary renders effects identically (relative to the shift).
+        let mut doc2 = Document::new(400, 96);
+        let id2 = doc2.add_pixel_layer("square");
+        for y in 40..56 {
+            for x in 248..264 {
+                doc2.layer_mut(id2).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(0.2, 0.6, 0.9, 1.0),
+                );
+            }
+        }
+        doc2.layer_mut(id2).unwrap().effects = doc.layer(id).unwrap().effects.clone();
+        let out2 = composite_raster(&doc2);
+        for dy in 0..96 {
+            for dx in 0..60 {
+                let a = out.get(30 + dx, dy).a;
+                let b = out2.get(238 + dx, dy).a;
+                assert!((a - b).abs() < 2e-3, "seam mismatch at {dx},{dy}: {a} vs {b}");
+            }
+        }
     }
 
     #[test]

@@ -840,6 +840,14 @@ fn collect_records(
 /// Write `doc` as an 8-bit RGB PSD.
 pub fn save(path: impl AsRef<Path>, doc: &Document) -> Result<Report<()>, PsdError> {
     let mut warnings = Vec::new();
+    doc.for_each_layer(|l| {
+        if !l.effects.is_empty() {
+            warnings.push(format!(
+                "layer '{}': layer effects are not written to PSD yet",
+                l.name
+            ));
+        }
+    });
     let canvas = doc.canvas();
     let (w, h) = (doc.width as usize, doc.height as usize);
 

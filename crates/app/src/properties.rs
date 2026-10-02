@@ -101,6 +101,12 @@ impl App {
         let blend = layer.blend;
         let is_group = layer.children().is_some();
         let pass = layer.pass_through;
+        let effects = layer.effects.clone();
+        let can_fx = !layer.clip
+            && matches!(
+                layer.content,
+                LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Group(_)
+            );
         let adj = match &layer.content {
             LayerContent::Adjustment(a) => Some(a.clone()),
             _ => None,
@@ -188,6 +194,9 @@ impl App {
             _ => {}
         }
 
+        if can_fx {
+            self.effects_ui(ui, id, effects);
+        }
         if let Some(adj) = adj {
             ui.add_space(4.0);
             ui.label(RichText::new(adj.name()).small().strong());
@@ -292,6 +301,118 @@ impl App {
             }
         }
         self.histogram_footer(ui);
+    }
+
+    /// Non-destructive layer effects: toggles and parameters, coalescing
+    /// into one history step per drag.
+    fn effects_ui(&mut self, ui: &mut egui::Ui, id: LayerId, mut fx: nge_doc::LayerEffects) {
+        use nge_doc::{GlowFx, ShadowFx, StrokeFx};
+        section_title(ui, "EFFECTS");
+        let mut changed = false;
+        let mut finished = false;
+        let color_btn = |ui: &mut egui::Ui, c: &mut [f32; 3]| -> bool {
+            let mut srgb = c.map(nge_io::linear_to_srgb_f);
+            let r = egui::color_picker::color_edit_button_rgb(ui, &mut srgb);
+            if r.changed() {
+                *c = srgb.map(nge_io::srgb_to_linear_f);
+            }
+            r.changed()
+        };
+
+        ui.horizontal(|ui| {
+            let mut on = fx.drop_shadow.is_some();
+            if ui.checkbox(&mut on, "Drop shadow").changed() {
+                fx.drop_shadow = on.then(ShadowFx::default);
+                changed = true;
+                finished = true;
+            }
+            if let Some(sfx) = &mut fx.drop_shadow {
+                let c = color_btn(ui, &mut sfx.color);
+                changed |= c;
+                finished |= c;
+            }
+        });
+        if let Some(mut sfx) = fx.drop_shadow {
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [70.0, 18.0],
+                    egui::Label::new(RichText::new("Offset").color(MUTED)),
+                );
+                let rx = ui.add(egui::DragValue::new(&mut sfx.dx).speed(0.5).range(-200.0..=200.0));
+                let ry = ui.add(egui::DragValue::new(&mut sfx.dy).speed(0.5).range(-200.0..=200.0));
+                changed |= rx.changed() || ry.changed();
+                finished |= rx.drag_stopped() || ry.drag_stopped();
+            });
+            let f = slider_row(ui, "Blur", &mut sfx.blur, 0.0..=60.0, " px");
+            finished |= f;
+            let f2 = slider_row(ui, "Opacity", &mut sfx.opacity, 0.0..=1.0, "");
+            finished |= f2;
+            if sfx != fx.drop_shadow.unwrap() {
+                changed = true;
+            }
+            fx.drop_shadow = Some(sfx);
+        }
+
+        ui.horizontal(|ui| {
+            let mut on = fx.outer_glow.is_some();
+            if ui.checkbox(&mut on, "Outer glow").changed() {
+                fx.outer_glow = on.then(GlowFx::default);
+                changed = true;
+                finished = true;
+            }
+            if let Some(g) = &mut fx.outer_glow {
+                let c = color_btn(ui, &mut g.color);
+                changed |= c;
+                finished |= c;
+            }
+        });
+        if let Some(mut g) = fx.outer_glow {
+            let f = slider_row(ui, "Blur", &mut g.blur, 0.0..=60.0, " px");
+            finished |= f;
+            let f2 = slider_row(ui, "Opacity", &mut g.opacity, 0.0..=1.0, "");
+            finished |= f2;
+            if g != fx.outer_glow.unwrap() {
+                changed = true;
+            }
+            fx.outer_glow = Some(g);
+        }
+
+        ui.horizontal(|ui| {
+            let mut on = fx.stroke.is_some();
+            if ui.checkbox(&mut on, "Stroke").changed() {
+                fx.stroke = on.then(StrokeFx::default);
+                changed = true;
+                finished = true;
+            }
+            if let Some(st) = &mut fx.stroke {
+                let c = color_btn(ui, &mut st.color);
+                changed |= c;
+                finished |= c;
+            }
+        });
+        if let Some(mut st) = fx.stroke {
+            let f = slider_row(ui, "Size", &mut st.size, 0.5..=40.0, " px");
+            finished |= f;
+            let f2 = slider_row(ui, "Opacity", &mut st.opacity, 0.0..=1.0, "");
+            finished |= f2;
+            if st != fx.stroke.unwrap() {
+                changed = true;
+            }
+            fx.stroke = Some(st);
+        }
+
+        if changed || finished {
+            self.run_coalescing(
+                &SetLayerEffects {
+                    layer: id,
+                    effects: fx,
+                },
+                &format!("fx-{id}"),
+            );
+        }
+        if finished {
+            self.editor.end_coalescing();
+        }
     }
 
     fn histogram_footer(&mut self, ui: &mut egui::Ui) {

@@ -966,6 +966,29 @@ impl Command for UngroupLayer {
     }
 }
 
+/// Replace a layer's non-destructive effects (sliders coalesce through
+/// this).
+pub struct SetLayerEffects {
+    pub layer: LayerId,
+    pub effects: nge_doc::LayerEffects,
+}
+
+impl Command for SetLayerEffects {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn label(&self) -> String {
+        "Layer effects".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
+        l.effects = self.effects.clone();
+        Ok(())
+    }
+}
+
 /// Clip a layer to the one below it (or release the clip).
 pub struct SetClipped {
     pub layer: LayerId,

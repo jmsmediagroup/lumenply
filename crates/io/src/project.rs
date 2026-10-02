@@ -72,6 +72,8 @@ struct LayerRecord {
     pass_through: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     clip: bool,
+    #[serde(default, skip_serializing_if = "nge_doc::LayerEffects::is_empty")]
+    effects: nge_doc::LayerEffects,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mask: Option<MaskRecord>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -197,6 +199,7 @@ fn write_layer<W: Write + std::io::Seek>(
         blend: layer.blend,
         pass_through: layer.pass_through,
         clip: layer.clip,
+        effects: layer.effects.clone(),
         mask,
         collapsed: layer.collapsed,
         content,
@@ -338,6 +341,7 @@ fn read_layer<R: Read + std::io::Seek>(
     layer.blend = r.blend;
     layer.pass_through = r.pass_through;
     layer.clip = r.clip;
+    layer.effects = r.effects.clone();
     layer.mask = mask;
     layer.collapsed = r.collapsed;
     Ok(layer)
@@ -531,6 +535,7 @@ mod tests {
         nge_render::text::refresh_cache(&mut tl);
         doc.add_layer(Layer::text(tid, tl));
 
+        doc.layer_mut(bg).unwrap().effects.stroke = Some(nge_doc::StrokeFx::default());
         doc.work_path = Some(nge_doc::VectorPath {
             subpaths: vec![nge_doc::SubPath {
                 closed: true,
@@ -547,6 +552,11 @@ mod tests {
 
         assert_eq!((back.width, back.height), (700, 300));
         assert_eq!(back.work_path, doc.work_path, "work path survives");
+        assert_eq!(
+            back.layers()[0].effects,
+            doc.layers()[0].effects,
+            "effects survive"
+        );
         assert_eq!(back.next_id(), doc.next_id());
         assert_eq!(back.layer_count(), 5);
         assert!(back.layers()[1].pass_through, "pass-through survives");

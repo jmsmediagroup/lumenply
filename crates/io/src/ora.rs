@@ -90,6 +90,14 @@ fn xml_escape(s: &str) -> String {
 /// Write the document as `.ora`.
 pub fn save(path: impl AsRef<Path>, doc: &Document) -> Result<Report<()>, OraError> {
     let mut warnings = Vec::new();
+    doc.for_each_layer(|l| {
+        if !l.effects.is_empty() {
+            warnings.push(format!(
+                "layer '{}': layer effects are not part of OpenRaster and were dropped",
+                l.name
+            ));
+        }
+    });
     let file = std::fs::File::create(path)?;
     let mut zip = ZipWriter::new(std::io::BufWriter::new(file));
     let stored: FileOptions = FileOptions::default().compression_method(CompressionMethod::Stored);
