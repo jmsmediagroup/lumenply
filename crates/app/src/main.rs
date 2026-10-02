@@ -23,6 +23,7 @@ use lumenply_io::project;
 use lumenply_tiles::{Affine, Raster, Rect};
 
 mod brand;
+mod camera_raw;
 mod canvas;
 mod color_picker;
 mod debug;
@@ -258,6 +259,8 @@ struct App {
     text_new_armed: bool,
     /// Filter > Liquify's workspace, while open (it replaces the editor UI).
     liquify: Option<Box<liquify::LiquifyState>>,
+    /// The Camera Raw develop workspace, while a RAW file is being opened.
+    camera_raw: Option<Box<camera_raw::CameraRawState>>,
     /// Clone source point (document space), and whether the next click picks it.
     clone_source: Option<(f32, f32)>,
     clone_picking: bool,
@@ -425,6 +428,7 @@ impl App {
             text_align: TextAlign::Left,
             text_new_armed: false,
             liquify: None,
+            camera_raw: None,
             clone_source: None,
             clone_picking: true,
             clone_offset: (0, 0),
@@ -1222,6 +1226,11 @@ impl App {
     fn frame(&mut self, ctx: &egui::Context) {
         if self.liquify.is_some() {
             self.liquify_ui(ctx);
+            self.debug_screenshot(ctx);
+            return;
+        }
+        if self.camera_raw.is_some() {
+            self.camera_raw_ui(ctx);
             self.debug_screenshot(ctx);
             return;
         }

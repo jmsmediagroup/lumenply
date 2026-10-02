@@ -245,6 +245,10 @@ impl App {
             self.status = format!("Switched to {path}");
             return;
         }
+        if lumenply_io::raw::is_raw(path) {
+            self.open_camera_raw(path);
+            return;
+        }
         if is_ora_path(path) {
             match lumenply_io::ora::load(path) {
                 Ok(rep) => {

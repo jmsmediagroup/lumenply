@@ -14,6 +14,7 @@
 //! the reference and fallback.
 
 pub mod cache;
+pub mod develop;
 pub mod filters;
 pub mod gpu;
 pub mod liquify;

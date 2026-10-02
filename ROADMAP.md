@@ -136,8 +136,13 @@ None of these could be tested in the container.
       Verified on CC0 raw.pixls.us samples (Sony A7S ARW, Canon R6 CR3,
       Panasonic LX7 RW2: 0.1-0.3 s each); lossy-JPEG DNGs (some cinema
       cameras) are not supported by rawler 0.7 and fail with a clear error.
-      Still open: a develop dialog (exposure, highlights/shadows, profile
-      tone curve) instead of the flat linear default
+      Opening a RAW goes through a Camera Raw–style workspace (live preview,
+      histogram; Temperature, Tint, Exposure, Contrast, Highlights, Shadows,
+      Whites, Blacks, Vibrance, Saturation, camera tone curve; Auto, Reset,
+      before/after with P) that develops at full size into the new document
+      (render::develop, hue-preserving tone on perceptual luminance, local
+      highlights/shadows from a blurred log-luminance base). Still open:
+      re-opening the develop later (a smart "Camera Raw filter" layer)
 - [ ] AVIF/HEIF
 - [~] PSD: 16-bit import (raw, RLE and ZIP ± prediction channels) and
       export (raw channels; Export menu), full precision both ways and

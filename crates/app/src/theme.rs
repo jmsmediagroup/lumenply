@@ -418,6 +418,8 @@ pub(crate) struct RowOpts {
     pub log: bool,
     /// Whole numbers only.
     pub int: bool,
+    /// Fixed decimals for the value field (else chosen from the range).
+    pub decimals: Option<usize>,
 }
 
 impl Default for RowOpts {
@@ -426,6 +428,7 @@ impl Default for RowOpts {
             label_w: LABEL_W,
             log: false,
             int: false,
+            decimals: None,
         }
     }
 }
@@ -442,7 +445,9 @@ pub(crate) fn slider_row_ex(
 ) -> bool {
     let mut finished = false;
     let span = range.end() - range.start();
-    let decimals = if opts.int || (span >= 10.0 && !(opts.log && *range.start() < 2.0)) {
+    let decimals = if let Some(d) = opts.decimals {
+        d
+    } else if opts.int || (span >= 10.0 && !(opts.log && *range.start() < 2.0)) {
         0
     } else if opts.log {
         1

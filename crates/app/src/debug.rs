@@ -14,6 +14,7 @@ impl App {
             || self.debug_color(ctx, tok)
             || self.debug_start(ctx, tok)
             || self.debug_liquify(ctx, tok)
+            || self.debug_camera_raw(ctx, tok)
     }
 
     /// Menus, popups, context menus and combo boxes (`popups:...`).
