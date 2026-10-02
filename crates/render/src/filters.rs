@@ -8,6 +8,7 @@
 pub use nge_doc::Filter;
 use nge_doc::{box_radius, sane_radius};
 use nge_tiles::{Raster, Rect, Rgba, TileStore};
+use rayon::prelude::*;
 
 /// Apply a filter to every painted pixel of `store`.
 pub fn apply_filter(store: &TileStore, filter: &Filter) -> TileStore {
@@ -67,56 +68,59 @@ fn gaussian(src: &Raster, radius: f32) -> Raster {
 }
 
 /// Separable box blur with transparent edges (`src` → `dst`).
+///
+/// Both passes run row-parallel: the vertical pass works on a transposed
+/// copy so it is a horizontal pass too. The per-pixel math is identical to
+/// the serial version, so results are bit-exact.
 fn box_blur(src: &Raster, dst: &mut Raster, r: i32) {
-    let (w, h) = (src.width as i32, src.height as i32);
-    let n = (2 * r + 1) as f32;
+    if src.width == 0 || src.height == 0 {
+        return;
+    }
     let mut tmp = Raster::new(src.width, src.height);
-    // Horizontal pass.
-    for y in 0..h {
-        let mut sum = [0f32; 4];
-        let at = |x: i32| -> Rgba {
-            if x < 0 || x >= w {
-                Rgba::TRANSPARENT
-            } else {
-                src.get(x as u32, y as u32)
+    blur_rows(src, &mut tmp, r);
+    let t = transpose(&tmp);
+    let mut t2 = Raster::new(t.width, t.height);
+    blur_rows(&t, &mut t2, r);
+    *dst = transpose(&t2);
+}
+
+/// Running-sum box blur of each row, rows in parallel.
+fn blur_rows(src: &Raster, dst: &mut Raster, r: i32) {
+    let w = src.width as i32;
+    let n = (2 * r + 1) as f32;
+    let wu = src.width as usize;
+    dst.pixels
+        .par_chunks_mut(wu)
+        .zip(src.pixels.par_chunks(wu))
+        .for_each(|(drow, srow)| {
+            let mut sum = [0f32; 4];
+            let at = |x: i32| -> Rgba {
+                if x < 0 || x >= w {
+                    Rgba::TRANSPARENT
+                } else {
+                    srow[x as usize]
+                }
+            };
+            for x in -r..=r {
+                add(&mut sum, at(x), 1.0);
             }
-        };
-        for x in -r..=r {
-            add(&mut sum, at(x), 1.0);
-        }
-        for x in 0..w {
-            tmp.set(
-                x as u32,
-                y as u32,
-                Rgba::new(sum[0] / n, sum[1] / n, sum[2] / n, sum[3] / n),
-            );
-            add(&mut sum, at(x + r + 1), 1.0);
-            add(&mut sum, at(x - r), -1.0);
-        }
-    }
-    // Vertical pass.
-    for x in 0..w {
-        let mut sum = [0f32; 4];
-        let at = |y: i32| -> Rgba {
-            if y < 0 || y >= h {
-                Rgba::TRANSPARENT
-            } else {
-                tmp.get(x as u32, y as u32)
+            for x in 0..w {
+                drow[x as usize] = Rgba::new(sum[0] / n, sum[1] / n, sum[2] / n, sum[3] / n);
+                add(&mut sum, at(x + r + 1), 1.0);
+                add(&mut sum, at(x - r), -1.0);
             }
-        };
-        for y in -r..=r {
-            add(&mut sum, at(y), 1.0);
+        });
+}
+
+fn transpose(src: &Raster) -> Raster {
+    let (w, h) = (src.width as usize, src.height as usize);
+    let mut out = Raster::new(src.height, src.width);
+    out.pixels.par_chunks_mut(h).enumerate().for_each(|(x, row)| {
+        for (y, p) in row.iter_mut().enumerate() {
+            *p = src.pixels[y * w + x];
         }
-        for y in 0..h {
-            dst.set(
-                x as u32,
-                y as u32,
-                Rgba::new(sum[0] / n, sum[1] / n, sum[2] / n, sum[3] / n),
-            );
-            add(&mut sum, at(y + r + 1), 1.0);
-            add(&mut sum, at(y - r), -1.0);
-        }
-    }
+    });
+    out
 }
 
 #[inline]
