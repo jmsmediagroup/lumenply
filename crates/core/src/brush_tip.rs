@@ -280,6 +280,12 @@ pub struct BrushDynamics {
     /// build up like Photoshop's flow, so this compounds with
     /// `opacity_jitter`.
     pub flow_jitter: f32,
+    /// Paper grain (Photoshop's Texture, subtract mode): each dab loses
+    /// up to this much coverage where the canvas-anchored grain is low, so
+    /// the tooth survives dabs building up. 0 is off.
+    pub texture_depth: f32,
+    /// Grain size: 1 is the default ~6 px tooth.
+    pub texture_scale: f32,
 }
 
 impl Default for BrushDynamics {
@@ -298,6 +304,8 @@ impl Default for BrushDynamics {
             count_jitter: 0.0,
             opacity_jitter: 0.0,
             flow_jitter: 0.0,
+            texture_depth: 0.0,
+            texture_scale: 1.0,
         }
     }
 }
@@ -307,6 +315,7 @@ impl BrushDynamics {
     pub fn is_static(&self) -> bool {
         let d = BrushDynamics {
             min_roundness: self.min_roundness,
+            texture_scale: self.texture_scale,
             ..BrushDynamics::default()
         };
         *self == d
@@ -340,6 +349,52 @@ pub(crate) fn hash01(n: u32, salt: u32) -> f32 {
     h = h.wrapping_mul(0x2C1B_3C6D);
     h ^= h >> 12;
     (h >> 8) as f32 / (1u32 << 24) as f32
+}
+
+/// Lattice hash of a 2-D integer point onto `[0, 1)`.
+fn hash2(x: i32, y: i32, salt: u32) -> f32 {
+    hash01(
+        (x as u32).wrapping_mul(0x8DA6_B343) ^ (y as u32).wrapping_mul(0xD816_3841),
+        salt,
+    )
+}
+
+/// Smoothly interpolated value noise in `[0, 1)`.
+fn value_noise(x: f32, y: f32, salt: u32) -> f32 {
+    let (x0, y0) = (x.floor(), y.floor());
+    let s = |t: f32| t * t * (3.0 - 2.0 * t);
+    let (tx, ty) = (s(x - x0), s(y - y0));
+    let (ix, iy) = (x0 as i32, y0 as i32);
+    let a = hash2(ix, iy, salt);
+    let b = hash2(ix + 1, iy, salt);
+    let c = hash2(ix, iy + 1, salt);
+    let d = hash2(ix + 1, iy + 1, salt);
+    let top = a + (b - a) * tx;
+    let bottom = c + (d - c) * tx;
+    top + (bottom - top) * ty
+}
+
+/// Paper grain at canvas pixel `(x, y)` in `[0, 1]`: two octaves of value
+/// noise over a fine per-pixel tooth, anchored to the canvas so every dab
+/// (and every stroke) meets the same paper. `scale` 1 makes ~6 px cells.
+pub fn grain(x: i32, y: i32, scale: f32) -> f32 {
+    let cell = 6.0 * scale.clamp(0.1, 10.0);
+    let (u, v) = ((x as f32 + 0.5) / cell, (y as f32 + 0.5) / cell);
+    let coarse = value_noise(u, v, 0x6EED_0001);
+    let mid = value_noise(u * 2.7 + 17.0, v * 2.7 + 5.0, 0x6EED_0002);
+    let fine = hash2(x, y, 0x6EED_0003);
+    // Stretch the contrast so the tooth has real highs and lows.
+    let g = 0.55 * coarse + 0.3 * mid + 0.15 * fine;
+    ((g - 0.5) * 1.8 + 0.5).clamp(0.0, 1.0)
+}
+
+/// How much of a dab the paper takes at grain `g` for texture `depth`:
+/// grain below the depth stays bare (a soft threshold 0.24 wide), so the
+/// tooth survives any number of dabs building up — deeper texture, more
+/// bare paper.
+pub fn grain_mask(g: f32, depth: f32) -> f32 {
+    let t = ((g - (depth - 0.12)) / 0.24).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 // Salts for each dynamic, so they vary independently. The scatter salts
@@ -1076,6 +1131,54 @@ mod stroke_tests {
                 px(&d, x, y).a
             );
         }
+    }
+
+    #[test]
+    fn grain_texture_keeps_a_canvas_anchored_tooth_bare() {
+        let vals: Vec<f32> = (0..200).map(|i| grain(i * 3, i * 7, 1.0)).collect();
+        assert!(vals.iter().all(|v| (0.0..=1.0).contains(v)));
+        assert!(vals.contains(&0.0) && vals.iter().any(|&v| v > 0.8));
+        assert_eq!(grain(5, 9, 1.0).to_bits(), grain(5, 9, 1.0).to_bits());
+        // The mask is a soft threshold at the depth.
+        assert_eq!(grain_mask(0.3, 0.5), 0.0);
+        assert!((grain_mask(0.5, 0.5) - 0.5).abs() < 1e-6);
+        assert_eq!(grain_mask(0.7, 0.5), 1.0);
+        // Two dabs on one spot (count 2) at half depth: a solid tip pixel
+        // keeps exactly 1 − (1 − m)² for its grain mask m, and where the
+        // grain is below the depth the paper stays bare however the dabs
+        // build up.
+        let brush = Brush {
+            radius: 30.0,
+            hardness: 1.0,
+            dynamics: BrushDynamics {
+                texture_depth: 0.5,
+                count: 2,
+                ..BrushDynamics::default()
+            },
+            ..Brush::default()
+        };
+        let d = paint(brush, vec![StrokePoint::new(40.5, 32.5, 1.0)]);
+        let (mut bare, mut full) = (0, 0);
+        for y in 20..45 {
+            for x in 28..53 {
+                let m = grain_mask(grain(x, y, 1.0), 0.5);
+                let want = 1.0 - (1.0 - m) * (1.0 - m);
+                assert!((px(&d, x, y).a - want).abs() < 1e-5, "({x}, {y})");
+                bare += (px(&d, x, y).a == 0.0) as u32;
+                full += (want == 1.0) as u32;
+            }
+        }
+        assert!(bare > 50 && full > 50, "{bare} bare and {full} solid pixels");
+        // Depth 0 is off: the same dab is solid.
+        let solid = paint(
+            Brush {
+                radius: 30.0,
+                hardness: 1.0,
+                ..Brush::default()
+            },
+            vec![StrokePoint::new(40.5, 32.5, 1.0)],
+        );
+        assert_eq!(px(&solid, 40, 32).a, 1.0);
     }
 
     #[test]

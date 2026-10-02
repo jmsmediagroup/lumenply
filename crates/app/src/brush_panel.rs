@@ -252,6 +252,8 @@ pub(crate) struct PresetDynamics {
     pub count_jitter: f32,
     pub opacity_jitter: f32,
     pub flow_jitter: f32,
+    pub texture_depth: f32,
+    pub texture_scale: f32,
 }
 
 impl From<BrushDynamics> for PresetDynamics {
@@ -270,6 +272,8 @@ impl From<BrushDynamics> for PresetDynamics {
             count_jitter: d.count_jitter,
             opacity_jitter: d.opacity_jitter,
             flow_jitter: d.flow_jitter,
+            texture_depth: d.texture_depth,
+            texture_scale: d.texture_scale,
         }
     }
 }
@@ -291,6 +295,8 @@ impl From<&PresetDynamics> for BrushDynamics {
             count_jitter: unit(p.count_jitter),
             opacity_jitter: unit(p.opacity_jitter),
             flow_jitter: unit(p.flow_jitter),
+            texture_depth: unit(p.texture_depth),
+            texture_scale: p.texture_scale.clamp(0.25, 4.0),
         }
     }
 }
@@ -738,6 +744,31 @@ impl App {
         if spacing != before {
             self.brush.spacing = spacing * 2.0;
         }
+        section_title(ui, "TEXTURE");
+        let d = &mut self.brush.dynamics;
+        slider_row_scaled_w(
+            ui,
+            "Grain depth",
+            &mut d.texture_depth,
+            0.0..=1.0,
+            100.0,
+            "%",
+            LABEL,
+        );
+        slider_row_scaled_w(
+            ui,
+            "Grain scale",
+            &mut d.texture_scale,
+            0.25..=4.0,
+            100.0,
+            "%",
+            LABEL,
+        );
+        ui.label(
+            RichText::new("Paper tooth the paint can't fill, fixed to the canvas")
+                .small()
+                .color(MUTED),
+        );
     }
 
     fn dynamics_column(&mut self, ui: &mut egui::Ui) {
@@ -802,7 +833,7 @@ impl App {
         ui.add_space(4.0);
         if ui
             .button("Reset dynamics")
-            .on_hover_text("No jitter, scatter or count; round angle and roundness")
+            .on_hover_text("No jitter, scatter, count or grain; angle 0° and full roundness")
             .clicked()
         {
             self.brush.dynamics = BrushDynamics::default();
@@ -928,6 +959,8 @@ impl App {
                     "follow" => d.follow_direction = v != 0.0,
                     "across" => d.scatter_across = v != 0.0,
                     "flip" => d.flip_x_jitter = v != 0.0,
+                    "grain" => d.texture_depth = v / 100.0,
+                    "grain-scale" => d.texture_scale = v / 100.0,
                     _ => return false,
                 }
             }

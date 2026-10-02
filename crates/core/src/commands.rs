@@ -3002,13 +3002,24 @@ fn dab_coverage(
     if r <= 0.0 {
         return;
     }
-    if brush.tip.is_some() || p.roundness < 1.0 {
-        crate::brush_tip::stamp(brush.tip.as_deref(), brush.hardness, p, canvas, |px, py, c| {
-            let cover = c * sel.map_or(1.0, |s| s.value(px, py)) * p.opacity;
-            if cover > 0.0 {
-                f(px, py, cover);
-            }
-        });
+    let depth = brush.dynamics.texture_depth.clamp(0.0, 1.0);
+    if brush.tip.is_some() || p.roundness < 1.0 || depth > 0.0 {
+        let scale = brush.dynamics.texture_scale;
+        crate::brush_tip::stamp(
+            brush.tip.as_deref(),
+            brush.hardness,
+            p,
+            canvas,
+            |px, py, mut c| {
+                if depth > 0.0 {
+                    c *= crate::brush_tip::grain_mask(crate::brush_tip::grain(px, py, scale), depth);
+                }
+                let cover = c * sel.map_or(1.0, |s| s.value(px, py)) * p.opacity;
+                if cover > 0.0 {
+                    f(px, py, cover);
+                }
+            },
+        );
         return;
     }
     // The computed round tip (angle can't change a circle), exactly as it
