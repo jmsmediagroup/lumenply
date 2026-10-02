@@ -939,6 +939,12 @@ impl App {
                 sample,
             });
         }
+        if self.tool == Tool::Eraser
+            && self.retouch.eraser_mode == retouch_ui::EraserMode::Background
+            && !self.editing_mask
+        {
+            return Box::new(self.background_erase(layer, brush, points));
+        }
         if self.tool == Tool::Brush && brush.mode == BrushMode::History && !self.editing_mask {
             return Box::new(self.history_stroke(layer, brush, points));
         }

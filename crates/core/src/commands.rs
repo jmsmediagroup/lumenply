@@ -18,6 +18,7 @@ pub use lumenply_doc::selection_ops::EdgeOp;
 pub use crate::crop::CropCanvas;
 pub use crate::guides::{AddGuide, ClearGuides, MoveGuide, RemoveGuide};
 
+pub use crate::erasers::{BackgroundErase, MagicErase};
 pub use crate::fill_cmds::{AddFillLayer, SetFill};
 pub use crate::retouch::{PatchHeal, RedEye};
 pub use crate::retouch_brush::HistoryStroke;

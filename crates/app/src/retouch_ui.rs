@@ -73,6 +73,11 @@ pub(crate) struct Retouch {
     /// The history brush paints from this state; `None` = the oldest kept
     /// ("Open").
     pub(crate) history_source: Option<HistorySource>,
+    /// Background eraser: tolerance in percent, resampling under every
+    /// dab, and erasing only what connects to the brush centre.
+    pub(crate) bg_tolerance: f32,
+    pub(crate) bg_continuous: bool,
+    pub(crate) bg_contiguous: bool,
 }
 
 /// A history state picked as the history brush's source: its step index
@@ -106,6 +111,9 @@ impl Default for Retouch {
             darken: 50.0,
             focus: None,
             history_source: None,
+            bg_tolerance: 25.0,
+            bg_continuous: true,
+            bg_contiguous: true,
         }
     }
 }
@@ -292,7 +300,137 @@ impl App {
                     HealMode::Spot | HealMode::Healing => false,
                 }
             }
+            Tool::Eraser => {
+                mode_control(
+                    ui,
+                    wide,
+                    "eraser-mode",
+                    "Eraser mode",
+                    &mut self.retouch.eraser_mode,
+                    &EraserMode::ALL,
+                );
+                ui.separator();
+                match self.retouch.eraser_mode {
+                    EraserMode::Eraser => false,
+                    EraserMode::Background => {
+                        crate::options_bar::bar_slider(
+                            ui,
+                            "Tolerance",
+                            &mut self.retouch.bg_tolerance,
+                            0.0..=100.0,
+                            "%",
+                            false,
+                        );
+                        segmented(
+                            ui,
+                            &mut self.retouch.bg_continuous,
+                            &[(false, "Once"), (true, "Continuous")],
+                        );
+                        check(ui, &mut self.retouch.bg_contiguous, "Contiguous")
+                            .on_hover_text("Erase only what connects to the brush centre");
+                        ui.separator();
+                        false
+                    }
+                    EraserMode::Magic => {
+                        let mut tol = self.tolerance * 100.0;
+                        if crate::options_bar::bar_slider(ui, "Tolerance", &mut tol, 0.0..=100.0, "%", false)
+                        {
+                            self.tolerance = tol / 100.0;
+                        }
+                        check(ui, &mut self.contiguous, "Contiguous")
+                            .on_hover_text("Erase only the connected area of similar colour");
+                        check(ui, &mut self.sample_merged, "All layers")
+                            .on_hover_text("Judge colours on the merged image instead of the active layer");
+                        let mut op = self.brush.color[3] * 100.0;
+                        if crate::options_bar::bar_slider(ui, "Opacity", &mut op, 1.0..=100.0, "%", false) {
+                            self.brush.color[3] = op / 100.0;
+                        }
+                        if wide {
+                            ui.label(RichText::new("Click a colour to erase it").weak());
+                        }
+                        true
+                    }
+                }
+            }
             _ => false,
+        }
+    }
+
+    /// The palette's retouching-mode actions (`tool-patch`, ...): pick the
+    /// tool and its mode. False for any other id.
+    pub(crate) fn retouch_tool_action(&mut self, id: &str) -> bool {
+        match id {
+            "tool-spot-heal" => self.retouch.heal_mode = HealMode::Spot,
+            "tool-patch" => self.retouch.heal_mode = HealMode::Patch,
+            "tool-red-eye" => self.retouch.heal_mode = HealMode::RedEye,
+            "tool-blur" => self.brush.mode = BrushMode::Blur,
+            "tool-sharpen" => self.brush.mode = BrushMode::Sharpen,
+            "tool-history-brush" => self.brush.mode = BrushMode::History,
+            "tool-bg-eraser" => self.retouch.eraser_mode = EraserMode::Background,
+            "tool-magic-eraser" => self.retouch.eraser_mode = EraserMode::Magic,
+            _ => return false,
+        }
+        self.tool = match id {
+            "tool-spot-heal" | "tool-patch" | "tool-red-eye" => Tool::Heal,
+            "tool-bg-eraser" | "tool-magic-eraser" => Tool::Eraser,
+            _ => Tool::Brush,
+        };
+        true
+    }
+
+    /// A Background-eraser stroke with the bar's options.
+    pub(crate) fn background_erase(
+        &self,
+        layer: LayerId,
+        brush: Brush,
+        points: Vec<StrokePoint>,
+    ) -> BackgroundErase {
+        BackgroundErase {
+            layer,
+            brush,
+            points,
+            tolerance: self.retouch.bg_tolerance / 100.0,
+            continuous: self.retouch.bg_continuous,
+            contiguous: self.retouch.bg_contiguous,
+        }
+    }
+
+    /// Magic eraser: a click erases the similar-coloured area under it.
+    fn magic_eraser_canvas(
+        &mut self,
+        ctx: &egui::Context,
+        resp: &egui::Response,
+        to_doc: &dyn Fn(Pos2) -> (f32, f32),
+    ) {
+        if resp.hovered() {
+            ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        if !resp.clicked_by(egui::PointerButton::Primary) {
+            return;
+        }
+        let Some(p) = resp.interact_pointer_pos() else {
+            return;
+        };
+        let (x, y) = to_doc(p);
+        match (self.retouch_block(), self.active) {
+            (Some(why), _) => self.status = why.into(),
+            (None, Some(layer)) => {
+                let cmd = self.magic_erase_command(layer, x.floor() as i32, y.floor() as i32);
+                self.run(&cmd);
+            }
+            _ => {}
+        }
+    }
+
+    fn magic_erase_command(&self, layer: LayerId, x: i32, y: i32) -> MagicErase {
+        MagicErase {
+            layer,
+            x,
+            y,
+            tolerance: self.tolerance,
+            contiguous: self.contiguous,
+            sample: self.retouch_sample(layer),
+            opacity: self.brush.color[3],
         }
     }
 
@@ -311,6 +449,9 @@ impl App {
         match (self.tool, self.retouch.heal_mode) {
             (Tool::Heal, HealMode::Patch) => self.patch_canvas(ctx, resp, to_doc),
             (Tool::Heal, HealMode::RedEye) => self.red_eye_canvas(ctx, resp, to_doc),
+            (Tool::Eraser, _) if self.retouch.eraser_mode == EraserMode::Magic => {
+                self.magic_eraser_canvas(ctx, resp, to_doc)
+            }
             _ => return false,
         }
         true
@@ -556,6 +697,19 @@ impl App {
                 }
                 true
             }
+            // The magic eraser is a click, not a brush: no circle.
+            (Tool::Eraser, _) if self.retouch.eraser_mode == EraserMode::Magic => true,
+            (Tool::Eraser, _) if self.retouch.eraser_mode == EraserMode::Background => {
+                // The sampling hot spot at the brush centre.
+                if let Some(c) = resp.hover_pos() {
+                    for (a, b) in [((-4.0, 0.0), (4.0, 0.0)), ((0.0, -4.0), (0.0, 4.0))] {
+                        let seg = [c + egui::vec2(a.0, a.1), c + egui::vec2(b.0, b.1)];
+                        painter.line_segment(seg, Stroke::new(3.0, Color32::from_black_alpha(140)));
+                        painter.line_segment(seg, Stroke::new(1.0, Color32::WHITE));
+                    }
+                }
+                false
+            }
             _ => false,
         }
     }
@@ -571,7 +725,8 @@ impl App {
     /// `retouch:brush=blur` (paint / blur / sharpen / history) picks a brush
     /// mode, `retouch:radius=R` the brush radius, `retouch:source=N` the
     /// history brush's source step; `retouch:stroke=X0:Y0:X1:Y1` runs the
-    /// current tool's stroke along that line.
+    /// current tool's stroke along that line; `retouch:magic=X:Y` runs the
+    /// magic eraser there.
     pub(crate) fn debug_retouch(&mut self, ctx: &egui::Context, tok: &str) -> bool {
         let Some(rest) = tok.strip_prefix("retouch:") else {
             return false;
@@ -606,6 +761,12 @@ impl App {
                 }
             }
             ("radius", &[r]) => self.brush.radius = r,
+            ("magic", &[x, y]) => {
+                if let Some(layer) = layer {
+                    let cmd = self.magic_erase_command(layer, x as i32, y as i32);
+                    self.run(&cmd);
+                }
+            }
             ("source", &[n]) => self.set_history_source(n as usize),
             ("stroke", &[x0, y0, x1, y1]) => {
                 if let Some(layer) = layer {
@@ -770,6 +931,58 @@ mod tests {
                 "heal mode {label}"
             );
         }
+    }
+
+    #[test]
+    fn every_eraser_mode_names_its_controls_and_erases() {
+        let mut app = small_app();
+        let ctx = ctx();
+        app.tool = Tool::Eraser;
+        for (mode, label) in EraserMode::ALL {
+            app.retouch.eraser_mode = mode;
+            assert_eq!(
+                nameless(&mut app, &ctx),
+                Vec::<String>::new(),
+                "eraser mode {label}"
+            );
+        }
+        let layer = app.active.unwrap();
+        // Magic: the uniform layer goes in one click, one undo step.
+        let cmd = app.magic_erase_command(layer, 5, 5);
+        app.run(&cmd);
+        assert_eq!(app.editor.history().last().copied(), Some("Magic eraser"));
+        assert!(app
+            .editor
+            .doc()
+            .layer(layer)
+            .unwrap()
+            .pixels()
+            .unwrap()
+            .is_empty());
+        app.run_menu_action("undo");
+        // Background: a stroke erases the sampled colour under the brush.
+        app.retouch.eraser_mode = EraserMode::Background;
+        let cmd = app.stroke_command(layer, vec![StrokePoint::new(24.0, 24.0, 1.0)]);
+        assert_eq!(cmd.label(), "Background eraser");
+        app.run(cmd.as_ref());
+        let px = app.editor.doc().layer(layer).unwrap().pixels().unwrap();
+        assert_eq!(px.get_pixel(24, 24).a, 0.0);
+        assert!((px.get_pixel(2, 2).a - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn palette_actions_pick_the_tool_and_its_mode() {
+        let mut app = small_app();
+        app.run_menu_action("tool-patch");
+        assert_eq!((app.tool, app.retouch.heal_mode), (Tool::Heal, HealMode::Patch));
+        app.run_menu_action("tool-history-brush");
+        assert_eq!((app.tool, app.brush.mode), (Tool::Brush, BrushMode::History));
+        app.run_menu_action("tool-magic-eraser");
+        assert_eq!(
+            (app.tool, app.retouch.eraser_mode),
+            (Tool::Eraser, EraserMode::Magic)
+        );
+        assert!(!app.retouch_tool_action("tool-nonsense"));
     }
 
     #[test]

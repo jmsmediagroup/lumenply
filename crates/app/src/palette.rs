@@ -155,6 +155,14 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Snap on or off", "snap"),
     ("New fill layer: solid color", "fill-solid"),
     ("New fill layer: gradient", "fill-gradient"),
+    ("Spot Healing Brush (Heal ▸ Spot)", "tool-spot-heal"),
+    ("Patch tool (Heal ▸ Patch)", "tool-patch"),
+    ("Red Eye tool (Heal ▸ Red Eye)", "tool-red-eye"),
+    ("Blur tool (Brush ▸ Blur)", "tool-blur"),
+    ("Sharpen tool (Brush ▸ Sharpen)", "tool-sharpen"),
+    ("History Brush (Brush ▸ History)", "tool-history-brush"),
+    ("Background Eraser (Eraser ▸ Background)", "tool-bg-eraser"),
+    ("Magic Eraser (Eraser ▸ Magic)", "tool-magic-eraser"),
 ];
 
 /// The id of the destructive filter dialog for a filter kind.
@@ -712,6 +720,7 @@ impl App {
                 self.dialog = Some(Dialog::Fill(aware, margin, 0));
             }
             aid if guides::VIEW_ACTIONS.contains(&aid) => self.run_view_aid(aid),
+            tool if self.retouch_tool_action(tool) => {}
             filter if filter.starts_with("filter-") => {
                 match filter_presets().into_iter().find(|(_, f)| filter_id(f) == filter) {
                     Some((_, f)) => self.dialog = Some(Dialog::Filter(f)),
@@ -738,7 +747,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 103); // + liquify, layer ops, locks, align, select modify, fill, view aids, fill layers
+        assert_eq!(n, 111); // + liquify, layer ops, locks, align, select modify, fill, view aids, fill layers, retouching modes
     }
 
     #[test]

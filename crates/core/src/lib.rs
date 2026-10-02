@@ -11,6 +11,7 @@ pub mod commands;
 mod content_aware;
 pub mod crop;
 pub mod demo;
+mod erasers;
 pub mod fill_cmds;
 pub mod guides;
 pub mod layer_ops;
