@@ -101,6 +101,24 @@ impl App {
         }
     }
 
+    pub(crate) fn pick_export_psd16(&mut self) {
+        if let Some(p) = self.pick_save_path("Photoshop PSD (16-bit)", "psd") {
+            match lumenply_io::psd::save_16(&p, self.editor.doc()) {
+                Ok(rep) => {
+                    self.status = if rep.warnings.is_empty() {
+                        format!("Exported {p} (16-bit)")
+                    } else {
+                        format!(
+                            "Exported {p} (16-bit); not carried over: {}",
+                            rep.warnings.join("; ")
+                        )
+                    };
+                }
+                Err(e) => self.status = format!("Could not export: {e}"),
+            }
+        }
+    }
+
     pub(crate) fn pick_export_exr(&mut self) {
         if let Some(p) = self.pick_save_path("OpenEXR (linear float)", "exr") {
             let flat = lumenply_render::composite_raster(self.editor.doc());

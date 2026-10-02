@@ -318,6 +318,33 @@ fn layer_planes(store: &TileStore) -> Option<(Rect, [Vec<u8>; 4])> {
     Some((b, planes))
 }
 
+/// 16-bit variant of [`layer_planes`]: sRGB u16 samples, raw-encoded later.
+fn layer_planes16(store: &TileStore) -> Option<(Rect, [Vec<u16>; 4])> {
+    let b = store.content_bounds()?;
+    let r = store.to_raster(b);
+    let n = (b.w * b.h) as usize;
+    let mut planes = [vec![0u16; n], vec![0u16; n], vec![0u16; n], vec![0u16; n]];
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
+    for (i, p) in r.pixels.iter().enumerate() {
+        let [cr, cg, cb, a] = p.to_straight();
+        planes[0][i] = q(lumenply_doc::adjust::srgb_encode(cr));
+        planes[1][i] = q(lumenply_doc::adjust::srgb_encode(cg));
+        planes[2][i] = q(lumenply_doc::adjust::srgb_encode(cb));
+        planes[3][i] = q(a);
+    }
+    Some((b, planes))
+}
+
+/// Encode a 16-bit plane as a raw (compression 0) channel.
+fn encode_channel_raw16(plane: &[u16]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + plane.len() * 2);
+    put_u16(&mut out, 0); // compression = raw
+    for &v in plane {
+        out.extend_from_slice(&v.to_be_bytes());
+    }
+    out
+}
+
 fn mask_plane(mask: &Mask, canvas: Rect) -> (Rect, Vec<u8>, u8) {
     // Masks are written over the canvas; pixels outside painted tiles take the default.
     let r = canvas;
@@ -805,11 +832,18 @@ fn collect_records(
     canvas: Rect,
     out: &mut Vec<LayerRecordOut>,
     warnings: &mut Vec<String>,
+    deep: bool,
 ) {
     for l in layers {
         let mask = l.mask.as_ref().map(|m| {
             let (r, plane, default) = mask_plane(m, canvas);
-            (r, encode_channel_rle(&plane, r.w as usize, r.h as usize), default)
+            let enc = if deep {
+                let wide: Vec<u16> = plane.iter().map(|&v| v as u16 * 257).collect();
+                encode_channel_raw16(&wide)
+            } else {
+                encode_channel_rle(&plane, r.w as usize, r.h as usize)
+            };
+            (r, enc, default)
         });
         let mask_enabled = l.mask.as_ref().is_some_and(|m| m.enabled);
         match &l.content {
@@ -827,20 +861,35 @@ fn collect_records(
                     }
                     _ => unreachable!(),
                 };
-                let (bounds, chans) = match layer_planes(store) {
-                    Some((b, planes)) => {
-                        let (w, h) = (b.w as usize, b.h as usize);
-                        (
+                let (bounds, chans) = if deep {
+                    match layer_planes16(store) {
+                        Some((b, planes)) => (
                             b,
                             vec![
-                                (0i16, encode_channel_rle(&planes[0], w, h)),
-                                (1, encode_channel_rle(&planes[1], w, h)),
-                                (2, encode_channel_rle(&planes[2], w, h)),
-                                (-1, encode_channel_rle(&planes[3], w, h)),
+                                (0i16, encode_channel_raw16(&planes[0])),
+                                (1, encode_channel_raw16(&planes[1])),
+                                (2, encode_channel_raw16(&planes[2])),
+                                (-1, encode_channel_raw16(&planes[3])),
                             ],
-                        )
+                        ),
+                        None => (Rect::new(0, 0, 0, 0), empty_channels()),
                     }
-                    None => (Rect::new(0, 0, 0, 0), empty_channels()),
+                } else {
+                    match layer_planes(store) {
+                        Some((b, planes)) => {
+                            let (w, h) = (b.w as usize, b.h as usize);
+                            (
+                                b,
+                                vec![
+                                    (0i16, encode_channel_rle(&planes[0], w, h)),
+                                    (1, encode_channel_rle(&planes[1], w, h)),
+                                    (2, encode_channel_rle(&planes[2], w, h)),
+                                    (-1, encode_channel_rle(&planes[3], w, h)),
+                                ],
+                            )
+                        }
+                        None => (Rect::new(0, 0, 0, 0), empty_channels()),
+                    }
                 };
                 out.push(layer_record(
                     &l.name,
@@ -871,7 +920,7 @@ fn collect_records(
                     true,
                     vec![section_divider_block(3, blend_key(BlendMode::Normal))],
                 ));
-                collect_records(children, canvas, out, warnings);
+                collect_records(children, canvas, out, warnings, deep);
                 out.push(layer_record(
                     &l.name,
                     Rect::new(0, 0, 0, 0),
@@ -933,6 +982,15 @@ fn collect_records(
 
 /// Write `doc` as an 8-bit RGB PSD.
 pub fn save(path: impl AsRef<Path>, doc: &Document) -> Result<Report<()>, PsdError> {
+    save_depth(path, doc, false)
+}
+
+/// Write `doc` as a 16-bit RGB PSD (raw channels, full precision).
+pub fn save_16(path: impl AsRef<Path>, doc: &Document) -> Result<Report<()>, PsdError> {
+    save_depth(path, doc, true)
+}
+
+fn save_depth(path: impl AsRef<Path>, doc: &Document, deep: bool) -> Result<Report<()>, PsdError> {
     let mut warnings = Vec::new();
     doc.for_each_layer(|l| {
         if !l.effects.is_empty() {
@@ -952,14 +1010,14 @@ pub fn save(path: impl AsRef<Path>, doc: &Document) -> Result<Report<()>, PsdErr
     put_u16(&mut file, 4); // channels in composite: RGBA
     put_u32(&mut file, doc.height);
     put_u32(&mut file, doc.width);
-    put_u16(&mut file, 8); // depth
+    put_u16(&mut file, if deep { 16 } else { 8 }); // depth
     put_u16(&mut file, 3); // RGB
     put_u32(&mut file, 0); // colour mode data
     put_u32(&mut file, 0); // image resources
 
     // Layer and mask information.
     let mut records = Vec::new();
-    collect_records(doc.layers(), canvas, &mut records, &mut warnings);
+    collect_records(doc.layers(), canvas, &mut records, &mut warnings, deep);
     let mut layer_info = Vec::new();
     put_u16(&mut layer_info, records.len() as u16);
     for r in &records {
@@ -980,33 +1038,51 @@ pub fn save(path: impl AsRef<Path>, doc: &Document) -> Result<Report<()>, PsdErr
     put_u32(&mut file, lm.len() as u32);
     file.extend_from_slice(&lm);
 
-    // Composite image data (RLE, all channels share one count table).
+    // Composite image data: 8-bit writes RLE (all channels share one count
+    // table), 16-bit writes raw planes of big-endian samples.
     let flat = lumenply_render::composite_raster(doc);
-    let mut planes = [
-        vec![0u8; w * h],
-        vec![0u8; w * h],
-        vec![0u8; w * h],
-        vec![0u8; w * h],
-    ];
-    for (i, p) in flat.pixels.iter().enumerate() {
-        let [cr, cg, cb, a] = p.to_straight();
-        planes[0][i] = linear_to_srgb(cr);
-        planes[1][i] = linear_to_srgb(cg);
-        planes[2][i] = linear_to_srgb(cb);
-        planes[3][i] = (a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-    }
-    put_u16(&mut file, 1);
-    let mut counts = Vec::new();
-    let mut data = Vec::new();
-    for plane in &planes {
-        for y in 0..h {
-            let start = data.len();
-            packbits(&plane[y * w..(y + 1) * w], &mut data);
-            put_u16(&mut counts, (data.len() - start) as u16);
+    if deep {
+        put_u16(&mut file, 0);
+        let q = |v: f32| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
+        for ch in 0..4usize {
+            for p in &flat.pixels {
+                let [cr, cg, cb, a] = p.to_straight();
+                let v = match ch {
+                    0 => q(lumenply_doc::adjust::srgb_encode(cr)),
+                    1 => q(lumenply_doc::adjust::srgb_encode(cg)),
+                    2 => q(lumenply_doc::adjust::srgb_encode(cb)),
+                    _ => q(a),
+                };
+                file.extend_from_slice(&v.to_be_bytes());
+            }
         }
+    } else {
+        let mut planes = [
+            vec![0u8; w * h],
+            vec![0u8; w * h],
+            vec![0u8; w * h],
+            vec![0u8; w * h],
+        ];
+        for (i, p) in flat.pixels.iter().enumerate() {
+            let [cr, cg, cb, a] = p.to_straight();
+            planes[0][i] = linear_to_srgb(cr);
+            planes[1][i] = linear_to_srgb(cg);
+            planes[2][i] = linear_to_srgb(cb);
+            planes[3][i] = (a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        }
+        put_u16(&mut file, 1);
+        let mut counts = Vec::new();
+        let mut data = Vec::new();
+        for plane in &planes {
+            for y in 0..h {
+                let start = data.len();
+                packbits(&plane[y * w..(y + 1) * w], &mut data);
+                put_u16(&mut counts, (data.len() - start) as u16);
+            }
+        }
+        file.extend_from_slice(&counts);
+        file.extend_from_slice(&data);
     }
-    file.extend_from_slice(&counts);
-    file.extend_from_slice(&data);
 
     std::fs::write(path, file)?;
     Ok(Report { value: (), warnings })
@@ -1531,6 +1607,43 @@ mod tests {
         let path = temp(name);
         std::fs::write(&path, bytes).unwrap();
         load(&path)
+    }
+
+    #[test]
+    fn sixteen_bit_export_round_trips_deep_values() {
+        // A value that needs 16 bits: linear for the sRGB code 300/65535.
+        let fine = crate::srgb_to_linear_f(300.0 / 65535.0);
+        let mut doc = Document::new(4, 4);
+        let id = doc.add_pixel_layer("L");
+        for y in 0..4 {
+            for x in 0..4 {
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(fine, 0.25, 1.0, 1.0),
+                );
+            }
+        }
+        let path = temp("deep.psd");
+        save_16(&path, &doc).unwrap();
+        let back = load(&path).unwrap().value;
+        let got = back.layers()[0].pixels().unwrap().get_pixel(1, 1).to_straight();
+        assert!(
+            (got[0] - fine).abs() < 1e-5,
+            "16-bit red survives: {} vs {fine}",
+            got[0]
+        );
+        // An 8-bit save of the same value lands on a coarser code.
+        let path8 = temp("deep8.psd");
+        save(&path8, &doc).unwrap();
+        let back8 = load(&path8).unwrap().value;
+        let got8 = back8.layers()[0].pixels().unwrap().get_pixel(1, 1).to_straight();
+        assert!(
+            (got8[0] - fine).abs() > (got[0] - fine).abs(),
+            "the deep file is strictly more precise: 8-bit {} vs 16-bit {}",
+            got8[0],
+            got[0]
+        );
     }
 
     #[test]

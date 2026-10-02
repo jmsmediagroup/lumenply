@@ -254,6 +254,10 @@ impl App {
                             self.pick_export_ora();
                             ui.close_menu();
                         }
+                        if ui.button("Export Photoshop PSD (16-bit)...").clicked() {
+                            self.pick_export_psd16();
+                            ui.close_menu();
+                        }
                         if ui.button("Export Photoshop PSD...").clicked() {
                             self.pick_export_psd();
                             ui.close_menu();
