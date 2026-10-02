@@ -25,9 +25,11 @@ use lumenply_tiles::{Affine, Raster, Rect};
 mod brand;
 mod canvas;
 mod color_picker;
+mod crop;
 mod debug;
 mod demo;
 mod dialogs;
+mod guides;
 mod histogram;
 mod history;
 mod layers;
@@ -188,7 +190,7 @@ impl App {
 /// selected path node), so one keystroke never does both.
 fn delete_key_action(tool: Tool) -> Option<&'static str> {
     match tool {
-        Tool::Pen => None,
+        Tool::Pen | Tool::Crop => None,
         _ => Some("clear"),
     }
 }
@@ -349,6 +351,10 @@ struct App {
     no_doc: bool,
     /// The welcome screen's demo thumbnail, decoded on first show.
     start_thumb: Option<TextureHandle>,
+    /// The Crop tool's frame and options (crop.rs).
+    crop: crop::CropTool,
+    /// Rulers, guides, grid and snapping state (guides.rs).
+    aids: guides::ViewAids,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -496,6 +502,8 @@ impl App {
             untitled: String::new(),
             no_doc: true,
             start_thumb: None,
+            crop: crop::CropTool::default(),
+            aids: guides::ViewAids::default(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -542,6 +550,8 @@ impl App {
         self.clone_picking = true;
         self.clone_offset = (0, 0);
         self.move_offset = (0, 0);
+        self.crop.frame = None;
+        self.aids = guides::ViewAids::default();
         if self.xform.take().is_some() {
             self.mark(None);
         }
@@ -949,6 +959,8 @@ impl App {
             // act on the document underneath the live transform preview.
             return;
         }
+        // The Crop tool owns Enter (crop) and Esc (reset) while it is up.
+        self.crop_keys(ctx);
         // Esc first cancels an armed "New text" (the next canvas click would
         // otherwise still start a new layer).
         if self.text_new_armed && ctx.input_mut(|i| i.consume_key(M::NONE, Key::Escape)) {
@@ -1062,6 +1074,8 @@ impl App {
                 Some(Tool::Pen)
             } else if i.key_pressed(Key::H) {
                 Some(Tool::Hand)
+            } else if i.key_pressed(Key::C) {
+                Some(Tool::Crop)
             } else {
                 None
             };
@@ -1384,6 +1398,11 @@ mod key_tests {
         assert_eq!(delete_key_action(Tool::Brush), Some("clear"));
         assert_eq!(delete_key_action(Tool::Move), Some("clear"));
         assert_eq!(delete_key_action(Tool::RectSelect), Some("clear"));
+        assert_eq!(
+            delete_key_action(Tool::Crop),
+            None,
+            "Delete never clears under a crop frame"
+        );
     }
 }
 
@@ -1624,6 +1643,7 @@ mod a11y_tests {
             ("Recover", Dialog::Recover),
             ("Preferences", Dialog::Preferences(app.prefs.clone(), None)),
             ("Colour range", Dialog::ColorRange(25.0, false)),
+            ("New guide", Dialog::NewGuide(true, 32.0)),
             ("About", Dialog::About),
         ];
         for (name, d) in dialogs {

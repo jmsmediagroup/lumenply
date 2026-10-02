@@ -557,6 +557,19 @@ impl App {
         self.act(ui, "Fit on screen", "fit");
         self.act(ui, "Actual pixels", "actual");
         menu_separator(ui);
+        for (label, id) in [
+            ("Rulers", "rulers"),
+            ("Show guides", "guides"),
+            ("Lock guides", "lock-guides"),
+            ("Show grid", "grid"),
+            ("Snap", "snap"),
+        ] {
+            let on = self.view_aid_on(id);
+            self.act_check(ui, label, id, on);
+        }
+        self.act(ui, "New guide...", "new-guide");
+        self.act(ui, "Clear guides", "clear-guides");
+        menu_separator(ui);
         let shown = !self.prefs.history_collapsed;
         self.act_check(ui, "History strip", "toggle-history", shown);
     }

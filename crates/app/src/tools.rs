@@ -18,16 +18,18 @@ pub(crate) enum Tool {
     Text,
     Eyedropper,
     Hand,
+    Crop,
 }
 
 impl Tool {
-    pub(crate) const ALL: [Tool; 16] = [
+    pub(crate) const ALL: [Tool; 17] = [
         Tool::Move,
         Tool::RectSelect,
         Tool::EllipseSelect,
         Tool::Lasso,
         Tool::PolyLasso,
         Tool::Wand,
+        Tool::Crop,
         Tool::Brush,
         Tool::Eraser,
         Tool::Clone,
@@ -58,6 +60,7 @@ impl Tool {
             Tool::PolyLasso => "Polygonal Lasso",
             Tool::Wand => "Magic Wand",
             Tool::Hand => "Hand",
+            Tool::Crop => "Crop",
         }
     }
 
@@ -77,6 +80,7 @@ impl Tool {
             Tool::Lasso | Tool::PolyLasso => "L",
             Tool::Wand => "W",
             Tool::Hand => "H",
+            Tool::Crop => "C",
         }
     }
 
@@ -102,6 +106,7 @@ impl Tool {
             Tool::PolyLasso => "Polygonal Lasso (Shift+L)",
             Tool::Wand => "Magic Wand (W)",
             Tool::Hand => "Hand (H)",
+            Tool::Crop => "Crop (C) — drag the handles; drag outside the frame to straighten; Enter crops",
         }
     }
 }
@@ -118,7 +123,10 @@ const WELL_H: f32 = 56.0;
 /// Tool families, separated by a hairline on the rail: move / select /
 /// paint / type & sample / navigate.
 fn starts_family(tool: Tool) -> bool {
-    matches!(tool, Tool::RectSelect | Tool::Brush | Tool::Text | Tool::Hand)
+    matches!(
+        tool,
+        Tool::RectSelect | Tool::Crop | Tool::Brush | Tool::Text | Tool::Hand
+    )
 }
 
 /// Columns the rail needs to show every tool and the colour well in a
@@ -132,6 +140,21 @@ fn rail_columns(height: f32) -> usize {
     } else {
         2
     }
+}
+
+/// The two-column rail: rows of up to two tools in rail order, each with
+/// whether a separator goes above it. Crop and the paint family start a
+/// fresh row; everything else packs tightly.
+fn two_column_rows() -> Vec<(bool, Vec<Tool>)> {
+    let mut rows: Vec<(bool, Vec<Tool>)> = Vec::new();
+    for tool in Tool::ALL {
+        let fresh = matches!(tool, Tool::Crop | Tool::Brush);
+        match rows.last_mut() {
+            Some((_, row)) if !fresh && row.len() < 2 => row.push(tool),
+            _ => rows.push((fresh, vec![tool])),
+        }
+    }
+    rows
 }
 
 /// The rail's panel width for `cols` columns of buttons.
@@ -177,15 +200,15 @@ impl App {
                                 self.rail_button(ui, tool);
                             }
                         } else {
-                            // Two columns, packed; the select family ends a
-                            // row exactly, so it keeps its separator.
-                            for (row, pair) in Tool::ALL.chunks(2).enumerate() {
-                                if row == 3 {
+                            // Two columns, packed; crop and paint start
+                            // their own rows behind a separator.
+                            for (sep, row) in two_column_rows() {
+                                if sep {
                                     rail_separator(ui);
                                 }
                                 ui.horizontal(|ui| {
-                                    for tool in pair {
-                                        self.rail_button(ui, *tool);
+                                    for tool in row {
+                                        self.rail_button(ui, tool);
                                     }
                                 });
                             }
@@ -495,6 +518,11 @@ pub(crate) fn draw_icon(p: &egui::Painter, r: egui::Rect, tool: Tool, c: Color32
             p.add(quad(egui::vec2(10.6, 5.4), egui::vec2(13.0, 3.0), 2.0, 1.6));
             p.add(line(&[(3.6, 12.4), (1.3, 14.7)]));
         }
+        Tool::Crop => {
+            // Two interlocking right angles, the classic crop mark.
+            p.add(line(&[(4.0, 1.0), (4.0, 12.0), (15.0, 12.0)]));
+            p.add(line(&[(1.0, 4.0), (12.0, 4.0), (12.0, 15.0)]));
+        }
         Tool::Hand => {
             // An open hand: thumb, four fingers, palm.
             p.add(line(&[
@@ -533,19 +561,33 @@ mod tests {
 
     #[test]
     fn rail_folds_to_two_columns_when_short() {
-        // 16 buttons, 4 family separators, gaps, colour well and padding.
-        let one_col = 16.0 * BTN + 4.0 * SEP + 19.0 * GAP + WELL_H + 2.0 * PAD;
-        assert_eq!(one_col, 703.0);
-        assert_eq!(rail_columns(703.0), 1);
-        assert_eq!(rail_columns(702.0), 2);
+        // 17 buttons, 5 family separators, gaps, colour well and padding.
+        let one_col = 17.0 * BTN + 5.0 * SEP + 21.0 * GAP + WELL_H + 2.0 * PAD;
+        assert_eq!(one_col, 750.0);
+        assert_eq!(rail_columns(750.0), 1);
+        assert_eq!(rail_columns(749.0), 2);
         assert_eq!(rail_columns(430.0), 2);
         assert_eq!(rail_width(1), 52.0);
         assert_eq!(rail_width(2), 89.0);
     }
 
     #[test]
+    fn two_columns_give_crop_its_own_row() {
+        let rows = two_column_rows();
+        let names: Vec<(bool, Vec<&str>)> = rows
+            .iter()
+            .map(|(sep, r)| (*sep, r.iter().map(|t| t.key()).collect()))
+            .collect();
+        assert_eq!(names[2], (false, vec!["L", "W"]), "poly lasso + wand");
+        assert_eq!(names[3], (true, vec!["C"]), "crop alone after a separator");
+        assert_eq!(names[4], (true, vec!["B", "E"]), "paint starts a row");
+        assert_eq!(rows.len(), 9);
+        assert_eq!(rows.iter().map(|(_, r)| r.len()).sum::<usize>(), Tool::ALL.len());
+    }
+
+    #[test]
     fn every_tool_has_a_distinct_rail_id() {
         let ids: std::collections::HashSet<egui::Id> = Tool::ALL.into_iter().map(rail_id).collect();
-        assert_eq!(ids.len(), 16);
+        assert_eq!(ids.len(), 17);
     }
 }

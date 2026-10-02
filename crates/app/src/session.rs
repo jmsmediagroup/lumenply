@@ -32,6 +32,11 @@ pub(crate) const SHORTCUTS: &[(&str, &str, bool, bool, &str)] = &[
     ("xform", "Free transform", true, false, "T"),
     ("group", "Group layers", true, false, "G"),
     ("layer-via-copy", "Layer via copy", true, false, "J"),
+    ("rulers", "Rulers", true, false, "R"),
+    // Before "guides": Shift+Cmd+; contains Cmd+;.
+    ("snap", "Snap", true, true, "Semicolon"),
+    ("guides", "Show guides", true, false, "Semicolon"),
+    ("grid", "Show grid", true, false, "Quote"),
 ];
 
 /// The effective chord for an action: the user's binding when it parses,
@@ -78,6 +83,20 @@ pub(crate) struct Prefs {
     pub brush_presets: Vec<BrushPreset>,
     /// The history strip is folded down to its one-line header.
     pub history_collapsed: bool,
+    /// View ▸ Rulers along the canvas.
+    pub show_rulers: bool,
+    /// View ▸ Show guides.
+    pub show_guides: bool,
+    /// View ▸ Lock guides: the Move tool leaves them alone.
+    pub lock_guides: bool,
+    /// View ▸ Show grid.
+    pub show_grid: bool,
+    /// View ▸ Snap: drags snap to guides, grid, canvas and layer edges.
+    pub snap: bool,
+    /// Grid line every this many document pixels...
+    pub grid_spacing: f32,
+    /// ...with this many subdivisions per cell.
+    pub grid_subdivisions: u32,
 }
 
 /// One saved brush setup (the shape parameters; colour stays with the
@@ -116,6 +135,13 @@ impl Default for Prefs {
             shortcuts: std::collections::BTreeMap::new(),
             brush_presets: Vec::new(),
             history_collapsed: false,
+            show_rulers: false,
+            show_guides: true,
+            lock_guides: false,
+            show_grid: false,
+            snap: true,
+            grid_spacing: 100.0,
+            grid_subdivisions: 4,
         }
     }
 }

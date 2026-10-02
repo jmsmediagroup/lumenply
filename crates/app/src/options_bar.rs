@@ -457,6 +457,7 @@ impl App {
                         Tool::Hand => {
                             hint_label(ui, tier, self.tool);
                         }
+                        Tool::Crop => self.crop_options_bar(ui, tier),
                     }
                 });
                 ui.data_mut(|d| d.insert_temp(key.with(tier), used));

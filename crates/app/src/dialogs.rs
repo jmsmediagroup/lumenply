@@ -18,6 +18,8 @@ pub(crate) enum Dialog {
     /// Colour-range selection: (tolerance %, whether a preview ran).
     ColorRange(f32, bool),
     About,
+    /// View ▸ New guide: (vertical, position in pixels).
+    NewGuide(bool, f32),
 }
 
 /// Extensions the open dialogs offer, by kind. The first of each list is
@@ -381,6 +383,7 @@ impl App {
             Dialog::Recover => "Recover autosaved document",
             Dialog::Preferences(..) => "Preferences",
             Dialog::ColorRange(..) => "Colour range",
+            Dialog::NewGuide(..) => "New guide",
             Dialog::About => "About",
             Dialog::Filter(f) => f.name(),
             Dialog::CanvasSize(..) => "Canvas size",
@@ -392,6 +395,7 @@ impl App {
             Dialog::New(..) => "Create",
             Dialog::Preferences(..) => "Save",
             Dialog::ColorRange(..) => "Select",
+            Dialog::NewGuide(..) => "Add",
             Dialog::Filter(_) | Dialog::CanvasSize(..) | Dialog::ImageSize(..) => "Apply",
             Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) | Dialog::Recover | Dialog::About => "",
         };
@@ -456,6 +460,29 @@ impl App {
                                     keep = false;
                                 }
                             });
+                        }
+                        Dialog::NewGuide(vertical, pos) => {
+                            ui.horizontal(|ui| {
+                                row_label(ui, "Orientation", LABEL_W);
+                                segmented(ui, vertical, &[(false, "Horizontal"), (true, "Vertical")]);
+                            });
+                            let r = field_row(
+                                ui,
+                                "Position",
+                                egui::DragValue::new(pos)
+                                    .range(-100_000.0..=100_000.0)
+                                    .max_decimals(2)
+                                    .suffix(" px"),
+                            );
+                            a11y_name(&r, "Guide position");
+                            note(
+                                ui,
+                                if *vertical {
+                                    "Pixels from the left edge of the canvas."
+                                } else {
+                                    "Pixels from the top edge of the canvas."
+                                },
+                            );
                         }
                         Dialog::ColorRange(tol, previewed) => {
                             note(ui, "Selects everything close to the brush colour.");
@@ -545,6 +572,12 @@ impl App {
                                     p.canvas_bg = crate::color_picker::to_u8(custom);
                                 }
                             });
+                            ui.add_space(4.0);
+                            section_title(ui, "GRID");
+                            slider_row_ex(ui, "Line every", &mut p.grid_spacing, 4.0..=1000.0, " px", log);
+                            let mut subs = p.grid_subdivisions as f32;
+                            slider_row_ex(ui, "Subdivisions", &mut subs, 1.0..=16.0, "", wide);
+                            p.grid_subdivisions = subs.round().clamp(1.0, 16.0) as u32;
                             ui.add_space(4.0);
                             section_title(ui, "SHORTCUTS");
                             note(ui, "Click a shortcut, then press the new keys (Esc cancels).");
@@ -852,6 +885,18 @@ impl App {
             match &d {
                 Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) | Dialog::Recover | Dialog::About => {}
                 Dialog::ColorRange(..) => {}
+                Dialog::NewGuide(vertical, pos) => {
+                    let guide = if *vertical {
+                        lumenply_doc::Guide::vertical(*pos)
+                    } else {
+                        lumenply_doc::Guide::horizontal(*pos)
+                    };
+                    self.run(&AddGuide { guide });
+                    if !self.prefs.show_guides {
+                        self.prefs.show_guides = true;
+                        self.prefs.save();
+                    }
+                }
                 Dialog::Preferences(p, _) => {
                     // The history strip's fold state lives in the prefs but
                     // isn't edited here; keep whatever it is now.

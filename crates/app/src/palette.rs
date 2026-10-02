@@ -30,13 +30,14 @@ pub(crate) enum PaletteAct {
 }
 
 /// Every tool, so "Search tools..." finds them, in rail order.
-const TOOLS: [Tool; 16] = [
+const TOOLS: [Tool; 17] = [
     Tool::Move,
     Tool::RectSelect,
     Tool::EllipseSelect,
     Tool::Lasso,
     Tool::PolyLasso,
     Tool::Wand,
+    Tool::Crop,
     Tool::Brush,
     Tool::Eraser,
     Tool::Clone,
@@ -115,6 +116,13 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Actual pixels", "actual"),
     ("Show or hide the history strip", "toggle-history"),
     ("About Lumenply", "about"),
+    ("Show or hide rulers", "rulers"),
+    ("Show or hide guides", "guides"),
+    ("Lock or unlock guides", "lock-guides"),
+    ("Clear guides", "clear-guides"),
+    ("New guide...", "new-guide"),
+    ("Show or hide the grid", "grid"),
+    ("Snap on or off", "snap"),
 ];
 
 /// The id of the destructive filter dialog for a filter kind.
@@ -424,6 +432,7 @@ impl App {
                 _ => None,
             },
             "unclip" if !layer.is_some_and(|l| l.clip) => Some("This layer is not clipped"),
+            "clear-guides" if doc.guides.is_empty() => Some("There are no guides"),
             "rasterize" if !layer.is_some_and(|l| l.smart_layer().is_some() || l.text_layer().is_some()) => {
                 Some("Select a smart object or text layer first")
             }
@@ -615,6 +624,7 @@ impl App {
             "fit" => self.view_cmd = Some(ViewCmd::Fit),
             "actual" => self.view_cmd = Some(ViewCmd::Actual),
             "palette" => self.toggle_palette(),
+            aid if guides::VIEW_ACTIONS.contains(&aid) => self.run_view_aid(aid),
             filter if filter.starts_with("filter-") => {
                 match filter_presets().into_iter().find(|(_, f)| filter_id(f) == filter) {
                     Some((_, f)) => self.dialog = Some(Dialog::Filter(f)),
@@ -641,7 +651,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 64); // + zoom in, zoom out, history strip
+        assert_eq!(n, 71); // + rulers, guides, lock, clear, new guide, grid, snap
     }
 
     #[test]
@@ -659,6 +669,6 @@ mod tests {
         let mut names: Vec<&str> = TOOLS.iter().map(|t| t.name()).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 16);
+        assert_eq!(names.len(), 17);
     }
 }
