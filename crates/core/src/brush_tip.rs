@@ -165,6 +165,12 @@ impl BrushTip {
     /// the matching mip levels, so detail finer than a canvas pixel
     /// averages out instead of aliasing.
     pub fn sample(&self, x: f32, y: f32, footprint: f32) -> f32 {
+        self.sampler(footprint).at(x, y)
+    }
+
+    /// A sampler for one footprint, so a dab (whose footprint is the same
+    /// for every pixel) picks its mip levels once.
+    pub fn sampler(&self, footprint: f32) -> TipSampler<'_> {
         let last = self.levels.len() - 1;
         let lod = if footprint > 1.0 {
             footprint.log2().min(last as f32)
@@ -172,17 +178,41 @@ impl BrushTip {
             0.0
         };
         let l0 = lod.floor() as usize;
-        let t = lod - l0 as f32;
-        let s0 = 1.0 / (1u64 << l0) as f32;
-        let v0 = self.levels[l0].bilinear(x * s0, y * s0);
-        if t <= 0.0 || l0 >= last {
+        let t = if l0 >= last { 0.0 } else { lod - l0 as f32 };
+        TipSampler {
+            tip: self,
+            l0,
+            t,
+            s0: 1.0 / (1u64 << l0) as f32,
+        }
+    }
+}
+
+/// Samples a tip at one footprint (see [`BrushTip::sampler`]).
+pub struct TipSampler<'a> {
+    tip: &'a BrushTip,
+    l0: usize,
+    /// Blend toward level `l0 + 1`.
+    t: f32,
+    /// Level-`l0` pixels per tip pixel.
+    s0: f32,
+}
+
+impl TipSampler<'_> {
+    /// Coverage at `(x, y)` in tip pixels.
+    #[inline]
+    pub fn at(&self, x: f32, y: f32) -> f32 {
+        let v0 = self.tip.levels[self.l0].bilinear(x * self.s0, y * self.s0);
+        if self.t <= 0.0 {
             return v0;
         }
-        let s1 = s0 * 0.5;
-        let v1 = self.levels[l0 + 1].bilinear(x * s1, y * s1);
-        v0 + (v1 - v0) * t
+        let s1 = self.s0 * 0.5;
+        let v1 = self.tip.levels[self.l0 + 1].bilinear(x * s1, y * s1);
+        v0 + (v1 - v0) * self.t
     }
+}
 
+impl BrushTip {
     /// The farthest a covered pixel can lie from the dab centre, as a
     /// multiple of the dab radius, at any angle: half the diagonal of the
     /// tip grown by half a texel each side (the bilinear fade) over half
@@ -465,7 +495,7 @@ pub(crate) fn stamp(
     let y1 = (d.y + ey).ceil() as i32;
     let area = Rect::new(x0, y0, (x1 - x0 + 1) as u32, (y1 - y0 + 1) as u32).intersect(&canvas);
     let hard = hardness.clamp(0.0, 0.999);
-    let footprint = 1.0 / (scale * rho);
+    let sampler = tip.map(|t| t.sampler(1.0 / (scale * rho)));
     for py in area.y..area.bottom() {
         for px in area.x..area.right() {
             let dx = px as f32 + 0.5 - d.x;
@@ -499,7 +529,7 @@ pub(crate) fn stamp(
                 Some(t) => {
                     let tx = lx / scale + t.width as f32 * 0.5;
                     let ty = ly / scale + t.height as f32 * 0.5;
-                    t.sample(tx, ty, footprint)
+                    sampler.as_ref().map_or(0.0, |s| s.at(tx, ty))
                 }
             };
             if cover > 0.0 {

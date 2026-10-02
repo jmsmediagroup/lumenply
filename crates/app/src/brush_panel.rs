@@ -427,7 +427,8 @@ impl App {
                     let mut e = TipEntry::new(id.clone(), b.name);
                     // ABR spacing is a fraction of the diameter.
                     e.spacing = Some(b.spacing.map_or(0.5, |s| (s * 2.0).clamp(0.02, 2.0)));
-                    e.size = Some(width.max(height) as f32);
+                    // The preset's own size when the set gives one.
+                    e.size = Some(b.diameter.unwrap_or(width.max(height) as f32));
                     e.file = Some(png);
                     e.thumb_gray = Some(tip.thumbnail(THUMB));
                     self.brushes.tips.push(e);
@@ -603,6 +604,13 @@ impl App {
     fn brush_settings_panel(&mut self, ctx: &egui::Context, anchor: egui::Rect) {
         let screen = ctx.screen_rect();
         let mut close = false;
+        // Short windows scroll the settings rather than cover the bar.
+        let room = (screen.bottom() - anchor.bottom() - 8.0 - 12.0 - 24.0 - 40.0).max(160.0);
+        // As tall as the settings were last frame, so a roomy window shows
+        // them whole without scrolling.
+        let content_id = panel_id().with("content-h");
+        let content_h = ctx.data(|d| d.get_temp::<f32>(content_id)).unwrap_or(room);
+        let room = room.min(content_h + 2.0);
         egui::Area::new(panel_id())
             .kind(egui::UiKind::Popup)
             .order(egui::Order::Foreground)
@@ -622,19 +630,28 @@ impl App {
                                 close = r.clicked();
                             });
                         });
-                        ui.horizontal_top(|ui| {
-                            ui.vertical(|ui| {
-                                ui.set_width(COL_W);
-                                self.tip_column(ui);
+                        let out = egui::ScrollArea::vertical()
+                            .id_salt("brush-settings-scroll")
+                            .max_height(room)
+                            .min_scrolled_height(room)
+                            .show(ui, |ui| {
+                                ui.horizontal_top(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.set_width(COL_W);
+                                        self.tip_column(ui);
+                                    });
+                                    ui.add_space(12.0);
+                                    ui.separator();
+                                    ui.add_space(4.0);
+                                    ui.vertical(|ui| {
+                                        ui.set_width(COL_W);
+                                        self.dynamics_column(ui);
+                                    });
+                                });
                             });
-                            ui.add_space(12.0);
-                            ui.separator();
-                            ui.add_space(4.0);
-                            ui.vertical(|ui| {
-                                ui.set_width(COL_W);
-                                self.dynamics_column(ui);
-                            });
-                        });
+                        a11y_scroll(ui.ctx(), &out, "Brush settings");
+                        let h = out.content_size.y;
+                        ui.ctx().data_mut(|d| d.insert_temp(content_id, h));
                     });
             });
         if close {
@@ -793,6 +810,59 @@ impl App {
             self.brush.angle = 0.0;
             self.brush.roundness = 1.0;
         }
+    }
+
+    /// The brush cursor in the tip's shape at screen point `p`: a sampled
+    /// tip as a faint print of itself, a squashed round tip as its turned
+    /// ellipse. False (draw the plain circle) for the round tip or when
+    /// the cursor would be too small to read.
+    pub(crate) fn tip_cursor(&self, painter: &egui::Painter, p: Pos2) -> bool {
+        let r = self.brush.radius * self.zoom;
+        if r < 4.0 {
+            return false;
+        }
+        let rho = self.brush.roundness.clamp(0.01, 1.0);
+        let rot = egui::emath::Rot2::from_angle(-self.brush.angle.to_radians());
+        if self.brush.tip.is_none() {
+            if rho >= 1.0 {
+                return false;
+            }
+            let pts: Vec<Pos2> = (0..48)
+                .map(|i| {
+                    let a = i as f32 / 48.0 * std::f32::consts::TAU;
+                    p + rot * egui::vec2(a.cos() * r, a.sin() * r * rho)
+                })
+                .collect();
+            painter.add(Shape::closed_line(
+                pts.clone(),
+                Stroke::new(3.0, Color32::from_black_alpha(140)),
+            ));
+            painter.add(Shape::closed_line(pts, Stroke::new(1.0, Color32::WHITE)));
+            return true;
+        }
+        let tex = self
+            .brushes
+            .index_of(&self.brushes.selected)
+            .and_then(|i| self.brushes.tips[i].thumb.clone());
+        let Some(tex) = tex else {
+            return false;
+        };
+        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+        let rect = egui::Rect::from_center_size(p, egui::vec2(2.0 * r, 2.0 * r * rho));
+        for (offset, tint) in [
+            (egui::vec2(1.0, 1.0), Color32::from_black_alpha(110)),
+            (egui::Vec2::ZERO, Color32::from_white_alpha(150)),
+        ] {
+            let mut mesh = egui::Mesh::with_texture(tex.id());
+            mesh.add_rect_with_uv(rect.translate(offset), uv, tint);
+            mesh.rotate(rot, p + offset);
+            painter.add(Shape::mesh(mesh));
+        }
+        // A crosshair marks the hot spot inside the print.
+        let s = Stroke::new(1.0, Color32::WHITE);
+        painter.line_segment([p - egui::vec2(4.0, 0.0), p + egui::vec2(4.0, 0.0)], s);
+        painter.line_segment([p - egui::vec2(0.0, 4.0), p + egui::vec2(0.0, 4.0)], s);
+        true
     }
 
     /// Brush tokens for `--screenshot-do` (`brush:...`): `brush:panel`

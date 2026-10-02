@@ -300,7 +300,14 @@ impl App {
                                 self.prefs.save();
                             }
                             let mut hard = self.brush.hardness * 100.0;
-                            if bar_slider(ui, "Hardness", &mut hard, 0.0..=100.0, "%", false) {
+                            // A sampled tip carries its own edge.
+                            let round = self.brush.tip.is_none();
+                            if ui
+                                .add_enabled_ui(round, |ui| {
+                                    bar_slider(ui, "Hardness", &mut hard, 0.0..=100.0, "%", false)
+                                })
+                                .inner
+                            {
                                 self.brush.hardness = hard / 100.0;
                             }
                             let mut op = self.brush.color[3] * 100.0;

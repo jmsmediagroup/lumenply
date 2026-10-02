@@ -1495,8 +1495,10 @@ impl App {
                     resp.hover_pos(),
                 ) {
                     let r = (self.brush.radius * self.zoom).max(1.5);
-                    painter.circle_stroke(p, r + 1.0, Stroke::new(1.0, Color32::from_black_alpha(160)));
-                    painter.circle_stroke(p, r, Stroke::new(1.0, Color32::WHITE));
+                    if !self.tip_cursor(painter, p) {
+                        painter.circle_stroke(p, r + 1.0, Stroke::new(1.0, Color32::from_black_alpha(160)));
+                        painter.circle_stroke(p, r, Stroke::new(1.0, Color32::WHITE));
+                    }
                     if self.tool == Tool::Clone {
                         if let Some((sx, sy)) = self.clone_source {
                             let origin = resp.rect.min + self.pan;

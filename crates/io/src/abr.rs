@@ -27,6 +27,9 @@ pub struct AbrBrush {
     pub name: String,
     /// Dab spacing as a fraction of the diameter, when the file says.
     pub spacing: Option<f32>,
+    /// The preset's brush diameter in pixels, when the file gives one
+    /// for a sampled tip (Photoshop 7+ descriptors).
+    pub diameter: Option<f32>,
     pub shape: AbrShape,
 }
 
@@ -189,6 +192,7 @@ fn computed_v12(b: &mut Reader) -> R<AbrBrush> {
     Ok(AbrBrush {
         name: format!("Round {diameter}"),
         spacing: (spacing > 0).then(|| spacing as f32 / 100.0),
+        diameter: None,
         shape: AbrShape::Computed {
             diameter: diameter as f32,
             hardness: (hardness as f32 / 100.0).clamp(0.0, 1.0),
@@ -230,6 +234,7 @@ fn sampled_v12(b: &mut Reader, version: u16, n: usize) -> R<AbrBrush> {
             name
         },
         spacing: (spacing > 0).then(|| spacing as f32 / 100.0),
+        diameter: None,
         shape: AbrShape::Sampled {
             width,
             height,
@@ -261,15 +266,19 @@ fn parse_v6(r: &mut Reader, version: u16) -> Result<AbrSet, IoError> {
             _ => {}
         }
     }
-    let Some(samp) = samp else {
+    let presets = desc.map(descriptor_presets).unwrap_or_default();
+    let computed: Vec<&PresetInfo> = presets.iter().filter(|p| p.computed && p.key.is_none()).collect();
+    if samp.is_none() && computed.is_empty() {
         return Err(err(
-            "this brush set has no sampled tips (no 8BIMsamp section); computed-only \
-             Photoshop 7+ brush sets are not supported yet",
+            "this brush set has no sampled tips (no 8BIMsamp section) and no computed brushes",
         ));
-    };
-    let names = desc.map(descriptor_names).unwrap_or_default();
+    }
+    let by_key: HashMap<&str, &PresetInfo> = presets
+        .iter()
+        .filter_map(|p| p.key.as_deref().map(|k| (k, p)))
+        .collect();
     let mut set = AbrSet::default();
-    let mut s = Reader::new(samp);
+    let mut s = Reader::new(samp.unwrap_or_default());
     let mut n = 0;
     while s.remaining() >= 4 {
         n += 1;
@@ -282,21 +291,42 @@ fn parse_v6(r: &mut Reader, version: u16) -> Result<AbrSet, IoError> {
         let pad = (4 - size % 4) % 4;
         let _ = s.take(pad.min(s.remaining()));
         match sampled_v6(body, sub) {
-            Ok((key, width, height, depth, gray)) => set.brushes.push(AbrBrush {
-                name: names
-                    .get(&key)
-                    .cloned()
-                    .unwrap_or_else(|| format!("Sampled brush {n}")),
-                spacing: None,
-                shape: AbrShape::Sampled {
-                    width,
-                    height,
-                    depth,
-                    gray,
-                },
-            }),
+            Ok((key, width, height, depth, gray)) => {
+                let info = by_key.get(key.as_str());
+                set.brushes.push(AbrBrush {
+                    name: info
+                        .and_then(|p| p.name.clone())
+                        .unwrap_or_else(|| format!("Sampled brush {n}")),
+                    spacing: info.and_then(|p| p.spacing).map(|s| s / 100.0),
+                    diameter: info.and_then(|p| p.diameter),
+                    shape: AbrShape::Sampled {
+                        width,
+                        height,
+                        depth,
+                        gray,
+                    },
+                })
+            }
             Err(e) => set.warnings.push(format!("tip {n}: {e}; skipped")),
         }
+    }
+    for (i, p) in computed.into_iter().enumerate() {
+        let Some(diameter) = p.diameter.filter(|d| *d > 0.0) else {
+            set.warnings
+                .push(format!("computed brush {}: no diameter; skipped", i + 1));
+            continue;
+        };
+        set.brushes.push(AbrBrush {
+            name: p.name.clone().unwrap_or_else(|| format!("Round {diameter:.0}")),
+            spacing: p.spacing.map(|s| s / 100.0),
+            diameter: None,
+            shape: AbrShape::Computed {
+                diameter,
+                hardness: (p.hardness.unwrap_or(100.0) / 100.0).clamp(0.0, 1.0),
+                angle: p.angle.unwrap_or(0.0),
+                roundness: (p.roundness.unwrap_or(100.0) / 100.0).clamp(0.01, 1.0),
+            },
+        });
     }
     Ok(set)
 }
@@ -379,11 +409,35 @@ fn packbits(src: &[u8], row: usize, out: &mut Vec<u8>) {
     out.resize(start + row, 0);
 }
 
-/// Pair preset names with tip keys from the `8BIMdesc` descriptor: each
-/// preset's `Nm  ` text precedes its brush's `sampledData` text (the tip
-/// key). A scan rather than a full descriptor parse, so unknown keys and
-/// types elsewhere in the descriptor can't derail it.
-fn descriptor_names(d: &[u8]) -> HashMap<String, String> {
+/// What the `8BIMdesc` descriptor says about one brush preset.
+#[derive(Debug, Default, Clone, PartialEq)]
+struct PresetInfo {
+    /// The preset's name (the first `Nm  ` in it; the tip inside carries
+    /// a second, less specific one).
+    name: Option<String>,
+    /// `Dmtr`, pixels.
+    diameter: Option<f32>,
+    /// `Angl`, degrees.
+    angle: Option<f32>,
+    /// `Rndn`, percent.
+    roundness: Option<f32>,
+    /// `Spcn`, percent of the diameter.
+    spacing: Option<f32>,
+    /// `Hrdn`, percent (computed brushes).
+    hardness: Option<f32>,
+    /// The brush is a `computedBrush`.
+    computed: bool,
+    /// `sampledData`: the key of its tip in `8BIMsamp`.
+    key: Option<String>,
+}
+
+/// Brush presets from the `8BIMdesc` descriptor. Each `brushPreset`
+/// object holds a name and a brush object (`sampledBrush` with the tip's
+/// key in `sampledData`, or `computedBrush`) with `Dmtr`, `Angl`, `Rndn`,
+/// `Spcn` (and `Hrdn`) as unit floats. A scan rather than a full
+/// descriptor parse, so unknown keys and types can't derail it; the first
+/// value of each key in a preset wins (later ones belong to dynamics).
+fn descriptor_presets(d: &[u8]) -> Vec<PresetInfo> {
     let text = |at: usize| -> Option<(String, usize)> {
         let n = u32::from_be_bytes(d.get(at..at + 4)?.try_into().ok()?) as usize;
         if n > 4096 {
@@ -396,29 +450,66 @@ fn descriptor_names(d: &[u8]) -> HashMap<String, String> {
             .to_string();
         Some((s, 4 + 2 * n))
     };
-    let mut map = HashMap::new();
-    let mut pending: Option<String> = None;
+    // `KeyyUntF` + a 4-byte unit + a big-endian f64.
+    let unit_float = |at: usize, key: &[u8; 4]| -> Option<f32> {
+        if !d.get(at..)?.starts_with(key) || d.get(at + 4..at + 8)? != b"UntF" {
+            return None;
+        }
+        let v = f64::from_be_bytes(d.get(at + 12..at + 20)?.try_into().ok()?);
+        v.is_finite().then_some(v as f32)
+    };
+    let mut out = Vec::new();
+    let mut cur = PresetInfo::default();
     let mut i = 0;
     while i + 8 <= d.len() {
-        if d[i..].starts_with(b"Nm  TEXT") {
+        let rest = &d[i..];
+        if rest.starts_with(b"brushPreset") {
+            if cur != PresetInfo::default() {
+                out.push(std::mem::take(&mut cur));
+            }
+            i += 11;
+            continue;
+        }
+        if rest.starts_with(b"computedBrush") {
+            cur.computed = true;
+            i += 13;
+            continue;
+        }
+        if rest.starts_with(b"Nm  TEXT") {
             if let Some((s, used)) = text(i + 8) {
-                pending = Some(s);
+                cur.name.get_or_insert(s);
                 i += 8 + used;
                 continue;
             }
         }
-        if d[i..].starts_with(b"sampledDataTEXT") {
+        if rest.starts_with(b"sampledDataTEXT") {
             if let Some((key, used)) = text(i + 15) {
-                if let Some(name) = pending.take() {
-                    map.insert(key, name);
-                }
+                cur.key.get_or_insert(key);
                 i += 15 + used;
                 continue;
             }
         }
-        i += 1;
+        let slots: [(&[u8; 4], &mut Option<f32>); 5] = [
+            (b"Dmtr", &mut cur.diameter),
+            (b"Angl", &mut cur.angle),
+            (b"Rndn", &mut cur.roundness),
+            (b"Spcn", &mut cur.spacing),
+            (b"Hrdn", &mut cur.hardness),
+        ];
+        let mut hit = false;
+        for (key, slot) in slots {
+            if let Some(v) = unit_float(i, key) {
+                slot.get_or_insert(v);
+                hit = true;
+                break;
+            }
+        }
+        i += if hit { 20 } else { 1 };
     }
-    map
+    if cur != PresetInfo::default() {
+        out.push(cur);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -482,6 +573,7 @@ mod tests {
             AbrBrush {
                 name: "Round 19".into(),
                 spacing: Some(0.25),
+                diameter: None,
                 shape: AbrShape::Computed {
                     diameter: 19.0,
                     hardness: 0.8,
@@ -495,6 +587,7 @@ mod tests {
             AbrBrush {
                 name: "Sampled brush 2".into(),
                 spacing: Some(0.4),
+                diameter: None,
                 shape: AbrShape::Sampled {
                     width: 3,
                     height: 2,
@@ -547,6 +640,16 @@ mod tests {
         v
     }
 
+    /// A descriptor unit float: 4-byte key length 0, key, `UntF`, unit, f64.
+    fn unit_float(key: &[u8; 4], unit: &[u8; 4], v: f64) -> Vec<u8> {
+        let mut out = vec![0u8; 4];
+        out.extend(key);
+        out.extend(b"UntF");
+        out.extend(unit);
+        out.extend(v.to_be_bytes());
+        out
+    }
+
     fn samp_entry(key: &str, sub: u16, image: &[u8]) -> Vec<u8> {
         let mut body = vec![key.len() as u8];
         body.extend(key.as_bytes());
@@ -570,19 +673,60 @@ mod tests {
         let img16 = image_bytes(2, 1, 16, 1, &rle16);
         let mut samp = samp_entry("uuid-a", 1, &raw8);
         samp.extend(samp_entry("uuid-b", 1, &img16));
-        // A descriptor fragment pairing names with the tip keys.
-        let mut desc = b"\0\0\0\x10null....Nm  TEXT".to_vec();
+        // A descriptor laid out as Photoshop writes it: a preset's name,
+        // then its sampled brush with its own (tip) name, diameter,
+        // spacing and the tip key; then a computed brush preset.
+        let mut desc =
+            b"\0\0\0\x10null....BrshVlLs\0\0\0\x02Objc\0\0\0\x01\0\0\0\0\0\0\0\x0BbrushPreset".to_vec();
+        desc.extend(b"\0\0\0\x0E\0\0\0\0Nm  TEXT");
+        desc.extend(ucs2("Charcoal 12"));
+        desc.extend(b"\0\0\0\0BrshObjc\0\0\0\x01\0\0\0\0\0\0\0\x0CsampledBrush\0\0\0\x09");
+        desc.extend(unit_float(b"Dmtr", b"#Pxl", 61.0));
+        desc.extend(b"\0\0\0\0Nm  TEXT");
         desc.extend(ucs2("Charcoal"));
+        desc.extend(unit_float(b"Spcn", b"#Prc", 10.0));
         desc.extend(b"\0\0\0\x0BsampledDataTEXT");
         desc.extend(ucs2("uuid-b"));
+        desc.extend(b"Objc\0\0\0\x01\0\0\0\0\0\0\0\x0BbrushPreset\0\0\0\x02\0\0\0\0Nm  TEXT");
+        desc.extend(ucs2("Hard oval"));
+        desc.extend(b"\0\0\0\0BrshObjc\0\0\0\x01\0\0\0\0\0\0\0\x0DcomputedBrush\0\0\0\x05");
+        desc.extend(unit_float(b"Dmtr", b"#Pxl", 30.0));
+        desc.extend(unit_float(b"Hrdn", b"#Prc", 80.0));
+        desc.extend(unit_float(b"Angl", b"#Ang", -15.0));
+        desc.extend(unit_float(b"Rndn", b"#Prc", 50.0));
+        desc.extend(unit_float(b"Spcn", b"#Prc", 25.0));
         let mut file = be16(6).to_vec();
         file.extend(be16(1));
         file.extend(section(b"samp", &samp));
         file.extend(section(b"patt", &[]));
         file.extend(section(b"desc", &desc));
         let set = parse(&file).unwrap();
-        assert_eq!(set.brushes.len(), 2);
+        assert_eq!(set.brushes.len(), 3);
         assert_eq!(set.brushes[0].name, "Sampled brush 1");
+        assert_eq!((set.brushes[0].spacing, set.brushes[0].diameter), (None, None));
+        assert_eq!(set.brushes[1].spacing, Some(0.1));
+        assert_eq!(set.brushes[1].diameter, Some(61.0));
+        assert_eq!(
+            set.brushes[2],
+            AbrBrush {
+                name: "Hard oval".into(),
+                spacing: Some(0.25),
+                diameter: None,
+                shape: AbrShape::Computed {
+                    diameter: 30.0,
+                    hardness: 0.8,
+                    angle: -15.0,
+                    roundness: 0.5,
+                },
+            }
+        );
+        // A descriptor-only set of computed brushes reads too.
+        let mut only = be16(6).to_vec();
+        only.extend(be16(2));
+        only.extend(section(b"desc", &desc));
+        let only = parse(&only).unwrap();
+        assert_eq!(only.brushes.len(), 1);
+        assert_eq!(only.brushes[0].name, "Hard oval");
         assert_eq!(
             set.brushes[0].shape,
             AbrShape::Sampled {
@@ -592,7 +736,8 @@ mod tests {
                 gray: vec![65535, 0, 0, 65535],
             }
         );
-        assert_eq!(set.brushes[1].name, "Charcoal");
+        // The preset's name, not the tip's own inside it.
+        assert_eq!(set.brushes[1].name, "Charcoal 12");
         assert_eq!(
             set.brushes[1].shape,
             AbrShape::Sampled {
