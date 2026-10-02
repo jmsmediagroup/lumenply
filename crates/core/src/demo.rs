@@ -59,6 +59,7 @@ pub fn build(width: u32, height: u32) -> EditResult<Editor> {
             spacing: 0.15,
             jitter: 0.0,
             mode: BrushMode::Paint,
+            ..Brush::default()
         },
         points,
     })?;

@@ -7,6 +7,7 @@
 //! CLI behave identically.
 
 pub mod align;
+pub mod brush_tip;
 pub mod commands;
 mod content_aware;
 pub mod crop;
@@ -392,6 +393,7 @@ mod tests {
                 spacing: 0.25,
                 jitter: 0.0,
                 mode: BrushMode::Paint,
+                ..Brush::default()
             },
             points: vec![StrokePoint::new(10.0, 10.0, 1.0)],
         };

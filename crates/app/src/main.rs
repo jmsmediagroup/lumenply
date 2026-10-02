@@ -421,6 +421,7 @@ impl App {
                 spacing: 0.12,
                 jitter: 0.0,
                 mode: BrushMode::Paint,
+                ..Brush::default()
             },
             brush_rgb: [0.10, 0.18, 0.55],
             bg_rgb: [1.0, 1.0, 1.0],
@@ -830,7 +831,7 @@ impl App {
     }
 
     fn make_brush(&self) -> Brush {
-        let mut b = self.brush;
+        let mut b = self.brush.clone();
         b.color = linear_rgba(self.brush_rgb, self.brush.color[3].max(0.0));
         b.mode = match self.tool {
             Tool::Eraser => BrushMode::Erase,
