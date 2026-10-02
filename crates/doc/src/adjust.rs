@@ -335,7 +335,7 @@ impl MonotoneCubic {
         if x >= self.xs[n - 1] {
             return self.ys[n - 1];
         }
-        let i = match self.xs.binary_search_by(|v| v.partial_cmp(&x).unwrap()) {
+        let i = match self.xs.binary_search_by(|v| v.total_cmp(&x)) {
             Ok(i) => return self.ys[i],
             Err(i) => i - 1,
         };

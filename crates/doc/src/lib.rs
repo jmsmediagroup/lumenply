@@ -110,17 +110,30 @@ impl Filter {
     }
 
     /// How far (in pixels) the filter reads outside the area it produces.
+    /// Always non-negative, whatever the stored parameters say.
     pub fn pad(&self) -> i32 {
         match self {
             Filter::GaussianBlur { radius } | Filter::Sharpen { radius, .. } => box_radius(*radius) * 3,
-            Filter::BoxBlur { radius } => radius.round() as i32,
+            Filter::BoxBlur { radius } => sane_radius(*radius).round() as i32,
         }
+    }
+}
+
+/// Clamp a user- or file-supplied blur radius to something the engine can
+/// honour: finite and within [0, 1000]. NaN and infinities become 0, which
+/// filters treat as a no-op; anything bigger than 1000 px is already far
+/// beyond a visible difference and would only size absurd paddings.
+pub fn sane_radius(radius: f32) -> f32 {
+    if radius.is_finite() {
+        radius.clamp(0.0, 1000.0)
+    } else {
+        0.0
     }
 }
 
 /// Box-blur radius whose triple pass approximates a Gaussian of `sigma_like`.
 pub fn box_radius(sigma_like: f32) -> i32 {
-    ((sigma_like / 3f32.sqrt()).round() as i32).max(1)
+    ((sane_radius(sigma_like) / 3f32.sqrt()).round() as i32).max(1)
 }
 
 /// A per-layer mask. Coverage lives in the alpha channel of a sparse

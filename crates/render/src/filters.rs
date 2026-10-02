@@ -5,8 +5,8 @@
 //! from darkening. Gaussian blur is three box passes, whose result is within
 //! a few percent of a true Gaussian and far cheaper.
 
-use nge_doc::box_radius;
 pub use nge_doc::Filter;
+use nge_doc::{box_radius, sane_radius};
 use nge_tiles::{Raster, Rect, Rgba, TileStore};
 
 /// Apply a filter to every painted pixel of `store`.
@@ -31,7 +31,7 @@ pub fn filter_raster(src: &Raster, filter: &Filter) -> Raster {
         Filter::GaussianBlur { radius } => gaussian(src, *radius),
         Filter::BoxBlur { radius } => {
             let mut tmp = src.clone();
-            box_blur(src, &mut tmp, radius.round() as i32);
+            box_blur(src, &mut tmp, sane_radius(*radius).round() as i32);
             tmp
         }
         Filter::Sharpen { amount, radius } => {
@@ -130,6 +130,45 @@ fn add(sum: &mut [f32; 4], p: Rgba, k: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Degenerate radii (negative, NaN, infinite) must neither panic nor
+    /// size absurd paddings; they act as a no-op blur.
+    #[test]
+    fn degenerate_radii_are_harmless() {
+        assert_eq!(Filter::BoxBlur { radius: -5.0 }.pad(), 0);
+        assert_eq!(Filter::BoxBlur { radius: f32::NAN }.pad(), 0);
+        assert_eq!(
+            Filter::GaussianBlur {
+                radius: f32::NEG_INFINITY
+            }
+            .pad(),
+            3
+        );
+        assert!(
+            Filter::GaussianBlur {
+                radius: f32::INFINITY
+            }
+            .pad()
+                <= 2000
+        );
+        assert!(box_radius(f32::NAN) >= 1);
+
+        let mut r = Raster::new(8, 8);
+        r.set(4, 4, Rgba::WHITE);
+        let src = TileStore::from_raster(&r, 0, 0);
+        for f in [
+            Filter::BoxBlur { radius: -5.0 },
+            Filter::BoxBlur { radius: f32::NAN },
+            Filter::Sharpen {
+                amount: 1.0,
+                radius: -1.0,
+            },
+        ] {
+            let out = apply_filter(&src, &f);
+            let p = out.get_pixel(4, 4);
+            assert!(p.a.is_finite(), "{}: alpha {}", f.name(), p.a);
+        }
+    }
 
     fn total_alpha(s: &TileStore) -> f32 {
         let b = s.content_bounds().unwrap();

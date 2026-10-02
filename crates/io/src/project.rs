@@ -315,7 +315,7 @@ fn read_layer<R: Read + std::io::Seek>(
             }
             Some(Mask {
                 tiles,
-                default: m.default,
+                default: m.default.clamp(0.0, 1.0),
                 enabled: m.enabled,
             })
         }
@@ -324,7 +324,7 @@ fn read_layer<R: Read + std::io::Seek>(
 
     let mut layer = Layer::with_content(r.id, r.name.clone(), content);
     layer.visible = r.visible;
-    layer.opacity = r.opacity;
+    layer.opacity = r.opacity.clamp(0.0, 1.0);
     layer.blend = r.blend;
     layer.mask = mask;
     layer.collapsed = r.collapsed;

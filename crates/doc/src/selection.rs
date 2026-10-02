@@ -223,7 +223,7 @@ impl Mask {
     /// Soften edges with a Gaussian-like blur of roughly `radius` pixels.
     pub fn feather(&mut self, radius: f32) {
         let Some(bounds) = self.tiles.bounds() else { return };
-        let box_r = ((radius / 3f32.sqrt()).round() as i32).max(1);
+        let box_r = crate::box_radius(radius);
         let pad = box_r * 3;
         let area = Rect::new(
             bounds.x - pad,
