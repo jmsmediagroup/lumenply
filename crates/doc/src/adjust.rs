@@ -290,12 +290,6 @@ impl CompiledAdjustment {
     fn direct(adj: &Adjustment, [r, g, b]: [f32; 3]) -> [f32; 3] {
         {
             match *adj {
-                Adjustment::Invert => [1.0 - r, 1.0 - g, 1.0 - b],
-                Adjustment::BrightnessContrast { brightness, contrast } => {
-                    let k = ((contrast.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4).tan();
-                    let f = |c: f32| ((c + brightness - 0.5) * k + 0.5).clamp(0.0, 1.0);
-                    [f(r), f(g), f(b)]
-                }
                 Adjustment::HueSaturation {
                     hue,
                     saturation,
@@ -364,11 +358,6 @@ impl CompiledAdjustment {
                 Adjustment::Threshold { level } => {
                     let v = if luminance(r, g, b) >= level { 1.0 } else { 0.0 };
                     [v, v, v]
-                }
-                Adjustment::Posterize { levels } => {
-                    let n = levels.clamp(2, 256) as f32;
-                    let f = |c: f32| ((c * n).floor().min(n - 1.0)) / (n - 1.0);
-                    [f(r), f(g), f(b)]
                 }
                 Adjustment::Invert
                 | Adjustment::BrightnessContrast { .. }
