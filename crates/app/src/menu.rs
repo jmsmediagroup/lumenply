@@ -228,6 +228,10 @@ impl App {
                         self.pick_export_jpeg();
                         ui.close_menu();
                     }
+                    if ui.button("Export OpenRaster...").clicked() {
+                        self.pick_export_ora();
+                        ui.close_menu();
+                    }
                     if ui.button("Export Photoshop PSD...").clicked() {
                         self.pick_export_psd();
                         ui.close_menu();
@@ -500,6 +504,10 @@ impl App {
                         }
                         if ui.button("PSD...").clicked() {
                             self.pick_export_psd();
+                            ui.close_menu();
+                        }
+                        if ui.button("OpenRaster...").clicked() {
+                            self.pick_export_ora();
                             ui.close_menu();
                         }
                     });

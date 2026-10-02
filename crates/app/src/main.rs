@@ -61,6 +61,10 @@ fn is_image_path(p: &str) -> bool {
     [".png", ".jpg", ".jpeg"].iter().any(|e| lower.ends_with(e))
 }
 
+fn is_ora_path(p: &str) -> bool {
+    p.to_ascii_lowercase().ends_with(".ora")
+}
+
 fn is_psd_path(p: &str) -> bool {
     p.to_ascii_lowercase().ends_with(".psd")
 }

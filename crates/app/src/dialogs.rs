@@ -24,7 +24,7 @@ impl App {
     pub(crate) fn pick_open(&mut self) {
         if let Some(p) = self
             .file_dialog()
-            .add_filter("Projects & images", &["nge", "psd", "png", "jpg", "jpeg"])
+            .add_filter("Projects & images", &["nge", "psd", "ora", "png", "jpg", "jpeg"])
             .pick_file()
         {
             self.open_path(&p.to_string_lossy());
@@ -90,6 +90,25 @@ impl App {
         }
     }
 
+    pub(crate) fn pick_export_ora(&mut self) {
+        if let Some(p) = self.pick_save_path("OpenRaster", "ora") {
+            self.export_ora(&p);
+        }
+    }
+
+    pub(crate) fn export_ora(&mut self, path: &str) {
+        match nge_io::ora::save(path, self.editor.doc()) {
+            Ok(rep) => {
+                self.status = if rep.warnings.is_empty() {
+                    format!("Exported {path}")
+                } else {
+                    format!("Exported {path} ({})", rep.warnings.join("; "))
+                };
+            }
+            Err(e) => self.status = format!("Could not export: {e}"),
+        }
+    }
+
     pub(crate) fn pick_export_jpeg(&mut self) {
         if let Some(p) = self.pick_save_path("JPEG image", "jpg") {
             self.dialog = Some(Dialog::ExportJpeg(p, 90));
@@ -101,6 +120,22 @@ impl App {
     // ---- files -----------------------------------------------------------------
 
     pub(crate) fn open_path(&mut self, path: &str) {
+        if is_ora_path(path) {
+            match nge_io::ora::load(path) {
+                Ok(rep) => {
+                    let n = rep.warnings.len();
+                    self.set_doc(Editor::new(rep.value), None);
+                    self.recent = session::push_recent(path);
+                    self.status = if n == 0 {
+                        format!("Imported {path}")
+                    } else {
+                        format!("Imported {path} ({})", rep.warnings.join("; "))
+                    };
+                }
+                Err(e) => self.status = format!("Could not import {path}: {e}"),
+            }
+            return;
+        }
         if is_psd_path(path) {
             match nge_io::psd::load(path) {
                 Ok(rep) => {

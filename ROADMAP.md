@@ -106,7 +106,9 @@ None of these could be tested in the container.
 - [ ] TIFF, WebP, AVIF/HEIF, OpenEXR; camera RAW via rawler or LibRaw
 - [ ] PSD: 16-bit, PSB (large documents), Black & White/Exposure/Vibrance descriptors,
       text layers as editable PSD text, live filters as smart filters (or rasterised with a note)
-- [ ] OpenRaster (.ora) for GIMP/Krita interchange
+- [x] OpenRaster (.ora) import/export for GIMP/Krita interchange (layers, groups,
+      opacity, visibility, the ten blend modes; masks baked in, adjustments and
+      live filters skipped with warnings)
 - [ ] CMYK soft-proofing
 
 ## 5. Tools and features

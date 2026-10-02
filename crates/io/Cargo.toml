@@ -16,5 +16,6 @@ nge-doc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 zip.workspace = true
+quick-xml.workspace = true
 
 nge-render.workspace = true
