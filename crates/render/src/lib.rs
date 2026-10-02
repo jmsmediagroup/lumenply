@@ -102,7 +102,10 @@ pub fn render_tile_over(
         let baseable = !layer.clip
             && matches!(
                 layer.content,
-                LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Group(_)
+                LayerContent::Pixel(_)
+                    | LayerContent::Text(_)
+                    | LayerContent::Smart(_)
+                    | LayerContent::Group(_)
             );
         if chain_end > idx + 1 && baseable {
             skip_until = chain_end;
@@ -194,7 +197,7 @@ pub fn render_tile_over(
 
         let owned: Tile;
         let src: &Tile = match &layer.content {
-            LayerContent::Pixel(_) | LayerContent::Text(_) => {
+            LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) => {
                 let Some(store) = layer.raster_store() else {
                     continue;
                 };
@@ -331,7 +334,7 @@ fn coverage_raster(layer: &Layer, area: Rect, canvas: Rect) -> Vec<f32> {
     let mut out = vec![0f32; w * h];
     let mask = layer.mask.as_ref().filter(|m| m.enabled);
     match &layer.content {
-        LayerContent::Pixel(_) | LayerContent::Text(_) => {
+        LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) => {
             if let Some(store) = layer.raster_store() {
                 for gy in 0..h {
                     for gx in 0..w {
@@ -734,7 +737,9 @@ fn render_stroke_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: R
 /// isolated render of a group — before masks and blending.
 fn source_tile(layer: &Layer, coord: TileCoord, canvas: Rect) -> Option<Tile> {
     match &layer.content {
-        LayerContent::Pixel(_) | LayerContent::Text(_) => layer.raster_store()?.tile(coord).cloned(),
+        LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) => {
+            layer.raster_store()?.tile(coord).cloned()
+        }
         LayerContent::Group(children) => render_tile(children, coord, canvas),
         _ => None,
     }

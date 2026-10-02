@@ -113,6 +113,12 @@ pub fn compact_storage(doc: &mut Document) {
                     c.compact();
                 }
             }
+            lumenply_doc::LayerContent::Smart(s) => {
+                s.source.compact();
+                if let Some(c) = s.cache.as_mut() {
+                    c.compact();
+                }
+            }
             _ => {}
         }
         if let Some(m) = l.mask.as_mut() {

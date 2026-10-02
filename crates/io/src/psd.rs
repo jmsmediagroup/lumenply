@@ -975,7 +975,7 @@ fn collect_records(
         });
         let mask_enabled = l.mask.as_ref().is_some_and(|m| m.enabled);
         match &l.content {
-            LayerContent::Pixel(_) | LayerContent::Text(_) => {
+            LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) => {
                 let owned_store;
                 let store: &TileStore = match &l.content {
                     LayerContent::Pixel(s) => s,
@@ -985,6 +985,14 @@ fn collect_records(
                             .cache
                             .clone()
                             .unwrap_or_else(|| lumenply_render::text::rasterize(t));
+                        &owned_store
+                    }
+                    LayerContent::Smart(s) => {
+                        warnings.push(format!("smart object '{}' was exported as pixels", l.name));
+                        owned_store = s
+                            .cache
+                            .clone()
+                            .unwrap_or_else(|| lumenply_render::transform_store(&s.source, &s.transform));
                         &owned_store
                     }
                     _ => unreachable!(),

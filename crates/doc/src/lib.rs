@@ -11,7 +11,7 @@
 
 use std::str::FromStr;
 
-use lumenply_tiles::{Rect, Rgba, TileStore};
+use lumenply_tiles::{Affine, Rect, Rgba, TileStore};
 use serde::{Deserialize, Serialize};
 
 pub type LayerId = u64;
@@ -481,6 +481,20 @@ pub enum LayerContent {
     Filter(Filter),
     /// Editable text, rasterised on demand.
     Text(TextLayer),
+    /// A smart object: untouched source pixels plus a cumulative
+    /// transform, re-rendered from the source on every change.
+    Smart(SmartLayer),
+}
+
+/// Non-destructive pixels: the source never changes; edits compose into
+/// `transform`, and `cache` (the source resampled through it) is derived
+/// state — never saved, rebuilt on load and on every transform change by
+/// `lumenply-render`.
+#[derive(Clone, Debug)]
+pub struct SmartLayer {
+    pub source: TileStore,
+    pub transform: Affine,
+    pub cache: Option<TileStore>,
 }
 
 #[derive(Clone, Debug)]
@@ -549,11 +563,27 @@ impl Layer {
         }
     }
 
-    /// Pixels to composite for this layer: own pixels, or a text layer's cache.
+    /// Pixels to composite for this layer: own pixels, or a text or smart
+    /// layer's cache.
     pub fn raster_store(&self) -> Option<&TileStore> {
         match &self.content {
             LayerContent::Pixel(s) => Some(s),
             LayerContent::Text(t) => t.cache.as_ref(),
+            LayerContent::Smart(s) => s.cache.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn smart_layer(&self) -> Option<&SmartLayer> {
+        match &self.content {
+            LayerContent::Smart(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn smart_layer_mut(&mut self) -> Option<&mut SmartLayer> {
+        match &mut self.content {
+            LayerContent::Smart(s) => Some(s),
             _ => None,
         }
     }

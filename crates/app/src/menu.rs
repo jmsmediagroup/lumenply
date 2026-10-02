@@ -118,12 +118,15 @@ impl App {
 
     pub(crate) fn begin_free_transform(&mut self) {
         let Some(id) = self.active else { return };
+        // Pixel layers and smart objects transform; a smart object's
+        // bounds come from its rendered cache.
         let Some(b) = self
             .active_layer()
-            .and_then(|l| l.pixels())
+            .filter(|l| l.pixels().is_some() || l.smart_layer().is_some())
+            .and_then(|l| l.raster_store())
             .and_then(|p| p.content_bounds())
         else {
-            self.status = "Free transform needs a pixel layer with content".into();
+            self.status = "Free transform needs a pixel layer or smart object with content".into();
             return;
         };
         self.tool = Tool::Move;

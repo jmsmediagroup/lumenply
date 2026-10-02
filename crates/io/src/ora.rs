@@ -172,9 +172,12 @@ fn write_layer<W: Write + std::io::Seek>(
                 layer.name
             ));
         }
-        LayerContent::Pixel(_) | LayerContent::Text(_) => {
+        LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) => {
             if matches!(layer.content, LayerContent::Text(_)) {
                 warnings.push(format!("text layer '{}' was exported as pixels", layer.name));
+            }
+            if matches!(layer.content, LayerContent::Smart(_)) {
+                warnings.push(format!("smart object '{}' was exported as pixels", layer.name));
             }
             let Some(store) = layer.raster_store() else {
                 return Ok(());

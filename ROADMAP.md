@@ -168,7 +168,13 @@ None of these could be tested in the container.
       clip-chain members (rendered inside the unit, clipped by the base)
       and on chain bases; a styled pass-through group composites isolated,
       as in Photoshop. Still to do: pattern overlay
-- [ ] Smart objects (embedded documents with transforms)
+- [~] Smart objects v1: a layer keeps untouched source pixels plus a
+      cumulative affine; every transform (free transform, image resize,
+      rotate, flip, crop shift) composes and re-renders from the source, so
+      repeated transforms never degrade. Convert/Rasterize in the layer
+      context menu + palette, "Smart" chip, saved in .lumen (cache
+      rebuilds on load), PSD/ORA export as pixels with a warning.
+      Still open: embedded multi-layer documents ("edit contents")
 - [x] Clipping masks (clip chains composite as a unit gated by the base's alpha
       and carrying its blend/opacity; context menu + palette; PSD clipping byte
       round-trips; GPU path falls back to CPU for clipped documents)

@@ -343,7 +343,7 @@ impl GpuCompositor {
                 !l.clip
                     && l.effects.is_empty()
                     && match &l.content {
-                        LayerContent::Pixel(_) | LayerContent::Text(_) => true,
+                        LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) => true,
                         LayerContent::Group(c) => ok(c),
                         LayerContent::Filter(_) => false,
                         LayerContent::Adjustment(a) => {
@@ -424,7 +424,7 @@ impl GpuCompositor {
             }
             let mask = layer.mask.as_ref().filter(|m| m.enabled);
             match &layer.content {
-                LayerContent::Pixel(_) | LayerContent::Text(_) => {
+                LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) => {
                     let Some(store) = layer.raster_store() else {
                         continue;
                     };

@@ -46,6 +46,7 @@ impl App {
                         }),
                     ),
                     LayerContent::Text(_) => (Kind::Text, Some("Text")),
+                    LayerContent::Smart(_) => (Kind::Pixel, Some("Smart")),
                 };
                 out.push(LayerRow {
                     id: l.id,
@@ -337,6 +338,20 @@ impl App {
                             ctx_action = Some(("ungroup", row.id));
                             ui.close_menu();
                         }
+                        if row.chip == Some("Smart") {
+                            if ui.button("Rasterize").clicked() {
+                                ctx_action = Some(("rasterize", row.id));
+                                ui.close_menu();
+                            }
+                        } else if row.kind == Kind::Pixel
+                            && ui
+                                .button("Convert to smart object")
+                                .on_hover_text("Transforms re-render from the source: no quality loss")
+                                .clicked()
+                        {
+                            ctx_action = Some(("smart", row.id));
+                            ui.close_menu();
+                        }
                         if ui.button("Delete").clicked() {
                             ctx_action = Some(("delete", row.id));
                             ui.close_menu();
@@ -457,6 +472,8 @@ impl App {
                 "flipv" => self.flip_active(false),
                 "delete" => self.delete_active(),
                 "ungroup" => self.ungroup_active(),
+                "smart" => self.run(&ConvertToSmartObject { layer: id }),
+                "rasterize" => self.run(&RasterizeLayer { layer: id }),
                 "addmask" => {
                     self.run(&AddMask { layer: id });
                     self.editing_mask = true;

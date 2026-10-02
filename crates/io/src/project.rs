@@ -97,11 +97,27 @@ struct MaskRecord {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum ContentRecord {
-    Pixel { tiles: Vec<(i32, i32)> },
-    Group { children: Vec<LayerRecord> },
-    Adjustment { adjustment: Adjustment },
-    Filter { filter: Filter },
-    Text { text: TextLayer },
+    Pixel {
+        tiles: Vec<(i32, i32)>,
+    },
+    Group {
+        children: Vec<LayerRecord>,
+    },
+    Adjustment {
+        adjustment: Adjustment,
+    },
+    Filter {
+        filter: Filter,
+    },
+    Text {
+        text: TextLayer,
+    },
+    /// Smart object: the source tiles plus the cumulative transform as
+    /// its six coefficients; the rendered cache is derived, never saved.
+    Smart {
+        tiles: Vec<(i32, i32)>,
+        transform: [f32; 6],
+    },
 }
 
 /// Write a document to `path`, replacing any existing file.
@@ -178,6 +194,19 @@ fn write_layer<W: Write + std::io::Seek>(
         },
         LayerContent::Filter(f) => ContentRecord::Filter { filter: f.clone() },
         LayerContent::Text(t) => ContentRecord::Text { text: t.clone() },
+        LayerContent::Smart(s) => {
+            let mut tiles = Vec::new();
+            for c in sorted(&s.source) {
+                let tile = s.source.tile(c).expect("coord came from the store");
+                zip.start_file(format!("tiles/{}/{}_{}.rgba", layer.id, c.x, c.y), opts)?;
+                zip.write_all(&tile_bytes(tile))?;
+                tiles.push((c.x, c.y));
+            }
+            ContentRecord::Smart {
+                tiles,
+                transform: s.transform.coeffs(),
+            }
+        }
     };
 
     let mask = match &layer.mask {
@@ -329,6 +358,24 @@ fn read_layer<R: Read + std::io::Seek>(
             }
             lumenply_render::text::refresh_cache(&mut t);
             LayerContent::Text(t)
+        }
+        ContentRecord::Smart { tiles, transform } => {
+            let mut source = TileStore::new();
+            for &(x, y) in tiles {
+                let c = checked_coord(x, y)?;
+                let bytes = read_entry(zip, &format!("tiles/{}/{}_{}.rgba", r.id, x, y))?;
+                source.insert(c, Arc::new(tile_from_bytes(&bytes)?));
+            }
+            if !transform.iter().all(|v| v.is_finite()) {
+                return Err(ProjectError::Corrupt("smart transform is not finite".into()));
+            }
+            let transform = lumenply_tiles::Affine::from_coeffs(*transform);
+            let cache = lumenply_render::transform_store(&source, &transform);
+            LayerContent::Smart(lumenply_doc::SmartLayer {
+                source,
+                transform,
+                cache: Some(cache),
+            })
         }
     };
 
@@ -564,6 +611,26 @@ mod tests {
             name: "Outline".into(),
             path: doc.work_path.clone().unwrap(),
         }];
+        // A smart object: source tiles and the transform persist; the
+        // cache rebuilds on load.
+        let sid = doc.alloc_id();
+        let mut src = TileStore::new();
+        for y in 0..8 {
+            for x in 0..8 {
+                src.set_pixel(x, y, lumenply_tiles::Rgba::from_straight(0.2, 0.9, 0.4, 1.0));
+            }
+        }
+        let st = lumenply_tiles::Affine::around(4.0, 4.0, 2.0, 2.0, 0.0);
+        doc.add_layer(Layer::with_content(
+            sid,
+            "Smart",
+            lumenply_doc::LayerContent::Smart(lumenply_doc::SmartLayer {
+                cache: Some(lumenply_render::transform_store(&src, &st)),
+                source: src,
+                transform: st,
+            }),
+        ));
+
         // Float mode plus an HDR value: tiles serialize as raw f32, so a
         // value above 1 must come back exactly.
         doc.float_mode = true;
@@ -588,7 +655,16 @@ mod tests {
             "effects survive"
         );
         assert_eq!(back.next_id(), doc.next_id());
-        assert_eq!(back.layer_count(), 5);
+        assert_eq!(back.layer_count(), 6);
+        let smart = back.layer(sid).unwrap().smart_layer().unwrap();
+        assert_eq!(smart.transform.coeffs(), st.coeffs(), "smart transform survives");
+        let sp = smart.source.get_pixel(3, 3).to_straight();
+        assert!((sp[1] - 0.9).abs() < 2e-4, "smart source survives: {sp:?}");
+        let cache = smart.cache.as_ref().expect("cache rebuilt on load");
+        assert!(
+            cache.get_pixel(1, 1).a > 0.9,
+            "cache rendered through the transform"
+        );
         assert!(back.layers()[1].pass_through, "pass-through survives");
         assert!(back.layers()[1].children().unwrap()[0].clip, "clip flag survives");
         assert!(!back.layers()[0].pass_through);

@@ -208,6 +208,15 @@ impl Affine {
         }
     }
 
+    /// The six coefficients, for serialization: `[a, b, c, d, tx, ty]`.
+    pub fn coeffs(&self) -> [f32; 6] {
+        [self.a, self.b, self.c, self.d, self.tx, self.ty]
+    }
+
+    pub fn from_coeffs([a, b, c, d, tx, ty]: [f32; 6]) -> Affine {
+        Affine { a, b, c, d, tx, ty }
+    }
+
     pub fn scale(sx: f32, sy: f32) -> Self {
         Affine {
             a: sx,

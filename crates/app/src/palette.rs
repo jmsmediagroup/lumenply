@@ -66,6 +66,7 @@ impl App {
             ),
             m("Group layers", "Ctrl+G", "group"),
             m("Ungroup", "", "ungroup"),
+            m("Convert to smart object", "", "smart-object"),
             m("Delete layer", "", "delete-layer"),
             m("Move layer up", "", "layer-up"),
             m("Move layer down", "", "layer-down"),
@@ -280,6 +281,11 @@ impl App {
             }
             "group" => self.group_selected(),
             "ungroup" => self.ungroup_active(),
+            "smart-object" => {
+                if let Some(layer) = self.active {
+                    self.run(&ConvertToSmartObject { layer });
+                }
+            }
             "delete-layer" => self.delete_active(),
             "layer-up" => self.reorder_active(1),
             "layer-down" => self.reorder_active(-1),

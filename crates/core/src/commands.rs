@@ -195,6 +195,51 @@ impl Command for SetText {
 }
 
 /// Convert a text layer into an ordinary pixel layer.
+/// Compose `t` onto a smart layer and re-render its cache from the source.
+fn smart_compose(s: &mut lumenply_doc::SmartLayer, t: &Affine) {
+    s.transform = s.transform.then(t);
+    s.cache = Some(lumenply_render::transform_store(&s.source, &s.transform));
+}
+
+/// Wrap a pixel layer's pixels into a smart object: from here on,
+/// transforms compose and re-render from this untouched source, so
+/// repeated scaling or rotating never degrades.
+pub struct ConvertToSmartObject {
+    pub layer: LayerId,
+}
+
+impl Command for ConvertToSmartObject {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn label(&self) -> String {
+        "Convert to smart object".into()
+    }
+
+    fn affected(&self, _doc: &Document) -> Option<Rect> {
+        // The pixels do not change, only what future edits do to them.
+        Some(Rect::default())
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
+        let store = match &mut l.content {
+            LayerContent::Pixel(s) => std::mem::take(s),
+            LayerContent::Smart(_) => {
+                return Err(EditError::Invalid("the layer is already a smart object".into()))
+            }
+            _ => return Err(EditError::NotPixel(self.layer)),
+        };
+        l.content = LayerContent::Smart(lumenply_doc::SmartLayer {
+            cache: Some(store.clone()),
+            source: store,
+            transform: Affine::IDENTITY,
+        });
+        Ok(())
+    }
+}
+
 pub struct RasterizeLayer {
     pub layer: LayerId,
 }
@@ -215,6 +260,10 @@ impl Command for RasterizeLayer {
                 lumenply_render::text::refresh_cache(t);
                 t.cache.take().unwrap_or_default()
             }
+            LayerContent::Smart(sm) => sm
+                .cache
+                .take()
+                .unwrap_or_else(|| lumenply_render::transform_store(&sm.source, &sm.transform)),
             _ => {
                 return Err(EditError::Invalid(format!(
                     "layer {} cannot be rasterized",
@@ -761,6 +810,7 @@ impl Command for TransformLayer {
             LayerContent::Pixel(store) => {
                 *store = lumenply_render::transform_store(store, &self.transform);
             }
+            LayerContent::Smart(sm) => smart_compose(sm, &self.transform),
             LayerContent::Text(t) => match self.transform.integer_translation() {
                 Some((dx, dy)) => {
                     t.x += dx as f32;
@@ -827,6 +877,11 @@ impl Command for PerspectiveLayer {
             LayerContent::Text(_) => {
                 return Err(EditError::Invalid(
                     "rasterize the text layer before a perspective warp".into(),
+                ))
+            }
+            LayerContent::Smart(_) => {
+                return Err(EditError::Invalid(
+                    "smart objects keep affine transforms only; rasterize before a perspective warp".into(),
                 ))
             }
             _ => return Err(EditError::NotPixel(self.layer)),
@@ -1265,8 +1320,10 @@ impl Command for ResizeImage {
             self.height as f32 / doc.height as f32,
         );
         doc.for_each_layer_mut(|l| {
-            if let LayerContent::Pixel(store) = &mut l.content {
-                *store = lumenply_render::transform_store(store, &t);
+            match &mut l.content {
+                LayerContent::Pixel(store) => *store = lumenply_render::transform_store(store, &t),
+                LayerContent::Smart(sm) => smart_compose(sm, &t),
+                _ => {}
             }
             if let Some(m) = l.mask.as_mut() {
                 *m = lumenply_render::transform_mask(m, &t);
@@ -1284,8 +1341,10 @@ fn shift_all(doc: &mut Document, dx: i32, dy: i32) {
         return;
     }
     doc.for_each_layer_mut(|l| {
-        if let LayerContent::Pixel(store) = &mut l.content {
-            *store = store.translated(dx, dy);
+        match &mut l.content {
+            LayerContent::Pixel(store) => *store = store.translated(dx, dy),
+            LayerContent::Smart(sm) => smart_compose(sm, &Affine::translate(dx as f32, dy as f32)),
+            _ => {}
         }
         if let Some(m) = l.mask.as_mut() {
             *m = lumenply_render::transform_mask(m, &Affine::translate(dx as f32, dy as f32));
@@ -2158,6 +2217,7 @@ impl Command for RotateImage {
         doc.for_each_layer_mut(|l| {
             match &mut l.content {
                 LayerContent::Pixel(store) => *store = lumenply_render::transform_store(store, &t),
+                LayerContent::Smart(sm) => smart_compose(sm, &t),
                 LayerContent::Text(tl) => {
                     let (nx, ny) = t.apply(tl.x, tl.y);
                     tl.x = nx;
@@ -2203,6 +2263,7 @@ impl Command for FlipImage {
         doc.for_each_layer_mut(|l| {
             match &mut l.content {
                 LayerContent::Pixel(store) => *store = lumenply_render::transform_store(store, &t),
+                LayerContent::Smart(sm) => smart_compose(sm, &t),
                 LayerContent::Text(tl) => {
                     let (nx, ny) = t.apply(tl.x, tl.y);
                     tl.x = nx;
@@ -3646,6 +3707,88 @@ mod tests {
         }
         .apply(&mut doc)
         .is_err());
+    }
+
+    #[test]
+    fn smart_objects_transform_without_degrading() {
+        // A fine checkerboard: the sharpest content there is, so repeated
+        // resampling degrades it measurably unless re-rendered from source.
+        let mut doc = Document::new(128, 128);
+        let id = doc.add_pixel_layer("L");
+        for y in 32..96 {
+            for x in 32..96 {
+                let v = if (x + y) % 2 == 0 { 1.0 } else { 0.0 };
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::from_straight(v, v, v, 1.0),
+                );
+            }
+        }
+        let reference = doc.clone();
+        ConvertToSmartObject { layer: id }.apply(&mut doc).unwrap();
+        assert!(doc.layer(id).unwrap().smart_layer().is_some());
+
+        // Shrink to a quarter, then scale back up 4x: a destructive
+        // round trip would blur the checker to grey; the smart object
+        // re-renders from the source, identical to one direct resample.
+        let around = |k: f32| TransformLayer {
+            layer: id,
+            transform: Affine::around(64.0, 64.0, k, k, 0.0),
+        };
+        around(0.25).apply(&mut doc).unwrap();
+        around(4.0).apply(&mut doc).unwrap();
+        let s = doc.layer(id).unwrap().smart_layer().unwrap();
+        assert!(
+            (s.transform.a - 1.0).abs() < 1e-5 && s.transform.tx.abs() < 1e-3,
+            "transforms composed back to identity: {:?}",
+            s.transform
+        );
+        let smart = doc.layer(id).unwrap().raster_store().unwrap();
+        let mut max_err = 0.0f32;
+        for y in 40..88 {
+            for x in 40..88 {
+                let a = smart.get_pixel(x, y).to_straight()[0];
+                let b = reference
+                    .layer(id)
+                    .unwrap()
+                    .pixels()
+                    .unwrap()
+                    .get_pixel(x, y)
+                    .to_straight()[0];
+                max_err = max_err.max((a - b).abs());
+            }
+        }
+        assert!(max_err < 0.02, "checker survives down-then-up: max err {max_err}");
+
+        // The destructive path, for contrast, loses the checker entirely.
+        let mut destructive = reference.clone();
+        TransformLayer {
+            layer: id,
+            transform: Affine::around(64.0, 64.0, 0.25, 0.25, 0.0),
+        }
+        .apply(&mut destructive)
+        .unwrap();
+        TransformLayer {
+            layer: id,
+            transform: Affine::around(64.0, 64.0, 4.0, 4.0, 0.0),
+        }
+        .apply(&mut destructive)
+        .unwrap();
+        let p = destructive.layer(id).unwrap().pixels().unwrap();
+        let mid = p.get_pixel(64, 64).to_straight()[0];
+        assert!(
+            (0.1..0.9).contains(&mid),
+            "destructive round trip greys the checker (sanity): {mid}"
+        );
+
+        // Rasterize turns the rendered result back into plain pixels.
+        RasterizeLayer { layer: id }.apply(&mut doc).unwrap();
+        assert!(doc.layer(id).unwrap().pixels().is_some());
+
+        // Converting anything but a pixel layer refuses.
+        let gid = doc.add_group("g");
+        assert!(ConvertToSmartObject { layer: gid }.apply(&mut doc).is_err());
     }
 
     #[test]

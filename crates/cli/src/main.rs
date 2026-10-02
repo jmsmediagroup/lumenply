@@ -155,6 +155,7 @@ fn print_tree(layers: &[Layer], depth: usize) {
             LayerContent::Adjustment(a) => format!("adjustment: {}", a.name()),
             LayerContent::Filter(f) => format!("live filter: {}", f.name()),
             LayerContent::Text(t) => format!("text: {:?} ({}px)", t.text, t.size),
+            LayerContent::Smart(s) => format!("smart object, {} source tiles", s.source.len()),
         };
         let mask = l
             .mask
