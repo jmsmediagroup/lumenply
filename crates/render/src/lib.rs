@@ -15,13 +15,14 @@
 
 pub mod cache;
 pub mod filters;
+mod filters_more;
 pub mod gpu;
 pub mod inpaint;
 pub mod text;
 pub mod transform;
 
 pub use cache::BelowCache;
-pub use filters::{apply_filter, filter_raster, Filter};
+pub use filters::{apply_filter, apply_filter_in_canvas, filter_raster, Filter};
 pub use gpu::GpuCompositor;
 pub use transform::{
     perspective_mask, perspective_store, perspective_store_h, sample_bilinear, transform_mask,

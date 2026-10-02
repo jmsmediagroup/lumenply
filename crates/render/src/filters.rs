@@ -5,6 +5,8 @@
 //! from darkening. Gaussian blur is three box passes, whose result is within
 //! a few percent of a true Gaussian and far cheaper.
 
+use crate::filters_more as more;
+pub use crate::filters_more::apply_filter_in_canvas;
 pub use lumenply_doc::Filter;
 use lumenply_doc::{box_radius, sane_radius};
 use lumenply_tiles::{Raster, Rect, Rgba, TileStore};
@@ -59,6 +61,16 @@ pub fn filter_raster(src: &Raster, filter: &Filter, origin: (i32, i32)) -> Raste
         Filter::MotionBlur { angle, distance } => motion_blur(src, *angle, *distance),
         Filter::Median { radius } => median(src, Filter::median_radius(*radius)),
         Filter::HighPass { radius } => high_pass(src, *radius),
+        Filter::Mosaic { size } => more::mosaic(src, *size, origin),
+        Filter::Emboss {
+            angle,
+            height,
+            amount,
+        } => more::emboss(src, *angle, *height, *amount),
+        Filter::FindEdges => more::find_edges(src),
+        Filter::SurfaceBlur { radius, threshold } => more::surface_blur(src, *radius, *threshold),
+        Filter::LensBlur { radius, highlights } => more::lens_blur(src, *radius, *highlights),
+        Filter::DustScratches { radius, threshold } => more::dust_scratches(src, *radius, *threshold),
     }
 }
 
@@ -164,7 +176,7 @@ fn sample(src: &Raster, x: f32, y: f32) -> Rgba {
 }
 
 /// Per-channel median over a square window (premultiplied channels).
-fn median(src: &Raster, r: i32) -> Raster {
+pub(crate) fn median(src: &Raster, r: i32) -> Raster {
     let (w, h) = (src.width as i32, src.height as i32);
     let wu = src.width as usize;
     let mut out = src.clone();

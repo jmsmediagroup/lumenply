@@ -399,6 +399,8 @@ impl App {
         self.act(ui, "Warp", "warp");
         menu_separator(ui);
         self.act(ui, "Fill with brush colour", "fill");
+        self.act(ui, "Fill...", "fill-dialog");
+        self.act(ui, "Content-Aware Fill...", "content-aware");
         self.act(ui, "Clear", "clear");
         menu_separator(ui);
         self.act(ui, "Preferences...", "prefs");
@@ -435,6 +437,15 @@ impl App {
         let quick = self.quick_mask;
         self.act_check(ui, "Quick mask", "quick-mask", quick)
             .on_hover_text("Paint the selection: white selects, black deselects");
+        menu_separator(ui);
+        menu(ui, "Modify", |ui| {
+            self.act(ui, "Border...", "sel-border");
+            self.act(ui, "Smooth...", "sel-smooth");
+            self.act(ui, "Expand...", "sel-expand");
+            self.act(ui, "Contract...", "sel-contract");
+        });
+        self.act(ui, "Grow", "sel-grow");
+        self.act(ui, "Similar", "sel-similar");
         menu_separator(ui);
         let feather = format!("Feather {:.0} px", self.feather);
         self.act(ui, &feather, "feather");
@@ -538,8 +549,14 @@ impl App {
     }
 
     fn filter_menu(&mut self, ui: &mut egui::Ui) {
-        for (name, f) in filter_presets() {
-            self.act(ui, &format!("{name}..."), palette::filter_id(&f));
+        // Photoshop's grouping: a submenu per kind of filter.
+        let presets = filter_presets();
+        for cat in ["Blur", "Noise", "Pixelate", "Sharpen", "Stylize", "Other"] {
+            menu(ui, cat, |ui| {
+                for (name, f) in presets.iter().filter(|(_, f)| filter_category(f) == cat) {
+                    self.act(ui, &format!("{name}..."), palette::filter_id(f));
+                }
+            });
         }
         menu_separator(ui);
         menu(ui, "Live filter layer", |ui| {

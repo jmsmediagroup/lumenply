@@ -1275,9 +1275,12 @@ impl Command for ApplyFilter {
 
     fn apply(&self, doc: &mut Document) -> EditResult {
         let sel = doc.selection.clone();
+        let canvas = doc.canvas();
         let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
         let store = l.pixels_mut().ok_or(EditError::NotPixel(self.layer))?;
-        let filtered = lumenply_render::apply_filter(store, &self.filter);
+        // Past the canvas edge the layer reads as its edge pixel repeated,
+        // as live filters read it, so full-canvas layers don't fade there.
+        let filtered = lumenply_render::apply_filter_in_canvas(store, &self.filter, canvas);
         match sel {
             None => *store = filtered,
             Some(sel) => {

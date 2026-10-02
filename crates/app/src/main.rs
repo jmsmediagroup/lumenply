@@ -35,6 +35,8 @@ mod menu;
 mod options_bar;
 mod palette;
 mod properties;
+#[cfg(test)]
+mod select_fill_tests;
 mod session;
 mod start;
 mod status;
@@ -1006,14 +1008,20 @@ impl App {
                 self.run_menu_action(id);
             }
         }
-        let (fill, delete) = ctx.input(|i| {
+        let (fill, delete, fill_dialog) = ctx.input(|i| {
+            let back = i.key_pressed(Key::Backspace);
             (
                 i.modifiers.shift && i.key_pressed(Key::F5),
-                i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace),
+                i.key_pressed(Key::Delete) || (back && !i.modifiers.shift),
+                back && i.modifiers.shift,
             )
         });
         if fill {
             self.run_menu_action("fill");
+        }
+        // Shift+Backspace: Photoshop's Fill dialog (content-aware or colour).
+        if fill_dialog && delete_key_action(self.tool).is_some() {
+            self.run_menu_action("fill-dialog");
         }
         if delete {
             if let Some(id) = delete_key_action(self.tool) {
@@ -1368,7 +1376,54 @@ fn filter_presets() -> Vec<(&'static str, Filter)> {
         ),
         ("Median", Filter::Median { radius: 2.0 }),
         ("High Pass", Filter::HighPass { radius: 4.0 }),
+        ("Mosaic", Filter::Mosaic { size: 16.0 }),
+        (
+            "Emboss",
+            Filter::Emboss {
+                angle: 135.0,
+                height: 3.0,
+                amount: 1.0,
+            },
+        ),
+        ("Find Edges", Filter::FindEdges),
+        (
+            "Surface Blur",
+            Filter::SurfaceBlur {
+                radius: 5.0,
+                threshold: 15.0,
+            },
+        ),
+        (
+            "Lens Blur",
+            Filter::LensBlur {
+                radius: 10.0,
+                highlights: 0.5,
+            },
+        ),
+        (
+            "Dust & Scratches",
+            Filter::DustScratches {
+                radius: 2.0,
+                threshold: 10.0,
+            },
+        ),
     ]
+}
+
+/// The Filter menu's Photoshop-style submenu for a filter.
+fn filter_category(f: &Filter) -> &'static str {
+    match f {
+        Filter::GaussianBlur { .. }
+        | Filter::BoxBlur { .. }
+        | Filter::MotionBlur { .. }
+        | Filter::SurfaceBlur { .. }
+        | Filter::LensBlur { .. } => "Blur",
+        Filter::Noise { .. } | Filter::Median { .. } | Filter::DustScratches { .. } => "Noise",
+        Filter::Mosaic { .. } => "Pixelate",
+        Filter::Sharpen { .. } => "Sharpen",
+        Filter::Emboss { .. } | Filter::FindEdges => "Stylize",
+        Filter::HighPass { .. } => "Other",
+    }
 }
 
 #[cfg(test)]
@@ -1625,6 +1680,10 @@ mod a11y_tests {
             ("Preferences", Dialog::Preferences(app.prefs.clone(), None)),
             ("Colour range", Dialog::ColorRange(25.0, false)),
             ("About", Dialog::About),
+            ("Expand selection", Dialog::SelectEdge(EdgeOp::Expand(4.0), false)),
+            ("Border selection", Dialog::SelectEdge(EdgeOp::Border(8.0), false)),
+            ("Content-aware fill", Dialog::Fill(true, 64.0, 0)),
+            ("Fill with colour", Dialog::Fill(false, 64.0, 0)),
         ];
         for (name, d) in dialogs {
             app.dialog = Some(d);

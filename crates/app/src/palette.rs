@@ -115,6 +115,14 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Actual pixels", "actual"),
     ("Show or hide the history strip", "toggle-history"),
     ("About Lumenply", "about"),
+    ("Expand selection...", "sel-expand"),
+    ("Contract selection...", "sel-contract"),
+    ("Border selection...", "sel-border"),
+    ("Smooth selection...", "sel-smooth"),
+    ("Grow selection", "sel-grow"),
+    ("Select similar", "sel-similar"),
+    ("Fill...", "fill-dialog"),
+    ("Content-Aware Fill...", "content-aware"),
 ];
 
 /// The id of the destructive filter dialog for a filter kind.
@@ -127,6 +135,12 @@ pub(crate) fn filter_id(f: &Filter) -> &'static str {
         Filter::MotionBlur { .. } => "filter-motion",
         Filter::Median { .. } => "filter-median",
         Filter::HighPass { .. } => "filter-highpass",
+        Filter::Mosaic { .. } => "filter-mosaic",
+        Filter::Emboss { .. } => "filter-emboss",
+        Filter::FindEdges => "filter-find-edges",
+        Filter::SurfaceBlur { .. } => "filter-surface",
+        Filter::LensBlur { .. } => "filter-lens",
+        Filter::DustScratches { .. } => "filter-dust",
     }
 }
 
@@ -427,6 +441,13 @@ impl App {
             "rasterize" if !layer.is_some_and(|l| l.smart_layer().is_some() || l.text_layer().is_some()) => {
                 Some("Select a smart object or text layer first")
             }
+            "sel-expand" | "sel-contract" | "sel-border" | "sel-smooth" | "sel-grow" | "sel-similar"
+                if !selection =>
+            {
+                need_selection
+            }
+            "fill-dialog" | "content-aware" if !pixel => need_pixel,
+            "content-aware" if !selection => Some("Select the area to fill first"),
             _ => None,
         }
     }
@@ -441,6 +462,7 @@ impl App {
         }
         let (m, k) = match id {
             "fill" => (M::SHIFT, Key::F5),
+            "fill-dialog" => (M::SHIFT, Key::Backspace),
             "clear" => return "Delete".into(),
             // egui spells these keys "Equals"/"Minus"; show the symbols.
             "zoom-in" | "zoom-out" => {
@@ -615,6 +637,28 @@ impl App {
             "fit" => self.view_cmd = Some(ViewCmd::Fit),
             "actual" => self.view_cmd = Some(ViewCmd::Actual),
             "palette" => self.toggle_palette(),
+            "sel-expand" => self.dialog = Some(Dialog::SelectEdge(EdgeOp::Expand(4.0), false)),
+            "sel-contract" => self.dialog = Some(Dialog::SelectEdge(EdgeOp::Contract(4.0), false)),
+            "sel-border" => self.dialog = Some(Dialog::SelectEdge(EdgeOp::Border(8.0), false)),
+            "sel-smooth" => self.dialog = Some(Dialog::SelectEdge(EdgeOp::Smooth(4.0), false)),
+            "sel-grow" | "sel-similar" => {
+                let sample = match self.active {
+                    Some(l) if !self.sample_merged && self.active_is_pixel() => SampleSource::Layer(l),
+                    _ => SampleSource::Merged,
+                };
+                self.run(&GrowSelection {
+                    tolerance: self.tolerance,
+                    contiguous: id == "sel-grow",
+                    sample,
+                });
+            }
+            "fill-dialog" | "content-aware" => {
+                // Content-aware needs something to fill; the dialog
+                // offers it whenever there is a selection.
+                let aware = self.editor.doc().selection.is_some();
+                let margin = self.content_aware_margin();
+                self.dialog = Some(Dialog::Fill(aware, margin, 0));
+            }
             filter if filter.starts_with("filter-") => {
                 match filter_presets().into_iter().find(|(_, f)| filter_id(f) == filter) {
                     Some((_, f)) => self.dialog = Some(Dialog::Filter(f)),
@@ -641,17 +685,17 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 64); // + zoom in, zoom out, history strip
+        assert_eq!(n, 72); // + select modify ×4, grow, similar, fill, content-aware fill
     }
 
     #[test]
     fn every_filter_preset_has_its_own_dialog_id() {
         let mut ids: Vec<&str> = filter_presets().iter().map(|(_, f)| filter_id(f)).collect();
-        assert_eq!(ids.len(), 7);
+        assert_eq!(ids.len(), 13);
         assert!(ids.iter().all(|id| id.starts_with("filter-")));
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), 7, "two filters share a dialog id");
+        assert_eq!(ids.len(), 13, "two filters share a dialog id");
     }
 
     #[test]
