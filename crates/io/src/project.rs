@@ -92,7 +92,23 @@ enum ContentRecord {
 }
 
 /// Write a document to `path`, replacing any existing file.
+///
+/// The archive is written to a sibling temporary file and renamed into
+/// place once it is complete and flushed, so a failure partway through
+/// (disk full, say) never destroys an existing project.
 pub fn save(path: impl AsRef<Path>, doc: &Document) -> Result<(), ProjectError> {
+    let path = path.as_ref();
+    let mut tmp_name = path.as_os_str().to_owned();
+    tmp_name.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp_name);
+    let result = write_archive(&tmp, doc).and_then(|()| Ok(std::fs::rename(&tmp, path)?));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+fn write_archive(path: &Path, doc: &Document) -> Result<(), ProjectError> {
     let file = File::create(path)?;
     let mut zip = ZipWriter::new(BufWriter::new(file));
     let deflate = FileOptions::default().compression_method(CompressionMethod::Deflated);
@@ -112,7 +128,9 @@ pub fn save(path: impl AsRef<Path>, doc: &Document) -> Result<(), ProjectError> 
     };
     zip.start_file("manifest.json", stored)?;
     zip.write_all(&serde_json::to_vec_pretty(&manifest)?)?;
-    zip.finish()?;
+    let mut writer = zip.finish()?;
+    writer.flush()?;
+    writer.into_inner().map_err(|e| e.into_error())?.sync_all()?;
     Ok(())
 }
 
@@ -341,6 +359,33 @@ mod tests {
         let dir = std::env::temp_dir().join("nge-project-test");
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(name)
+    }
+
+    #[test]
+    fn failed_save_leaves_the_existing_project_intact() {
+        let path = temp("atomic.nge");
+        let mut doc = Document::new(50, 40);
+        doc.add_pixel_layer("keep me");
+        save(&path, &doc).unwrap();
+
+        // A save that cannot complete (the temp file cannot be created
+        // because the target sits in a directory that no longer exists)
+        // must error without touching the existing file.
+        let gone = temp("no-such-dir").join("x.nge");
+        assert!(save(&gone, &doc).is_err());
+
+        // Overwriting works, is loadable afterwards, and leaves no temp file.
+        let mut doc2 = Document::new(60, 60);
+        doc2.add_pixel_layer("second");
+        save(&path, &doc2).unwrap();
+        let back = load(&path).unwrap();
+        assert_eq!((back.width, back.height), (60, 60));
+        let mut tmp_name = path.as_os_str().to_owned();
+        tmp_name.push(".tmp");
+        assert!(
+            !std::path::PathBuf::from(tmp_name).exists(),
+            "temp file cleaned up"
+        );
     }
 
     #[test]
