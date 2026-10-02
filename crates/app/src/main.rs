@@ -31,6 +31,7 @@ mod crop;
 mod debug;
 mod demo;
 mod dialogs;
+mod export_as;
 mod guides;
 mod histogram;
 mod history;
@@ -42,10 +43,12 @@ mod options_bar;
 mod palette;
 mod pen;
 mod properties;
+mod quick_select_tool;
 mod retouch_ui;
 #[cfg(test)]
 mod select_fill_tests;
 mod session;
+mod smart_contents;
 mod start;
 mod status;
 mod text_ui;
@@ -264,6 +267,16 @@ struct App {
     text_align: TextAlign,
     /// "New text" pressed: the next Text-tool click starts a new layer.
     text_new_armed: bool,
+    /// Quick Selection (the Wand tool's sibling mode) and its stroke.
+    quick: quick_select_tool::QuickSelectState,
+    /// Identifies the live document across tab switches (contents tabs
+    /// save back to their parent by key).
+    doc_key: u64,
+    next_doc_key: u64,
+    /// Set in a smart object's contents tab: Save writes back there.
+    smart_link: Option<smart_contents::SmartLink>,
+    /// File ▸ Export ▸ Export As…, while open (it replaces the editor UI).
+    export_as: Option<Box<export_as::ExportAsState>>,
     /// Filter > Liquify's workspace, while open (it replaces the editor UI).
     liquify: Option<Box<liquify::LiquifyState>>,
     /// The Camera Raw develop workspace, while a RAW file is being opened.
@@ -373,6 +386,8 @@ struct App {
 /// A document parked in an inactive tab: its editor plus the per-document
 /// state that would otherwise live in the `App` fields.
 struct DocTab {
+    doc_key: u64,
+    smart_link: Option<smart_contents::SmartLink>,
     editor: Editor,
     path: Option<PathBuf>,
     saved_rev: usize,
@@ -439,6 +454,11 @@ impl App {
             text_align: TextAlign::Left,
             text_new_armed: false,
             liquify: None,
+            doc_key: 0,
+            next_doc_key: 0,
+            smart_link: None,
+            export_as: None,
+            quick: Default::default(),
             camera_raw: None,
             clone_source: None,
             clone_picking: true,
@@ -635,6 +655,8 @@ impl App {
     /// Replace the live tab's document (startup, crash recovery).
     fn set_doc(&mut self, editor: Editor, path: Option<PathBuf>) {
         self.no_doc = false;
+        self.doc_key = self.alloc_doc_key();
+        self.smart_link = None;
         self.editor = editor;
         self.prefs.apply(&mut self.editor);
         self.path = path;
@@ -652,6 +674,8 @@ impl App {
     /// Move the live document's state out into a parked tab.
     fn park_live(&mut self) -> DocTab {
         DocTab {
+            doc_key: self.doc_key,
+            smart_link: self.smart_link.take(),
             editor: std::mem::replace(&mut self.editor, Editor::new(Document::new(1, 1))),
             path: self.path.take(),
             saved_rev: self.saved_rev,
@@ -665,6 +689,8 @@ impl App {
 
     /// Make a parked tab the live document, restoring its view.
     fn load_tab(&mut self, t: DocTab) {
+        self.doc_key = t.doc_key;
+        self.smart_link = t.smart_link;
         self.editor = t.editor;
         self.path = t.path;
         self.saved_rev = t.saved_rev;
@@ -1165,15 +1191,28 @@ impl App {
             self.bg_rgb = [1.0; 3];
         }
         if let Some(t) = tool {
+            // Shift+W switches between the Magic Wand and Quick Selection.
+            if t == Tool::Wand && ctx.input(|i| i.modifiers.shift) {
+                self.quick.on = !self.quick.on;
+            }
             // Shift+J / Shift+E step through the Heal and Eraser modes.
             let shift = ctx.input(|i| i.modifiers.shift);
             self.select_tool_key(t, shift);
         }
+        let quick = self.tool == Tool::Wand && self.quick.on;
         if bigger {
-            self.brush.radius = (self.brush.radius * 1.25).min(200.0);
+            if quick {
+                self.quick.radius = (self.quick.radius * 1.25).min(300.0);
+            } else {
+                self.brush.radius = (self.brush.radius * 1.25).min(200.0);
+            }
         }
         if smaller {
-            self.brush.radius = (self.brush.radius / 1.25).max(1.0);
+            if quick {
+                self.quick.radius = (self.quick.radius / 1.25).max(1.0);
+            } else {
+                self.brush.radius = (self.brush.radius / 1.25).max(1.0);
+            }
         }
         if fit {
             self.view_cmd = Some(ViewCmd::Fit);
@@ -1300,6 +1339,11 @@ impl App {
         }
         if self.camera_raw.is_some() {
             self.camera_raw_ui(ctx);
+            self.debug_screenshot(ctx);
+            return;
+        }
+        if self.export_as.is_some() {
+            self.export_as_ui(ctx);
             self.debug_screenshot(ctx);
             return;
         }
@@ -1781,6 +1825,14 @@ pub(crate) mod a11y_tests {
             ("Colour range", Dialog::ColorRange(25.0, false)),
             ("New guide", Dialog::NewGuide(true, 32.0)),
             ("About", Dialog::About),
+            ("Save selection", Dialog::SaveSelection("Sky".into())),
+            ("Trim", Dialog::Trim(true)),
+            ("Keyboard shortcuts", Dialog::Shortcuts),
+            ("Rotate canvas", Dialog::RotateBy(15.0, true)),
+            (
+                "Load selection",
+                Dialog::LoadSelection(0, CombineOp::Replace, false),
+            ),
             ("Expand selection", Dialog::SelectEdge(EdgeOp::Expand(4.0), false)),
             ("Border selection", Dialog::SelectEdge(EdgeOp::Border(8.0), false)),
             ("Content-aware fill", Dialog::Fill(true, 64.0, 0)),

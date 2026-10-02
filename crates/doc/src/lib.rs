@@ -77,6 +77,7 @@ impl FromStr for BlendMode {
 }
 
 pub mod adjust;
+pub mod channels;
 pub mod fill;
 pub mod gradient;
 pub mod guides;
@@ -85,6 +86,7 @@ pub mod selection;
 pub mod selection_ops;
 
 pub use adjust::{Adjustment, CompiledAdjustment, LevelsChannel};
+pub use channels::SavedSelection;
 pub use fill::{Fill, FillLayer, GradientStyle};
 pub use gradient::{Gradient, GradientStop};
 pub use guides::{Guide, Orientation};
@@ -753,6 +755,9 @@ pub struct Document {
     pub float_mode: bool,
     /// Ruler guides; covered by undo, saved with projects and PSDs.
     pub guides: Vec<Guide>,
+    /// Saved selections (alpha channels); covered by undo, saved with
+    /// projects.
+    pub saved_selections: Vec<SavedSelection>,
     /// Bottom-to-top.
     layers: Vec<Layer>,
     next_id: LayerId,
@@ -851,6 +856,7 @@ impl Document {
             saved_paths: Vec::new(),
             float_mode: false,
             guides: Vec::new(),
+            saved_selections: Vec::new(),
             layers: Vec::new(),
             next_id: 1,
         }
@@ -866,6 +872,7 @@ impl Document {
             saved_paths: Vec::new(),
             float_mode: false,
             guides: Vec::new(),
+            saved_selections: Vec::new(),
             layers,
             next_id,
         }

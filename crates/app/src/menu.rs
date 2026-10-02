@@ -369,6 +369,7 @@ impl App {
     /// Every export format, grouped by what survives: File ▸ Export and
     /// the Export button both show this list.
     fn export_items(&mut self, ui: &mut egui::Ui) {
+        self.act(ui, "Export As...", "export-as");
         menu_heading(ui, "FLATTENED IMAGE");
         self.act(ui, "PNG...", "export-png");
         self.act(ui, "JPEG...", "export-jpeg");
@@ -410,10 +411,13 @@ impl App {
         self.act(ui, "Image size...", "image-size");
         self.act(ui, "Canvas size...", "canvas-size");
         self.act(ui, "Crop to selection", "crop");
+        self.act(ui, "Trim...", "trim");
+        self.act(ui, "Reveal all", "reveal-all");
         menu_separator(ui);
         self.act(ui, "Rotate 90° clockwise", "rot-cw");
         self.act(ui, "Rotate 90° counter-clockwise", "rot-ccw");
         self.act(ui, "Rotate 180°", "rot-180");
+        self.act(ui, "Rotate by angle...", "rot-angle");
         self.act(ui, "Flip image horizontal", "img-flip-h");
         self.act(ui, "Flip image vertical", "img-flip-v");
         menu_separator(ui);
@@ -450,6 +454,9 @@ impl App {
         let feather = format!("Feather {:.0} px", self.feather);
         self.act(ui, &feather, "feather");
         self.act(ui, "Layer mask from selection", "mask-from-sel");
+        menu_separator(ui);
+        self.act(ui, "Save selection...", "save-selection");
+        self.act(ui, "Load selection...", "load-selection");
     }
 
     fn layer_menu(&mut self, ui: &mut egui::Ui) {
@@ -528,6 +535,8 @@ impl App {
         }
         layer_actions::column_separator(ui);
         self.act(ui, "Convert to smart object", "smart-object");
+        self.act(ui, "Edit smart object contents", "smart-edit");
+        self.act(ui, "Replace smart object contents...", "smart-replace");
         self.act(ui, "Rasterize", "rasterize");
     }
 
@@ -622,6 +631,7 @@ impl App {
 
     fn help_menu(&mut self, ui: &mut egui::Ui) {
         self.act(ui, "Search commands...", "palette");
+        self.act(ui, "Keyboard shortcuts", "shortcuts");
         menu_separator(ui);
         self.act(ui, "About Lumenply", "about");
     }

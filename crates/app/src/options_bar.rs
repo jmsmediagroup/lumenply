@@ -191,10 +191,15 @@ impl App {
                         Tool::Eyedropper => {
                             hint_label(ui, tier, self.tool);
                         }
+                        Tool::Wand if self.quick.on => {
+                            self.wand_mode_switch(ui);
+                            self.quick_select_bar(ui);
+                        }
                         Tool::Bucket | Tool::Wand => {
                             // Selection tools lead with how the selection
                             // combines, as the marquees and lassos do.
                             if self.tool == Tool::Wand {
+                                self.wand_mode_switch(ui);
                                 select_ops(ui, &mut self.select_op);
                                 ui.separator();
                             }
@@ -694,7 +699,7 @@ pub(crate) fn bar_slider(
 }
 
 /// New / Add / Subtract / Intersect for the selection tools.
-fn select_ops(ui: &mut egui::Ui, op: &mut CombineOp) {
+pub(crate) fn select_ops(ui: &mut egui::Ui, op: &mut CombineOp) {
     segmented(
         ui,
         op,

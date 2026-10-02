@@ -7,6 +7,8 @@
 //! CLI behave identically.
 
 pub mod align;
+pub mod canvas_ops;
+pub mod channels;
 pub mod commands;
 mod content_aware;
 pub mod crop;
@@ -21,6 +23,7 @@ pub mod quick_select;
 mod retouch;
 mod retouch_brush;
 mod select_ops;
+pub mod smart_contents;
 pub mod snap;
 
 use lumenply_doc::{Document, LayerId};

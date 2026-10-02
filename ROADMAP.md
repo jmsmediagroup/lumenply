@@ -143,6 +143,11 @@ None of these could be tested in the container.
       (render::develop, hue-preserving tone on perceptual luminance, local
       highlights/shadows from a blurred log-luminance base). Still open:
       re-opening the develop later (a smart "Camera Raw filter" layer)
+- [x] Export As (File ▸ Export, palette): PNG / JPEG / lossless WebP, quality,
+      transparency (or onto white), output size in px or % with Lanczos-3
+      resampling in linear light (render::resample), a preview of the encoded
+      result (JPEG decoded back, so artefacts show) and its real file size,
+      encoded on a worker thread
 - [ ] AVIF/HEIF
 - [~] PSD: 16-bit import (raw, RLE and ZIP ± prediction channels) and
       export (raw channels; Export menu), full precision both ways and
@@ -200,7 +205,11 @@ None of these could be tested in the container.
       repeated transforms never degrade. Convert/Rasterize in the layer
       context menu + palette, "Smart" chip, saved in .lumen (cache
       rebuilds on load), PSD/ORA export as pixels with a warning.
-      Still open: embedded multi-layer documents ("edit contents")
+      Edit contents opens the source in its own tab and Save there writes it
+      back (one "Update smart object" step in the original, transform kept);
+      Replace contents loads an image file in place (Layer menu, palette,
+      Properties). Still open: keeping the contents' layers (a nested
+      multi-layer document) instead of flattening on save
 - [x] Clipping masks (clip chains composite as a unit gated by the base's alpha
       and carrying its blend/opacity; context menu + palette; PSD clipping byte
       round-trips; GPU path falls back to CPU for clipped documents)
@@ -225,9 +234,11 @@ None of these could be tested in the container.
 - [x] Liquify (Filter menu, Shift+Cmd+X): modal workspace with Forward warp,
       Reconstruct, Smooth, Twirl, Pucker, Bloat; advected displacement field,
       per-stroke undo, mesh view; bakes 12 MP in ~20 ms as one undo step
-- [~] Quick Selection: engine done (core::quick_select — geodesic segmentation
-      with a stroke colour model, colour-line edge refinement, ~0.2 s per stroke);
-      the tool in the rail is still to wire up
+- [x] Quick Selection (the Wand's sibling: Shift+W or the Wand bar's switch):
+      paint and the selection grows to edges — geodesic segmentation with a
+      stroke colour model and colour-line edge refinement (core::quick_select,
+      ~0.2 s per stroke); New turns into Add after the first stroke, Alt
+      subtracts, [ ] resize, one undo step per stroke
 - [x] Crop tool (C): whole-canvas frame (or the selection), 8 handles, move,
       straighten by dragging outside (fits inside the canvas), ratio presets +
       custom W:H + swap, Delete cropped pixels (off by default), checkerboard
@@ -260,8 +271,20 @@ None of these could be tested in the container.
 - [x] Gradient stop editor (click to add, drag to move, drag off to remove,
       per-stop colour picker and opacity, presets), shared by Gradient Map and
       gradient fills
-- [ ] Merge selected layers (Cmd+E with a multi-selection)
-- [ ] Lock-aware Properties transform controls
+- [x] Saved selections (Photoshop's alpha channels): Select ▸ Save selection /
+      Load selection (New/Add/Subtract/Intersect, Invert, Delete), undoable,
+      saved in .lumen (channels/ tiles) and PSD (named alpha channels after
+      RGB + transparency, resources 1006/1045; psd-tools-verified both
+      depths). Still open: a Channels panel
+- [x] Image ▸ Trim (transparent or top-left-colour borders), Reveal all (grow
+      the canvas to every layer's pixels, e.g. after a non-destructive crop),
+      Rotate by angle (canvas grows to fit, transparent corners) — all through
+      CropCanvas, so masks, guides, paths and smart objects follow. Text
+      layers stay upright when the canvas turns (as in a straightened crop)
+- [x] Merge selected layers (Cmd+E with several layers selected, "Merge
+      layers"): the selected visible siblings composite into the topmost
+      one's slot and name; hidden ones stay; picture unchanged (tested)
+- [x] Lock-aware Properties transform controls (dimmed with the reason)
 - [ ] Shape layers (vector shape + fill), pattern fills (PSD imports them as pixels)
 - [~] Text: searchable font picker (system fonts via fontdb, .ttc face index
       honoured), bold/italic/bold-italic (real faces, else synthetic oblique

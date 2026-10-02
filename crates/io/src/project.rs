@@ -7,6 +7,7 @@
 //! manifest.json                   canvas size, layer tree, layer properties
 //! tiles/<layer id>/<x>_<y>.rgba   one tile: 256×256 premultiplied linear f32 RGBA, little-endian
 //! masks/<layer id>/<x>_<y>.a      one mask tile: 256×256 f32 coverage, little-endian
+//! channels/<n>/<x>_<y>.a          one tile of saved selection n, as mask tiles
 //! ```
 //!
 //! Tiles are deflate-compressed by the zip layer. Only allocated tiles are
@@ -65,7 +66,17 @@ struct Manifest {
     float_mode: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     guides: Vec<lumenply_doc::Guide>,
+    /// Saved selections (Select ▸ Save Selection), tiles under channels/.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    channels: Vec<ChannelRecord>,
     layers: Vec<LayerRecord>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ChannelRecord {
+    name: String,
+    default: f32,
+    tiles: Vec<(i32, i32)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -156,6 +167,21 @@ fn write_archive(path: &Path, doc: &Document) -> Result<(), ProjectError> {
     for l in doc.layers() {
         layers.push(write_layer(&mut zip, l, deflate)?);
     }
+    let mut channels = Vec::new();
+    for (n, ch) in doc.saved_selections.iter().enumerate() {
+        let mut tiles = Vec::new();
+        for c in sorted(&ch.mask.tiles) {
+            let tile = ch.mask.tiles.tile(c).expect("coord came from the store");
+            zip.start_file(format!("channels/{n}/{}_{}.a", c.x, c.y), deflate)?;
+            zip.write_all(&mask_bytes(tile))?;
+            tiles.push((c.x, c.y));
+        }
+        channels.push(ChannelRecord {
+            name: ch.name.clone(),
+            default: ch.mask.default,
+            tiles,
+        });
+    }
     let manifest = Manifest {
         format: "lumenply".into(),
         version: FORMAT_VERSION,
@@ -166,6 +192,7 @@ fn write_archive(path: &Path, doc: &Document) -> Result<(), ProjectError> {
         saved_paths: doc.saved_paths.clone(),
         float_mode: doc.float_mode,
         guides: doc.guides.clone(),
+        channels,
         layers,
     };
     zip.start_file("manifest.json", stored)?;
@@ -319,6 +346,22 @@ pub fn load(path: impl AsRef<Path>) -> Result<Document, ProjectError> {
         .filter(|g| g.pos.is_finite())
         .copied()
         .collect();
+    for (n, ch) in manifest.channels.iter().enumerate() {
+        let mut tiles = TileStore::new();
+        for &(x, y) in &ch.tiles {
+            let c = checked_coord(x, y)?;
+            let bytes = read_entry(&mut zip, &format!("channels/{n}/{x}_{y}.a"))?;
+            tiles.insert(c, Arc::new(mask_from_bytes(&bytes)?));
+        }
+        doc.saved_selections.push(lumenply_doc::SavedSelection {
+            name: ch.name.clone(),
+            mask: Mask {
+                tiles,
+                default: ch.default.clamp(0.0, 1.0),
+                enabled: true,
+            },
+        });
+    }
     doc.for_each_layer(|l| {
         max_id = max_id.max(l.id);
         if !seen.insert(l.id) {
@@ -758,6 +801,39 @@ mod tests {
         // a file from before locks looks like.
         assert_eq!(back.layer(b).unwrap().locks, lumenply_doc::LayerLocks::NONE);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn saved_selections_survive_the_file() {
+        let mut doc = Document::new(300, 200);
+        doc.add_pixel_layer("p");
+        let mut sel = lumenply_doc::Selection::rect(lumenply_tiles::Rect::new(20, 30, 260, 100));
+        sel.feather(4.0);
+        let mask = sel.to_mask();
+        doc.saved_selections = vec![
+            lumenply_doc::SavedSelection {
+                name: "Sky".into(),
+                mask: mask.clone(),
+            },
+            lumenply_doc::SavedSelection {
+                name: "All".into(),
+                mask: Mask::reveal_all(),
+            },
+        ];
+        let path = temp("channels.lumen");
+        save(&path, &doc).unwrap();
+        let back = load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(back.saved_selections.len(), 2);
+        assert_eq!(back.saved_selections[0].name, "Sky");
+        for (x, y) in [(20, 30), (22, 80), (150, 60), (279, 129), (10, 10)] {
+            assert_eq!(
+                back.saved_selections[0].mask.value(x, y),
+                mask.value(x, y),
+                "({x}, {y})"
+            );
+        }
+        assert_eq!(back.saved_selections[1].mask.value(5, 5), 1.0);
     }
 
     #[test]

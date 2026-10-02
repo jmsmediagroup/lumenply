@@ -341,6 +341,73 @@ impl Command for MergeDown {
     }
 }
 
+// ---- merge selected ---------------------------------------------------------------------
+
+/// Why merging the selected layers can't run, if it can't.
+pub fn merge_selected_block(doc: &Document, ids: &[LayerId]) -> Option<&'static str> {
+    if ids.len() < 2 {
+        return Some("Select two or more layers");
+    }
+    if ids.iter().any(|&i| doc.layer(i).is_none()) {
+        return Some("A selected layer no longer exists");
+    }
+    let parent = doc.parent_of(ids[0]);
+    if ids.iter().any(|&i| doc.parent_of(i) != parent) {
+        return Some("Select layers in the same group to merge them");
+    }
+    let visible = ids
+        .iter()
+        .filter(|&&i| doc.layer(i).is_some_and(|l| l.visible))
+        .count();
+    (visible < 2).then_some("Select two or more visible layers")
+}
+
+/// Photoshop's Merge Layers (Ctrl/Cmd+E with several layers selected):
+/// the selected visible layers composite, in stack order, into one pixel
+/// layer that takes the topmost one's place, id and name. Adjustments
+/// among them apply to the selected layers below them only. Hidden
+/// selected layers are left as they are.
+pub struct MergeSelected {
+    pub layers: Vec<LayerId>,
+}
+
+impl Command for MergeSelected {
+    fn label(&self) -> String {
+        "Merge layers".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        if let Some(why) = merge_selected_block(doc, &self.layers) {
+            return Err(EditError::Invalid(why.into()));
+        }
+        let canvas = doc.canvas();
+        let list = doc
+            .siblings_mut(self.layers[0])
+            .ok_or(EditError::NoLayer(self.layers[0]))?;
+        let chosen: Vec<usize> = (0..list.len())
+            .filter(|&i| list[i].visible && self.layers.contains(&list[i].id))
+            .collect();
+        let mut unit: Vec<Layer> = chosen.iter().map(|&i| list[i].clone()).collect();
+        // The lowest composites on its own: a clip to an unselected base
+        // has nothing to clip to inside the merge.
+        unit[0].clip = false;
+        let store = flatten(&unit, render_area(&unit, canvas), canvas);
+        let top = *chosen.last().expect("two or more");
+        let mut merged = pixel_like(&list[top], store);
+        merged.clip = false;
+        let merged_id = merged.id;
+        let old = std::mem::take(list);
+        for (i, l) in old.into_iter().enumerate() {
+            if l.id == merged_id {
+                list.push(merged.clone());
+            } else if !chosen.contains(&i) {
+                list.push(l);
+            }
+        }
+        Ok(())
+    }
+}
+
 // ---- merge visible / stamp visible / flatten --------------------------------------------
 
 /// Why Merge Visible can't run, if it can't.
@@ -504,6 +571,77 @@ mod tests {
             && (p.g - want[1]).abs() < 1e-3
             && (p.b - want[2]).abs() < 1e-3
             && (p.a - want[3]).abs() < 1e-3
+    }
+
+    #[test]
+    fn merge_selected_composites_just_the_chosen_layers() {
+        // Bottom to top: grey base, red (selected), blue unselected,
+        // green 50% (selected). Merging red + green leaves base and blue.
+        let mut ed = Editor::new(Document::new(8, 8));
+        let base = add(&mut ed, "base", solid(8, 8, [0.5, 0.5, 0.5, 1.0]), 0, 0);
+        let red = add(&mut ed, "red", solid(4, 4, [1.0, 0.0, 0.0, 1.0]), 0, 0);
+        let blue = add(&mut ed, "blue", solid(2, 2, [0.0, 0.0, 1.0, 1.0]), 6, 6);
+        let green = add(&mut ed, "green", solid(4, 4, [0.0, 1.0, 0.0, 1.0]), 2, 2);
+        ed.execute(&SetOpacity {
+            layer: green,
+            opacity: 0.5,
+        })
+        .unwrap();
+        let before = lumenply_render::composite_raster(ed.doc());
+        ed.execute(&MergeSelected {
+            layers: vec![red, green],
+        })
+        .unwrap();
+        let ids: Vec<_> = ed.doc().layers().iter().map(|l| l.id).collect();
+        assert_eq!(
+            ids,
+            vec![base, blue, green],
+            "merged into the topmost's slot and id"
+        );
+        let merged = ed.doc().layer(green).unwrap();
+        assert_eq!(merged.name, "green");
+        assert!(merged.pixels().is_some());
+        assert!(
+            (merged.opacity - 1.0).abs() < 1e-6,
+            "opacity baked into the pixels"
+        );
+        // Red under 50% green, alone: (0.5, 0.5, 0, 1) where they overlap.
+        assert!(close(
+            merged.pixels().unwrap().get_pixel(3, 3),
+            [0.5, 0.5, 0.0, 1.0]
+        ));
+        // The picture didn't change.
+        let after = lumenply_render::composite_raster(ed.doc());
+        assert!(max_diff(&before, &after) < 2e-4);
+    }
+
+    #[test]
+    fn merge_selected_needs_two_visible_siblings() {
+        let mut ed = Editor::new(Document::new(8, 8));
+        let a = add(&mut ed, "a", solid(4, 4, [1.0, 0.0, 0.0, 1.0]), 0, 0);
+        let b = add(&mut ed, "b", solid(4, 4, [0.0, 1.0, 0.0, 1.0]), 0, 0);
+        assert_eq!(
+            merge_selected_block(ed.doc(), &[a]),
+            Some("Select two or more layers")
+        );
+        ed.execute(&SetVisible {
+            layer: b,
+            visible: false,
+        })
+        .unwrap();
+        assert_eq!(
+            merge_selected_block(ed.doc(), &[a, b]),
+            Some("Select two or more visible layers")
+        );
+        ed.execute(&GroupLayers {
+            layers: vec![b],
+            name: "g".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            merge_selected_block(ed.doc(), &[a, b]),
+            Some("Select layers in the same group to merge them")
+        );
     }
 
     #[test]
