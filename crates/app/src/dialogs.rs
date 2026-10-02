@@ -26,6 +26,10 @@ pub(crate) enum Dialog {
     Fill(bool, f32, u8),
     /// View ▸ New guide: (vertical, position in pixels).
     NewGuide(bool, f32),
+    /// Select ▸ Save Selection: the name to keep it under.
+    SaveSelection(String),
+    /// Select ▸ Load Selection: (saved selection, how it combines, invert).
+    LoadSelection(usize, CombineOp, bool),
 }
 
 /// Extensions the open dialogs offer, by kind. The first of each list is
@@ -424,6 +428,8 @@ impl App {
             Dialog::Preferences(..) => "Preferences",
             Dialog::ColorRange(..) => "Colour range",
             Dialog::NewGuide(..) => "New guide",
+            Dialog::SaveSelection(..) => "Save selection",
+            Dialog::LoadSelection(..) => "Load selection",
             Dialog::About => "About",
             Dialog::Filter(f) => f.name(),
             Dialog::CanvasSize(..) => "Canvas size",
@@ -439,6 +445,8 @@ impl App {
             Dialog::Preferences(..) => "Save",
             Dialog::ColorRange(..) => "Select",
             Dialog::NewGuide(..) => "Add",
+            Dialog::SaveSelection(..) => "Save",
+            Dialog::LoadSelection(..) => "Load",
             Dialog::Filter(_) | Dialog::CanvasSize(..) | Dialog::ImageSize(..) => "Apply",
             Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) | Dialog::Recover | Dialog::About => "",
         };
@@ -583,6 +591,52 @@ impl App {
                                     keep = false;
                                 }
                             });
+                        }
+                        Dialog::SaveSelection(name) => {
+                            ui.horizontal(|ui| {
+                                row_label(ui, "Name", LABEL_W);
+                                let r = ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY));
+                                a11y_name(&r, "Selection name");
+                            });
+                            note(ui, "Kept with the document; Select > Load selection brings it back.");
+                        }
+                        Dialog::LoadSelection(index, op, invert) => {
+                            let names: Vec<String> =
+                                self.editor.doc().saved_selections.iter().map(|s| s.name.clone()).collect();
+                            *index = (*index).min(names.len().saturating_sub(1));
+                            let mut delete = false;
+                            ui.horizontal(|ui| {
+                                row_label(ui, "Selection", LABEL_W);
+                                let current = names.get(*index).cloned().unwrap_or_default();
+                                let r = egui::ComboBox::from_id_salt("load-selection")
+                                    .selected_text(current)
+                                    .width(150.0)
+                                    .show_ui(ui, |ui| {
+                                        popup_style(ui);
+                                        for (i, n) in names.iter().enumerate() {
+                                            ui.selectable_value(index, i, n);
+                                        }
+                                    });
+                                a11y_name(&r.response, "Saved selection");
+                                if ui
+                                    .add(egui::Button::new(RichText::new("Delete").small().color(MUTED)).frame(false))
+                                    .on_hover_text("Forget this saved selection")
+                                    .clicked()
+                                {
+                                    delete = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                row_label(ui, "Operation", LABEL_W);
+                                crate::options_bar::select_ops(ui, op);
+                            });
+                            check(ui, invert, "Invert");
+                            if delete && !names.is_empty() {
+                                self.run(&lumenply_core::channels::DeleteSavedSelection { index: *index });
+                                if self.editor.doc().saved_selections.is_empty() {
+                                    keep = false;
+                                }
+                            }
                         }
                         Dialog::NewGuide(vertical, pos) => {
                             ui.horizontal(|ui| {
@@ -1047,6 +1101,16 @@ impl App {
                 Dialog::SelectEdge(..) => {}
                 Dialog::Fill(..) => self.fill_active(),
                 Dialog::ColorRange(..) => {}
+                Dialog::SaveSelection(name) => {
+                    self.run(&lumenply_core::channels::SaveSelection { name: name.clone() })
+                }
+                Dialog::LoadSelection(index, op, invert) => {
+                    self.run(&lumenply_core::channels::LoadSelection {
+                        index: *index,
+                        op: *op,
+                        invert: *invert,
+                    })
+                }
                 Dialog::NewGuide(vertical, pos) => {
                     let guide = if *vertical {
                         lumenply_doc::Guide::vertical(*pos)

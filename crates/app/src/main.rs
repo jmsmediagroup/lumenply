@@ -1792,6 +1792,11 @@ pub(crate) mod a11y_tests {
             ("Colour range", Dialog::ColorRange(25.0, false)),
             ("New guide", Dialog::NewGuide(true, 32.0)),
             ("About", Dialog::About),
+            ("Save selection", Dialog::SaveSelection("Sky".into())),
+            (
+                "Load selection",
+                Dialog::LoadSelection(0, CombineOp::Replace, false),
+            ),
             ("Expand selection", Dialog::SelectEdge(EdgeOp::Expand(4.0), false)),
             ("Border selection", Dialog::SelectEdge(EdgeOp::Border(8.0), false)),
             ("Content-aware fill", Dialog::Fill(true, 64.0, 0)),

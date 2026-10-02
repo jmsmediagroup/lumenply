@@ -119,6 +119,8 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Liquify...", "liquify"),
     ("Export As...", "export-as"),
     ("Edit smart object contents", "smart-edit"),
+    ("Save selection...", "save-selection"),
+    ("Load selection...", "load-selection"),
     ("Replace smart object contents...", "smart-replace"),
     ("Duplicate layer", "duplicate-layer"),
     ("Merge down (group, clipping mask)", "merge-down"),
@@ -451,6 +453,8 @@ impl App {
             }
             "liquify" if !pixel => need_pixel,
             "smart-edit" | "smart-replace" if !smart => Some("Select a smart object first"),
+            "save-selection" if !selection => need_selection,
+            "load-selection" if doc.saved_selections.is_empty() => Some("No saved selections yet"),
             id if id.starts_with("filter-") && !pixel => Some("Filters apply to a pixel layer"),
             "deselect" | "feather" if !selection => need_selection,
             "crop" => {
@@ -683,6 +687,11 @@ impl App {
             "liquify" => self.open_liquify(),
             "export-as" => self.open_export_as(),
             "smart-edit" => self.edit_smart_contents(),
+            "save-selection" => {
+                let n = self.editor.doc().saved_selections.len() + 1;
+                self.dialog = Some(Dialog::SaveSelection(format!("Selection {n}")));
+            }
+            "load-selection" => self.dialog = Some(Dialog::LoadSelection(0, CombineOp::Replace, false)),
             "smart-replace" => self.pick_replace_smart_contents(),
             "zoom-in" => self.view_cmd = Some(ViewCmd::ZoomIn),
             "zoom-out" => self.view_cmd = Some(ViewCmd::ZoomOut),
@@ -742,7 +751,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 106); // + smart object contents
+        assert_eq!(n, 108); // + save / load selection
     }
 
     #[test]

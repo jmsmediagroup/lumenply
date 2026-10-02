@@ -271,6 +271,10 @@ None of these could be tested in the container.
 - [x] Gradient stop editor (click to add, drag to move, drag off to remove,
       per-stop colour picker and opacity, presets), shared by Gradient Map and
       gradient fills
+- [x] Saved selections (Photoshop's alpha channels): Select ▸ Save selection /
+      Load selection (New/Add/Subtract/Intersect, Invert, Delete), undoable,
+      saved in .lumen (channels/ tiles). Still open: PSD alpha-channel round
+      trip, a Channels panel
 - [ ] Merge selected layers (Cmd+E with a multi-selection)
 - [ ] Lock-aware Properties transform controls
 - [ ] Shape layers (vector shape + fill), pattern fills (PSD imports them as pixels)

@@ -451,6 +451,9 @@ impl App {
         let feather = format!("Feather {:.0} px", self.feather);
         self.act(ui, &feather, "feather");
         self.act(ui, "Layer mask from selection", "mask-from-sel");
+        menu_separator(ui);
+        self.act(ui, "Save selection...", "save-selection");
+        self.act(ui, "Load selection...", "load-selection");
     }
 
     fn layer_menu(&mut self, ui: &mut egui::Ui) {
