@@ -9,6 +9,7 @@
 pub mod commands;
 pub mod demo;
 pub mod layer_ops;
+pub mod locks;
 
 use lumenply_doc::{Document, LayerId};
 
@@ -25,6 +26,20 @@ pub enum EditError {
 }
 
 pub type EditResult<T = ()> = Result<T, EditError>;
+
+/// How a command moves its target layer, so layer locks can judge it
+/// (see [`locks::enforce`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Motion {
+    /// Doesn't move the layer.
+    #[default]
+    None,
+    /// Shifts it by whole pixels: only a position lock refuses this.
+    Translate,
+    /// Scales, rotates, flips, distorts or warps it: position, pixel and
+    /// transparency locks all refuse this.
+    Reshape,
+}
 
 /// An undoable edit. Commands must be deterministic: the editor records only
 /// the resulting document, not the command itself.
@@ -44,6 +59,11 @@ pub trait Command {
     /// caches warm across consecutive edits to the same layer.
     fn target_layer(&self) -> Option<LayerId> {
         None
+    }
+    /// How this command moves [`Command::target_layer`]; layer locks use
+    /// it to tell a move from a pixel edit.
+    fn motion(&self) -> Motion {
+        Motion::None
     }
 }
 
@@ -208,6 +228,7 @@ impl Editor {
         if self.coalesce_key.as_deref() == Some(key) {
             let mut next = self.doc.clone();
             cmd.apply(&mut next)?;
+            locks::enforce(&self.doc, &mut next, cmd)?;
             compact_storage(&mut next);
             self.last_affected = cmd.affected(&self.doc);
             self.last_target = cmd.target_layer();
@@ -236,6 +257,7 @@ impl Editor {
     fn push_command(&mut self, cmd: &dyn Command) -> EditResult {
         let mut next = self.doc.clone();
         cmd.apply(&mut next)?;
+        locks::enforce(&self.doc, &mut next, cmd)?;
         compact_storage(&mut next);
         self.last_affected = cmd.affected(&self.doc);
         self.last_target = cmd.target_layer();

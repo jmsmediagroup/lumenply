@@ -83,6 +83,9 @@ struct LayerRecord {
     mask: Option<MaskRecord>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     collapsed: bool,
+    /// Missing in files from before layer locks: unlocked.
+    #[serde(default, skip_serializing_if = "lumenply_doc::LayerLocks::is_empty")]
+    locks: lumenply_doc::LayerLocks,
     #[serde(flatten)]
     content: ContentRecord,
 }
@@ -238,6 +241,7 @@ fn write_layer<W: Write + std::io::Seek>(
         effects: layer.effects.clone(),
         mask,
         collapsed: layer.collapsed,
+        locks: layer.locks,
         content,
     })
 }
@@ -405,6 +409,7 @@ fn read_layer<R: Read + std::io::Seek>(
     layer.effects = r.effects.clone();
     layer.mask = mask;
     layer.collapsed = r.collapsed;
+    layer.locks = r.locks;
     Ok(layer)
 }
 
@@ -715,5 +720,26 @@ mod tests {
             .unwrap();
         zip.finish().unwrap();
         assert!(matches!(load(&path), Err(ProjectError::TooNew(99))));
+    }
+
+    #[test]
+    fn layer_locks_survive_and_unlocked_layers_stay_unlocked() {
+        let mut doc = Document::new(16, 16);
+        let a = doc.add_pixel_layer("Locked");
+        let b = doc.add_pixel_layer("Free");
+        let locks = lumenply_doc::LayerLocks {
+            transparency: true,
+            position: true,
+            ..lumenply_doc::LayerLocks::NONE
+        };
+        doc.layer_mut(a).unwrap().locks = locks;
+        let path = temp("locks.lumen");
+        save(&path, &doc).unwrap();
+        let back = load(&path).unwrap();
+        assert_eq!(back.layer(a).unwrap().locks, locks);
+        // Unlocked layers write no "locks" key, which is also exactly what
+        // a file from before locks looks like.
+        assert_eq!(back.layer(b).unwrap().locks, lumenply_doc::LayerLocks::NONE);
+        let _ = std::fs::remove_file(&path);
     }
 }

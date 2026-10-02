@@ -7,7 +7,7 @@ use lumenply_doc::{
 };
 use lumenply_tiles::{Affine, Raster, Rect, Rgba, TileStore};
 
-use crate::{Command, EditError, EditResult};
+use crate::{Command, EditError, EditResult, Motion};
 
 /// Add an empty pixel layer (or one filled from a raster) on top of the stack.
 pub struct AddPixelLayer {
@@ -755,6 +755,10 @@ impl Command for MoveLayer {
         Some(self.layer)
     }
 
+    fn motion(&self) -> Motion {
+        Motion::Translate
+    }
+
     fn label(&self) -> String {
         "Move".into()
     }
@@ -791,6 +795,13 @@ impl TransformLayer {
 impl Command for TransformLayer {
     fn target_layer(&self) -> Option<LayerId> {
         Some(self.layer)
+    }
+
+    fn motion(&self) -> Motion {
+        match self.transform.integer_translation() {
+            Some(_) => Motion::Translate,
+            None => Motion::Reshape,
+        }
     }
 
     fn label(&self) -> String {
@@ -843,6 +854,10 @@ pub struct PerspectiveLayer {
 impl Command for PerspectiveLayer {
     fn target_layer(&self) -> Option<LayerId> {
         Some(self.layer)
+    }
+
+    fn motion(&self) -> Motion {
+        Motion::Reshape
     }
 
     fn label(&self) -> String {
@@ -914,6 +929,10 @@ impl Command for WarpLayer {
         Some(self.layer)
     }
 
+    fn motion(&self) -> Motion {
+        Motion::Reshape
+    }
+
     fn label(&self) -> String {
         "Warp".into()
     }
@@ -975,6 +994,10 @@ pub struct FlipLayer {
 impl Command for FlipLayer {
     fn target_layer(&self) -> Option<LayerId> {
         Some(self.layer)
+    }
+
+    fn motion(&self) -> Motion {
+        Motion::Reshape
     }
 
     fn label(&self) -> String {

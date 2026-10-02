@@ -120,6 +120,10 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Merge visible", "merge-visible"),
     ("Flatten image", "flatten"),
     ("Stamp visible to a new layer", "stamp-visible"),
+    ("Lock transparent pixels (toggle)", "lock-transparency"),
+    ("Lock image pixels (toggle)", "lock-pixels"),
+    ("Lock position (toggle)", "lock-position"),
+    ("Lock all (toggle)", "lock-all"),
 ];
 
 /// The id of the destructive filter dialog for a filter kind.
@@ -655,7 +659,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 69); // + duplicate, merge down / visible, flatten, stamp
+        assert_eq!(n, 73); // + four layer locks
     }
 
     #[test]

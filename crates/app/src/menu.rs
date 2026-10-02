@@ -324,7 +324,7 @@ impl App {
     }
 
     /// [`App::act`] for an on/off setting, checked while on.
-    fn act_check(&mut self, ui: &mut egui::Ui, label: &str, id: &str, on: bool) -> egui::Response {
+    pub(crate) fn act_check(&mut self, ui: &mut egui::Ui, label: &str, id: &str, on: bool) -> egui::Response {
         let ctx = ui.ctx().clone();
         let keys = self.action_keys(&ctx, id);
         let r = menu_check(ui, on, label, &keys);
@@ -470,6 +470,8 @@ impl App {
         self.act(ui, "Move down", "layer-down");
         menu_separator(ui);
         self.merge_menu_items(ui);
+        menu_separator(ui);
+        self.lock_menu(ui);
         menu_separator(ui);
         let mask = self
             .active_layer()
