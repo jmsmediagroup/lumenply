@@ -1911,6 +1911,8 @@ dependencies = [
  "nge-render",
  "nge-tiles",
  "rfd",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

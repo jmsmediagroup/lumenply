@@ -246,7 +246,7 @@ impl App {
 
     pub(crate) fn canvas(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(GROUND))
+            .frame(egui::Frame::none().fill(self.prefs.canvas_color()))
             .show(ctx, |ui| {
                 let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
                 let rect = resp.rect;

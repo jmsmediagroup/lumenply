@@ -10,6 +10,7 @@ pub(crate) enum Dialog {
     ConfirmClose,
     /// An autosave backup from a previous session was found at startup.
     Recover,
+    Preferences(session::Prefs),
 }
 
 impl App {
@@ -276,6 +277,7 @@ impl App {
             Dialog::New(..) => "New document",
             Dialog::ConfirmClose => "Unsaved changes",
             Dialog::Recover => "Recover autosaved document",
+            Dialog::Preferences(_) => "Preferences",
             Dialog::Filter(f) => f.name(),
             Dialog::CanvasSize(..) => "Canvas size",
             Dialog::ImageSize(..) => "Image size",
@@ -289,6 +291,67 @@ impl App {
             .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 match &mut d {
+                    Dialog::Preferences(p) => {
+                        let mut steps = p.undo_steps as f32;
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut steps, 1.0..=1000.0)
+                                    .integer()
+                                    .text("Undo steps"),
+                            )
+                            .changed()
+                        {
+                            p.undo_steps = steps as usize;
+                        }
+                        let mut mb = p.undo_memory_mb as f32;
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut mb, 64.0..=8192.0)
+                                    .logarithmic(true)
+                                    .integer()
+                                    .suffix(" MB")
+                                    .text("Undo memory"),
+                            )
+                            .changed()
+                        {
+                            p.undo_memory_mb = mb as usize;
+                        }
+                        let mut secs = p.autosave_secs as f32;
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut secs, 15.0..=600.0)
+                                    .integer()
+                                    .suffix(" s")
+                                    .text("Autosave every"),
+                            )
+                            .changed()
+                        {
+                            p.autosave_secs = secs as u64;
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("Canvas surround");
+                            for (name, c) in [
+                                ("Graphite", [0x14u8, 0x16, 0x19]),
+                                ("Black", [0x00, 0x00, 0x00]),
+                                ("Grey", [0x80, 0x80, 0x80]),
+                                ("Light", [0xD8, 0xD8, 0xD8]),
+                            ] {
+                                let on = p.canvas_bg == c;
+                                let (r, resp) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
+                                ui.painter().rect_filled(
+                                    r.shrink(2.0),
+                                    3.0,
+                                    Color32::from_rgb(c[0], c[1], c[2]),
+                                );
+                                if on {
+                                    ui.painter().rect_stroke(r, 4.0, Stroke::new(2.0, ACCENT));
+                                }
+                                if resp.on_hover_text(name).clicked() {
+                                    p.canvas_bg = c;
+                                }
+                            }
+                        });
+                    }
                     Dialog::Recover => {
                         ui.label("The previous session left an autosaved backup,");
                         ui.label("probably after a crash.");
@@ -490,6 +553,12 @@ impl App {
         if confirmed {
             match &d {
                 Dialog::ConfirmClose | Dialog::Recover => {}
+                Dialog::Preferences(p) => {
+                    self.prefs = p.clone();
+                    self.prefs.apply(&mut self.editor);
+                    self.prefs.save();
+                    self.status = "Preferences saved".into();
+                }
                 Dialog::ExportJpeg(p, q) => self.export_jpeg(p, *q),
                 Dialog::New(w, h) => self.set_doc(blank(*w, *h), None),
                 Dialog::Filter(f) => {

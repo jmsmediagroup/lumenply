@@ -74,6 +74,7 @@ impl App {
             m("Flip image vertical", "", "img-flip-v"),
             m("Crop to selection", "", "crop"),
             m("Auto contrast", "", "auto-contrast"),
+            m("Preferences...", "", "prefs"),
             m("Fit on screen", "0", "fit"),
             m("Actual pixels", "1", "actual"),
         ];
@@ -296,6 +297,7 @@ impl App {
                 }
             }
             "auto-contrast" => self.auto_contrast(),
+            "prefs" => self.dialog = Some(Dialog::Preferences(self.prefs.clone())),
             "fit" => self.view_cmd = Some(ViewCmd::Fit),
             "actual" => self.view_cmd = Some(ViewCmd::Actual),
             "filter-gauss" => self.dialog = Some(Dialog::Filter(Filter::GaussianBlur { radius: 8.0 })),

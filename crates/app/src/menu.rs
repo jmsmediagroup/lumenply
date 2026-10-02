@@ -279,6 +279,11 @@ impl App {
                         self.clear_active();
                         ui.close_menu();
                     }
+                    ui.separator();
+                    if ui.button("Preferences...").clicked() {
+                        self.dialog = Some(Dialog::Preferences(self.prefs.clone()));
+                        ui.close_menu();
+                    }
                 });
                 ui.menu_button("Image", |ui| {
                     let doc = self.editor.doc();

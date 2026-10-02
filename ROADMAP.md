@@ -144,7 +144,8 @@ None of these could be tested in the container.
 - [x] Unsaved-changes prompt on close
 - [ ] Docking panels (egui_dock); drag-to-reorder layers
 - [x] Layer context menu (rename, reorder, flip, mask, ungroup, delete)
-- [ ] Preferences: theme, canvas colour, undo limit, memory limit
+- [x] Preferences (Edit menu, persisted to ~/.nge/prefs.json): canvas surround
+      colour, undo step and memory caps, autosave interval
 - [x] Split `crates/app/src/main.rs` into modules (theme, tools, menu, options bar,
       canvas, layers, properties, history, status, dialogs, palette)
 - [ ] Accessibility (AccessKit labels), translations

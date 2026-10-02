@@ -151,6 +151,8 @@ struct App {
     recent: Vec<String>,
     /// Luminance histogram of the composite, updated on refresh.
     histogram: [u32; histogram::BINS],
+    /// User preferences (undo caps, canvas colour, autosave interval).
+    prefs: session::Prefs,
 }
 
 impl App {
@@ -254,9 +256,11 @@ impl App {
             last_autosave: std::time::Instant::now(),
             recent: session::load_recent(),
             histogram: [0; histogram::BINS],
+            prefs: session::Prefs::load(),
             filter_previewed: false,
             status,
         };
+        app.prefs.apply(&mut app.editor);
         app.select_top();
         if session::autosave_file().is_some_and(|p| p.exists()) {
             app.dialog = Some(Dialog::Recover);
@@ -357,6 +361,7 @@ impl App {
 
     fn set_doc(&mut self, editor: Editor, path: Option<PathBuf>) {
         self.editor = editor;
+        self.prefs.apply(&mut self.editor);
         self.path = path;
         self.saved_rev = self.editor.history().len();
         self.hist_thumbs.clear();
@@ -704,7 +709,7 @@ impl eframe::App for App {
         self.dialogs(ctx);
         self.palette_ui(ctx);
         let unsaved = self.editor.history().len() != self.saved_rev;
-        if unsaved && self.drag.is_none() && self.last_autosave.elapsed() > session::AUTOSAVE_EVERY {
+        if unsaved && self.drag.is_none() && self.last_autosave.elapsed() > self.prefs.autosave_every() {
             self.last_autosave = std::time::Instant::now();
             session::autosave(self.editor.doc().clone(), self.path.clone());
             self.status = "Autosaved a backup".into();

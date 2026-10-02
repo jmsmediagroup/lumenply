@@ -5,8 +5,64 @@ use std::path::Path;
 
 use super::*;
 
-pub(crate) const AUTOSAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(120);
 const RECENT_MAX: usize = 10;
+
+/// User preferences, persisted as JSON in the data dir.
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct Prefs {
+    /// Canvas surround colour (sRGB bytes).
+    pub canvas_bg: [u8; 3],
+    /// Undo history cap in steps.
+    pub undo_steps: usize,
+    /// Undo history cap in megabytes.
+    pub undo_memory_mb: usize,
+    /// Seconds of unsaved changes between autosave backups.
+    pub autosave_secs: u64,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Prefs {
+            canvas_bg: [0x14, 0x16, 0x19], // theme::GROUND
+            undo_steps: 100,
+            undo_memory_mb: 1024,
+            autosave_secs: 120,
+        }
+    }
+}
+
+impl Prefs {
+    pub(crate) fn load() -> Self {
+        data_dir()
+            .and_then(|d| std::fs::read_to_string(d.join("prefs.json")).ok())
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn save(&self) {
+        if let Some(d) = data_dir() {
+            let _ = std::fs::create_dir_all(&d);
+            if let Ok(json) = serde_json::to_string_pretty(self) {
+                let _ = std::fs::write(d.join("prefs.json"), json);
+            }
+        }
+    }
+
+    pub(crate) fn canvas_color(&self) -> Color32 {
+        Color32::from_rgb(self.canvas_bg[0], self.canvas_bg[1], self.canvas_bg[2])
+    }
+
+    pub(crate) fn autosave_every(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.autosave_secs.clamp(15, 3600))
+    }
+
+    /// Push the limits into an editor.
+    pub(crate) fn apply(&self, editor: &mut Editor) {
+        editor.history_limit = self.undo_steps.clamp(1, 10_000);
+        editor.history_memory_limit = self.undo_memory_mb.clamp(16, 1 << 20) << 20;
+    }
+}
 
 pub(crate) fn data_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
