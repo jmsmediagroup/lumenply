@@ -172,7 +172,7 @@ impl App {
         let swap = ui.interact(swap_rect, ui.id().with("swap-colors"), Sense::click());
         {
             let p = ui.painter();
-            let st = Stroke::new(1.3, MUTED);
+            let st = Stroke::new(1.3, if swap.hovered() { TEXT } else { MUTED });
             let c = swap_rect.center();
             p.line_segment([c + egui::vec2(-5.0, 2.0), c + egui::vec2(5.0, 2.0)], st);
             p.line_segment([c + egui::vec2(-5.0, -2.0), c + egui::vec2(5.0, -2.0)], st);
@@ -189,10 +189,11 @@ impl App {
             let p = ui.painter();
             let a = egui::Rect::from_min_size(reset_rect.min, Vec2::splat(7.0));
             let b = egui::Rect::from_min_size(reset_rect.min + egui::vec2(4.0, 4.0), Vec2::splat(7.0));
+            let edge = Stroke::new(1.0, if reset.hovered() { TEXT } else { MUTED });
             p.rect_filled(b, 1.5, Color32::WHITE);
-            p.rect_stroke(b, 1.5, Stroke::new(1.0, MUTED));
+            p.rect_stroke(b, 1.5, edge);
             p.rect_filled(a, 1.5, Color32::BLACK);
-            p.rect_stroke(a, 1.5, Stroke::new(1.0, MUTED));
+            p.rect_stroke(a, 1.5, edge);
         }
         if reset.on_hover_text("Default colours (D)").clicked() {
             self.brush_rgb = [0.0; 3];

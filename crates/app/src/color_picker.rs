@@ -1094,6 +1094,18 @@ mod tests {
             let c = [v as f32 / 255.0, 0.0, (255 - v) as f32 / 255.0];
             assert_eq!(parse_hex(&format_hex(c)), Some(c));
         }
+        // 8-bit conversion rounds to nearest; byte colours (the canvas
+        // surround preference) survive the trip through the picker.
+        assert_eq!(to_u8([0.0, 0.5, 1.0]), [0, 128, 255]);
+        assert_eq!(to_u8([0.501 / 255.0, 1.499 / 255.0, 0.2]), [1, 1, 51]);
+        for b in [
+            [0x14u8, 0x16, 0x19],
+            [0, 0, 0],
+            [0x80, 0x80, 0x80],
+            [0xD8, 0xD8, 0xD8],
+        ] {
+            assert_eq!(to_u8(b.map(|x| x as f32 / 255.0)), b);
+        }
     }
 
     #[test]
