@@ -18,6 +18,7 @@ pub mod develop;
 pub mod fill;
 pub mod filters;
 mod filters_more;
+pub mod font_names;
 pub mod gpu;
 pub mod gradient_draw;
 pub mod inpaint;
