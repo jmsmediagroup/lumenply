@@ -797,3 +797,103 @@ pub(crate) fn adjustment_ui(ui: &mut egui::Ui, layer: LayerId, adj: &mut Adjustm
     }
     finished
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drives the stop editor with real pointer events. The editor sits at
+    /// the top-left of a 220 pt wide column, so its strip spans x 7..213
+    /// (y 0..24) and the stop markers sit in the band y 26..42.
+    struct Rig {
+        ctx: egui::Context,
+        g: Gradient,
+        last: Edit,
+    }
+
+    impl Rig {
+        fn new() -> Self {
+            let mut r = Rig {
+                ctx: egui::Context::default(),
+                g: Gradient::default(),
+                last: Edit::default(),
+            };
+            r.frame(vec![]);
+            r
+        }
+
+        fn frame(&mut self, events: Vec<egui::Event>) {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0))),
+                events,
+                ..Default::default()
+            };
+            let g = &mut self.g;
+            let mut out = Edit::default();
+            let _ = self.ctx.run(raw, |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::none())
+                    .show(ctx, |ui| {
+                        ui.allocate_ui(egui::vec2(220.0, 300.0), |ui| {
+                            out = gradient_editor(ui, 7, g, true);
+                        });
+                    });
+            });
+            self.last = out;
+        }
+
+        fn button(&mut self, p: Pos2, pressed: bool) {
+            self.frame(vec![
+                egui::Event::PointerMoved(p),
+                egui::Event::PointerButton {
+                    pos: p,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ]);
+        }
+
+        fn click(&mut self, p: Pos2) {
+            self.button(p, true);
+            self.button(p, false);
+        }
+
+        fn drag(&mut self, from: Pos2, to: Pos2) {
+            self.button(from, true);
+            for i in 1..=4 {
+                let t = i as f32 / 4.0;
+                self.frame(vec![egui::Event::PointerMoved(from + (to - from) * t)]);
+            }
+            self.button(to, false);
+        }
+    }
+
+    #[test]
+    fn the_stop_editor_adds_moves_and_removes_stops() {
+        let mut rig = Rig::new();
+        assert_eq!(rig.g.stops.len(), 2);
+
+        // A click on the strip's middle adds a stop there, coloured like
+        // the ramp at that point (sRGB mid grey), and closes the step.
+        rig.click(egui::pos2(110.0, 12.0));
+        assert_eq!(rig.g.stops.len(), 3);
+        let s = rig.g.stops[2];
+        assert!((s.pos - 0.5).abs() < 1e-3, "{s:?}");
+        assert!((linear_to_srgb_f(s.color[0]) - 0.5).abs() < 2e-3, "{s:?}");
+        assert!(rig.last.finished);
+
+        // Dragging the start stop to x = 58.5 moves it to 25%.
+        rig.drag(egui::pos2(7.0, 34.0), egui::pos2(58.5, 34.0));
+        let first = rig.g.stops[0];
+        assert!((first.pos - 0.25).abs() < 1e-3, "{first:?}");
+        assert!(rig.last.finished, "the drag's release closes the step");
+
+        // Dragging the middle stop far below the strip removes it...
+        rig.drag(egui::pos2(110.0, 34.0), egui::pos2(110.0, 140.0));
+        assert_eq!(rig.g.stops.len(), 2);
+        // ...but never below two stops.
+        rig.drag(egui::pos2(58.5, 34.0), egui::pos2(58.5, 140.0));
+        assert_eq!(rig.g.stops.len(), 2);
+    }
+}
