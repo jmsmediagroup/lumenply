@@ -728,6 +728,14 @@ impl App {
             None if holds_keys(resp) => resp.surrender_focus(),
             _ => {}
         }
+        // egui drops focus on an Esc it was not told to keep (the frame
+        // right after focus moved): that Esc still means "commit".
+        if self.typer.session.is_some()
+            && ctx.memory(|m| m.focused().is_none())
+            && ctx.input(|i| i.key_pressed(Key::Escape))
+        {
+            self.commit_text_edit();
+        }
         if self.typer.session.is_some() && holds_keys(resp) {
             ctx.memory_mut(|m| {
                 m.set_focus_lock_filter(
@@ -778,7 +786,9 @@ impl App {
         let pressed = resp.is_pointer_button_down_on() && ctx.input(|i| i.pointer.primary_pressed());
         if pressed {
             if let Some(p) = ctx.input(|i| i.pointer.press_origin()).map(to_doc) {
-                if self.text_press(ctx, p, mods, now, grab_r) {
+                // Re-requesting focus would reset its key filter (arrows,
+                // Tab and Esc would leave the canvas for a frame).
+                if self.text_press(ctx, p, mods, now, grab_r) && !holds_keys(resp) {
                     resp.request_focus();
                 }
             }
