@@ -9,6 +9,7 @@
 pub mod ora;
 pub mod project;
 pub mod psd;
+pub mod raw;
 
 use std::path::Path;
 
@@ -52,6 +53,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Raster, IoError> {
     let path = path.as_ref();
     if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("exr")) {
         return load_exr(path);
+    }
+    if raw::is_raw(path) {
+        return raw::load_raw(path);
     }
     let (img, icc) = decode_with_icc(path)?;
     // Keep the full precision of 16-bit sources (PNG, TIFF) instead of

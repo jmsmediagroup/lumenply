@@ -214,6 +214,7 @@ fn is_image_path(p: &str) -> bool {
     [".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".exr"]
         .iter()
         .any(|e| lower.ends_with(e))
+        || lumenply_io::raw::is_raw(p)
 }
 
 fn is_ora_path(p: &str) -> bool {

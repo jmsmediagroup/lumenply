@@ -83,7 +83,14 @@ impl App {
     }
 
     pub(crate) fn pick_open(&mut self) {
-        let all: Vec<&str> = [PROJECT_EXT, PSD_EXT, ORA_EXT, IMAGE_EXT].concat();
+        let all: Vec<&str> = [
+            PROJECT_EXT,
+            PSD_EXT,
+            ORA_EXT,
+            IMAGE_EXT,
+            lumenply_io::raw::RAW_EXT,
+        ]
+        .concat();
         if let Some(p) = self
             .file_dialog()
             .set_title("Open")
@@ -92,6 +99,7 @@ impl App {
             .add_filter("Photoshop documents", PSD_EXT)
             .add_filter("OpenRaster", ORA_EXT)
             .add_filter("Images", IMAGE_EXT)
+            .add_filter("Camera RAW", lumenply_io::raw::RAW_EXT)
             .pick_file()
         {
             self.open_path(&p.to_string_lossy());
@@ -107,6 +115,7 @@ impl App {
                 "Place image as layer"
             })
             .add_filter("Images", IMAGE_EXT)
+            .add_filter("Camera RAW", lumenply_io::raw::RAW_EXT)
             .pick_file()
         {
             self.place_image(&p.to_string_lossy());
@@ -1094,6 +1103,9 @@ mod tests {
         }
         for ext in PSD_EXT {
             assert!(is_psd_path(&format!("x.{ext}")), "{ext}");
+        }
+        for ext in lumenply_io::raw::RAW_EXT {
+            assert!(is_image_path(&format!("x.{ext}")), "{ext}");
         }
         assert!(is_ora_path("x.ora"));
     }

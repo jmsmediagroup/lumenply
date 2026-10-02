@@ -130,7 +130,15 @@ None of these could be tested in the container.
       in float mode; flag + raw-f32 HDR values survive .lumen)
 - [x] WebP import; OpenEXR import/export (linear f32 both ways — lossless for
       this engine's native pixels; bit-exact round-trip tested)
-- [ ] AVIF/HEIF; camera RAW via rawler or LibRaw
+- [x] Camera RAW import (rawler 0.7, pure Rust: CR2/CR3/NEF/ARW/RAF/ORF/RW2/
+      PEF/DNG and more): demosaic, camera white balance and colour matrix,
+      default crop, EXIF orientation; linear output into the 16-bit document.
+      Verified on CC0 raw.pixls.us samples (Sony A7S ARW, Canon R6 CR3,
+      Panasonic LX7 RW2: 0.1-0.3 s each); lossy-JPEG DNGs (some cinema
+      cameras) are not supported by rawler 0.7 and fail with a clear error.
+      Still open: a develop dialog (exposure, highlights/shadows, profile
+      tone curve) instead of the flat linear default
+- [ ] AVIF/HEIF
 - [~] PSD: 16-bit import (raw, RLE and ZIP ± prediction channels) and
       export (raw channels; Export menu), full precision both ways and
       psd-tools-cross-checked; Black & White/Exposure/Vibrance round-trip

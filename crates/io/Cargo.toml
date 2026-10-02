@@ -21,5 +21,6 @@ png.workspace = true
 quick-xml.workspace = true
 exr.workspace = true
 qcms.workspace = true
+rawler = "0.7.0"
 
 lumenply-render.workspace = true
