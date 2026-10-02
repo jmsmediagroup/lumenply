@@ -217,7 +217,7 @@ impl App {
                         }
                         if ui.button("Open demo document").clicked() {
                             match lumenply_core::demo::build(1200, 800) {
-                                Ok(ed) => self.set_doc(ed, None),
+                                Ok(ed) => self.open_in_new_tab(ed, None),
                                 Err(e) => self.status = e.to_string(),
                             }
                             ui.close_menu();
@@ -595,36 +595,78 @@ impl App {
 }
 
 impl App {
-    /// The single open document, shown as a tab: name plus an unsaved dot.
-    /// (Multiple documents are not supported yet.)
+    /// The open documents as tabs: the live one raised with an accent
+    /// underline, the rest flat; unsaved dot, middle-click or × to close,
+    /// and a + for a new blank document.
     fn document_tab(&mut self, ui: &mut egui::Ui) {
-        let name = self
-            .path
-            .as_ref()
-            .map(|p| file_name(&p.to_string_lossy()))
-            .unwrap_or_else(|| "untitled".into());
-        let unsaved = self.editor.history().len() != self.saved_rev;
-        let text = RichText::new(name).color(TEXT);
-        let resp = ui.add(
-            egui::Button::new(text)
-                .fill(RAISED)
-                .stroke(Stroke::new(1.0, LINE))
-                .rounding(6.0),
-        );
-        ui.painter().line_segment(
-            [
-                resp.rect.left_bottom() + egui::vec2(4.0, 0.0),
-                resp.rect.right_bottom() + egui::vec2(-4.0, 0.0),
-            ],
-            Stroke::new(2.0, ACCENT),
-        );
-        if unsaved {
-            let c = resp.rect.right_center() + egui::vec2(-7.0, 0.0);
-            ui.painter().circle_filled(c, 3.0, ACCENT);
+        let infos = self.tab_infos();
+        let several = infos.len() > 1;
+        let mut switch = None;
+        let mut close = None;
+        for (i, (name, unsaved)) in infos.into_iter().enumerate() {
+            let live = i == self.cur_tab;
+            let label = if unsaved {
+                format!("{name}  ")
+            } else {
+                name.clone()
+            };
+            let text = RichText::new(label).color(if live { TEXT } else { MUTED });
+            let resp = ui.add(
+                egui::Button::new(text)
+                    .fill(if live { RAISED } else { Color32::TRANSPARENT })
+                    .stroke(Stroke::new(1.0, if live { LINE } else { Color32::TRANSPARENT }))
+                    .rounding(6.0),
+            );
+            if live {
+                ui.painter().line_segment(
+                    [
+                        resp.rect.left_bottom() + egui::vec2(4.0, 0.0),
+                        resp.rect.right_bottom() + egui::vec2(-4.0, 0.0),
+                    ],
+                    Stroke::new(2.0, ACCENT),
+                );
+            }
+            if unsaved {
+                let c = resp.rect.right_center() + egui::vec2(-9.0, 0.0);
+                ui.painter().circle_filled(c, 3.0, ACCENT);
+            }
+            let resp = resp.on_hover_text(if unsaved {
+                "Unsaved changes — middle-click closes"
+            } else {
+                "Middle-click closes"
+            });
+            if resp.clicked() && !live {
+                switch = Some(i);
+            }
+            if resp.middle_clicked() && (several || unsaved) {
+                close = Some(i);
+            }
+            if live && several {
+                // A visible close affordance on the active tab only, to
+                // keep the strip quiet.
+                let x = ui.add(
+                    egui::Button::new(RichText::new("×").color(MUTED))
+                        .fill(Color32::TRANSPARENT)
+                        .frame(false),
+                );
+                if x.on_hover_text("Close document").clicked() {
+                    close = Some(i);
+                }
+            }
         }
-        let resp = resp.on_hover_text(if unsaved { "Unsaved changes" } else { "Saved" });
-        if resp.clicked() {
-            // Nothing to switch to yet; keep the click harmless.
+        let plus = ui.add(
+            egui::Button::new(RichText::new("+").color(MUTED))
+                .fill(Color32::TRANSPARENT)
+                .frame(false),
+        );
+        if plus.on_hover_text("New document (tab)").clicked() {
+            self.dialog = Some(Dialog::New(1920, 1080));
+        }
+        if let Some(i) = switch {
+            self.switch_tab(i);
+        }
+        if let Some(i) = close {
+            self.close_tab(i);
         }
     }
 }

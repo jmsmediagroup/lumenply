@@ -249,6 +249,40 @@ struct App {
     /// Debug: save a screenshot of the window here after a few frames,
     /// then exit (`--screenshot path.png`). Used to verify the UI headlessly.
     shot: Option<(PathBuf, u32)>,
+    /// Documents open in other tabs, in display order with the live
+    /// document occupying slot `cur_tab` (its state lives in the fields
+    /// above, not in this list).
+    tabs: Vec<DocTab>,
+    cur_tab: usize,
+    /// Tab label while the live document has no file path.
+    untitled: String,
+    untitled_seq: usize,
+}
+
+/// A document parked in an inactive tab: its editor plus the per-document
+/// state that would otherwise live in the `App` fields.
+struct DocTab {
+    editor: Editor,
+    path: Option<PathBuf>,
+    saved_rev: usize,
+    zoom: f32,
+    pan: Vec2,
+    active: Option<LayerId>,
+    hist_thumbs: Vec<egui::TextureHandle>,
+    untitled: String,
+}
+
+impl DocTab {
+    fn title(&self) -> String {
+        self.path
+            .as_ref()
+            .map(|p| file_name(&p.to_string_lossy()))
+            .unwrap_or_else(|| self.untitled.clone())
+    }
+
+    fn unsaved(&self) -> bool {
+        self.editor.history().len() != self.saved_rev
+    }
 }
 
 impl App {
@@ -389,6 +423,10 @@ impl App {
                 .map(|p| (PathBuf::from(p), 6)),
             filter_previewed: false,
             status,
+            tabs: Vec::new(),
+            cur_tab: 0,
+            untitled: "Untitled-1".into(),
+            untitled_seq: 1,
         };
         app.prefs.apply(&mut app.editor);
         // Whatever was just opened or built is the saved baseline; only
@@ -496,6 +534,7 @@ impl App {
         }
     }
 
+    /// Replace the live tab's document (startup, crash recovery).
     fn set_doc(&mut self, editor: Editor, path: Option<PathBuf>) {
         self.editor = editor;
         self.prefs.apply(&mut self.editor);
@@ -507,6 +546,144 @@ impl App {
         self.select_top();
         self.mark(None);
         self.view_cmd = Some(ViewCmd::Fit);
+    }
+
+    // ---- document tabs -------------------------------------------------
+
+    /// Move the live document's state out into a parked tab.
+    fn park_live(&mut self) -> DocTab {
+        DocTab {
+            editor: std::mem::replace(&mut self.editor, Editor::new(Document::new(1, 1))),
+            path: self.path.take(),
+            saved_rev: self.saved_rev,
+            zoom: self.zoom,
+            pan: self.pan,
+            active: self.active,
+            hist_thumbs: std::mem::take(&mut self.hist_thumbs),
+            untitled: self.untitled.clone(),
+        }
+    }
+
+    /// Make a parked tab the live document, restoring its view.
+    fn load_tab(&mut self, t: DocTab) {
+        self.editor = t.editor;
+        self.path = t.path;
+        self.saved_rev = t.saved_rev;
+        self.hist_thumbs = t.hist_thumbs;
+        self.untitled = t.untitled;
+        self.below = lumenply_render::BelowCache::new();
+        self.cancel_interaction();
+        self.set_active(t.active);
+        self.fix_active();
+        self.zoom = t.zoom;
+        self.pan = t.pan;
+        self.mark(None);
+    }
+
+    /// Display-order titles with their unsaved flags, live tab included.
+    pub(crate) fn tab_infos(&self) -> Vec<(String, bool)> {
+        let live_title = self
+            .path
+            .as_ref()
+            .map(|p| file_name(&p.to_string_lossy()))
+            .unwrap_or_else(|| self.untitled.clone());
+        let live_unsaved = self.editor.history().len() != self.saved_rev;
+        let mut out: Vec<(String, bool)> = Vec::with_capacity(self.tabs.len() + 1);
+        for (i, t) in self.tabs.iter().enumerate() {
+            if i == self.cur_tab {
+                out.push((live_title.clone(), live_unsaved));
+            }
+            out.push((t.title(), t.unsaved()));
+        }
+        if self.cur_tab >= self.tabs.len() {
+            out.push((live_title, live_unsaved));
+        }
+        out
+    }
+
+    pub(crate) fn switch_tab(&mut self, i: usize) {
+        if i == self.cur_tab || i > self.tabs.len() {
+            return;
+        }
+        let parked = self.park_live();
+        self.tabs.insert(self.cur_tab, parked);
+        let t = self.tabs.remove(i);
+        self.cur_tab = i;
+        self.load_tab(t);
+    }
+
+    /// Open a document in a new tab at the end of the strip.
+    pub(crate) fn open_in_new_tab(&mut self, editor: Editor, path: Option<PathBuf>) {
+        let parked = self.park_live();
+        self.tabs.insert(self.cur_tab, parked);
+        self.cur_tab = self.tabs.len();
+        self.untitled_seq += 1;
+        self.untitled = format!("Untitled-{}", self.untitled_seq);
+        self.set_doc(editor, path);
+    }
+
+    /// If `path` is already open in some tab, switch to it.
+    fn focus_tab_with_path(&mut self, path: &str) -> bool {
+        let wanted = PathBuf::from(path);
+        if self.path.as_ref() == Some(&wanted) {
+            return true;
+        }
+        let hit = self.tabs.iter().position(|t| t.path.as_ref() == Some(&wanted));
+        if let Some(idx) = hit {
+            // Parked index -> display index (the live tab shifts by one).
+            let display = if idx < self.cur_tab { idx } else { idx + 1 };
+            self.switch_tab(display);
+            return true;
+        }
+        false
+    }
+
+    /// Close a tab by display index; asks about unsaved changes first.
+    pub(crate) fn close_tab(&mut self, i: usize) {
+        let unsaved = if i == self.cur_tab {
+            self.editor.history().len() != self.saved_rev
+        } else {
+            let idx = if i < self.cur_tab { i } else { i - 1 };
+            self.tabs.get(idx).is_some_and(|t| t.unsaved())
+        };
+        if unsaved {
+            // Bring the tab forward so "Save" acts on what the user sees.
+            if i != self.cur_tab {
+                self.switch_tab(i);
+            }
+            self.dialog = Some(Dialog::ConfirmCloseTab(self.cur_tab));
+        } else {
+            self.force_close_tab(i);
+        }
+    }
+
+    pub(crate) fn force_close_tab(&mut self, i: usize) {
+        if i == self.cur_tab {
+            if self.tabs.is_empty() {
+                // The last tab closes into a fresh blank document.
+                self.untitled_seq += 1;
+                self.untitled = format!("Untitled-{}", self.untitled_seq);
+                self.set_doc(blank(1200, 800), None);
+                return;
+            }
+            // Load a neighbour; the parked list already excludes the
+            // closing live tab, so its indices need no adjustment.
+            let idx = i.min(self.tabs.len() - 1);
+            let t = self.tabs.remove(idx);
+            self.cur_tab = idx;
+            self.load_tab(t);
+        } else if i <= self.tabs.len() {
+            let idx = if i < self.cur_tab { i } else { i - 1 };
+            self.tabs.remove(idx);
+            if i < self.cur_tab {
+                self.cur_tab -= 1;
+            }
+        }
+    }
+
+    /// True when any open tab has unsaved changes.
+    fn any_unsaved(&self) -> bool {
+        self.editor.history().len() != self.saved_rev || self.tabs.iter().any(|t| t.unsaved())
     }
 
     fn active_layer(&self) -> Option<&Layer> {
@@ -908,10 +1085,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_file_drop(ctx);
         // Intercept closing the window while there are unsaved changes.
-        if ctx.input(|i| i.viewport().close_requested())
-            && !self.allow_close
-            && self.editor.history().len() != self.saved_rev
-        {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close && self.any_unsaved() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.dialog = Some(Dialog::ConfirmClose);
         }

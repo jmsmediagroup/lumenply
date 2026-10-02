@@ -151,7 +151,13 @@ pub(crate) fn autosave_source_file() -> Option<PathBuf> {
 }
 
 pub(crate) fn remove_autosave() {
-    for p in [autosave_file(), autosave_source_file()].into_iter().flatten() {
+    // "autosave.nge" is the backup's pre-rename name; a migrated directory
+    // may still hold one, and nothing else ever cleans it up.
+    let legacy = data_dir().map(|d| d.join("autosave.nge"));
+    for p in [autosave_file(), autosave_source_file(), legacy]
+        .into_iter()
+        .flatten()
+    {
         let _ = std::fs::remove_file(p);
     }
 }

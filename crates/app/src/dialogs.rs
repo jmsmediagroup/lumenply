@@ -8,6 +8,8 @@ pub(crate) enum Dialog {
     ImageSize(u32, u32, bool),
     /// The window close was intercepted because of unsaved changes.
     ConfirmClose,
+    /// Closing one document tab (by display index) with unsaved changes.
+    ConfirmCloseTab(usize),
     /// An autosave backup from a previous session was found at startup.
     Recover,
     Preferences(session::Prefs, Option<String>),
@@ -167,11 +169,16 @@ impl App {
     // ---- files -----------------------------------------------------------------
 
     pub(crate) fn open_path(&mut self, path: &str) {
+        // A file already open in a tab comes forward instead of reopening.
+        if self.focus_tab_with_path(path) {
+            self.status = format!("Switched to {path}");
+            return;
+        }
         if is_ora_path(path) {
             match lumenply_io::ora::load(path) {
                 Ok(rep) => {
                     let n = rep.warnings.len();
-                    self.set_doc(Editor::new(rep.value), None);
+                    self.open_in_new_tab(Editor::new(rep.value), None);
                     self.recent = session::push_recent(path);
                     self.status = if n == 0 {
                         format!("Imported {path}")
@@ -187,7 +194,7 @@ impl App {
             match lumenply_io::psd::load(path) {
                 Ok(rep) => {
                     let n = rep.warnings.len();
-                    self.set_doc(Editor::new(rep.value), None);
+                    self.open_in_new_tab(Editor::new(rep.value), None);
                     self.recent = session::push_recent(path);
                     self.status = if n == 0 {
                         format!("Imported {path}")
@@ -205,7 +212,7 @@ impl App {
         }
         match project::load(path) {
             Ok(doc) => {
-                self.set_doc(Editor::new(doc), Some(PathBuf::from(path)));
+                self.open_in_new_tab(Editor::new(doc), Some(PathBuf::from(path)));
                 self.recent = session::push_recent(path);
                 self.status = format!("Opened {path}");
             }
@@ -232,7 +239,7 @@ impl App {
                 let (w, h) = (raster.width, raster.height);
                 let mut ed = Editor::new(Document::new(w, h));
                 let _ = ed.execute(&AddPixelLayer::from_raster(file_name(path), raster, 0, 0));
-                self.set_doc(ed, None);
+                self.open_in_new_tab(ed, None);
                 self.recent = session::push_recent(path);
                 self.status = format!("Opened {path} ({w}×{h})");
             }
@@ -291,6 +298,7 @@ impl App {
             Dialog::ExportJpeg(..) => "Export JPEG",
             Dialog::New(..) => "New document",
             Dialog::ConfirmClose => "Unsaved changes",
+            Dialog::ConfirmCloseTab(_) => "Close document",
             Dialog::Recover => "Recover autosaved document",
             Dialog::Preferences(..) => "Preferences",
             Dialog::ColorRange(..) => "Colour range",
@@ -516,6 +524,30 @@ impl App {
                             }
                         });
                     }
+                    Dialog::ConfirmCloseTab(i) => {
+                        let i = *i;
+                        ui.label("This document has unsaved changes.");
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Save and close").clicked() {
+                                match self.path.clone() {
+                                    Some(p) => self.save_path(&p.to_string_lossy()),
+                                    None => self.pick_save(),
+                                }
+                                if self.editor.history().len() == self.saved_rev {
+                                    self.force_close_tab(i);
+                                }
+                                keep = false;
+                            }
+                            if ui.button("Close without saving").clicked() {
+                                self.force_close_tab(i);
+                                keep = false;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                keep = false;
+                            }
+                        });
+                    }
                     Dialog::ExportJpeg(p, q) => {
                         ui.label(RichText::new(file_name(p)).monospace());
                         let mut qf = *q as f32;
@@ -633,7 +665,10 @@ impl App {
                         ui.label(RichText::new("Resamples every layer bilinearly.").weak());
                     }
                 }
-                if !matches!(d, Dialog::ConfirmClose | Dialog::Recover | Dialog::About) {
+                if !matches!(
+                    d,
+                    Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) | Dialog::Recover | Dialog::About
+                ) {
                     ui.horizontal(|ui| {
                         if ui.button("OK").clicked() {
                             confirmed = true;
@@ -665,7 +700,7 @@ impl App {
 
         if confirmed {
             match &d {
-                Dialog::ConfirmClose | Dialog::Recover | Dialog::About => {}
+                Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) | Dialog::Recover | Dialog::About => {}
                 Dialog::ColorRange(..) => {}
                 Dialog::Preferences(p, _) => {
                     self.prefs = p.clone();
@@ -674,7 +709,7 @@ impl App {
                     self.status = "Preferences saved".into();
                 }
                 Dialog::ExportJpeg(p, q) => self.export_jpeg(p, *q),
-                Dialog::New(w, h) => self.set_doc(blank(*w, *h), None),
+                Dialog::New(w, h) => self.open_in_new_tab(blank(*w, *h), None),
                 Dialog::Filter(f) => {
                     if let Some(layer) = self.active {
                         self.run(&ApplyFilter {
