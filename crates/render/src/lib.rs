@@ -23,6 +23,7 @@ pub mod inpaint;
 pub mod liquify;
 pub mod resample;
 pub mod shape;
+pub mod smart_filters;
 pub mod text;
 pub mod transform;
 

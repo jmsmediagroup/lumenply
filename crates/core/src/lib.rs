@@ -22,6 +22,7 @@ pub mod quick_select;
 mod select_ops;
 pub mod shape_cmds;
 pub mod smart_contents;
+pub mod smart_filter_cmds;
 pub mod snap;
 
 use lumenply_doc::{Document, LayerId};
@@ -110,8 +111,12 @@ fn delta_bytes(old: &Document, new: &Document) -> usize {
     let mut total = 0;
     old.for_each_layer(|l| {
         let counterpart = new.layer(l.id);
-        if let Some(s) = l.raster_store() {
-            total += store_delta(s, counterpart.and_then(|n| n.raster_store()));
+        if let Some(s) = l.content_store() {
+            total += store_delta(s, counterpart.and_then(|n| n.content_store()));
+        }
+        if let Some(c) = &l.smart_filters.cache {
+            let other = counterpart.and_then(|n| n.smart_filters.cache.as_ref());
+            total += store_delta(&c.store, other.map(|o| &o.store));
         }
         if let Some(m) = &l.mask {
             total += store_delta(
@@ -177,8 +182,11 @@ pub fn compact_storage(doc: &mut Document) {
 pub fn storage_bytes(doc: &Document) -> usize {
     let mut total = 0;
     doc.for_each_layer(|l| {
-        if let Some(s) = l.raster_store() {
+        if let Some(s) = l.content_store() {
             total += s.byte_size();
+        }
+        if let Some(c) = &l.smart_filters.cache {
+            total += c.store.byte_size();
         }
         if let Some(m) = &l.mask {
             total += m.tiles.byte_size();
@@ -257,7 +265,7 @@ impl Editor {
             locks::enforce(&self.doc, &mut next, cmd)?;
             lumenply_render::fill::refresh_stale(&mut next);
             compact_storage(&mut next);
-            self.last_affected = cmd.affected(&self.doc);
+            self.last_affected = smart_filter_cmds::widen_affected(&next, cmd.affected(&self.doc));
             self.last_target = cmd.target_layer();
             // The whole drag undoes in one go, so its undo step covers
             // every tick so far, and its memory estimate follows the
@@ -288,7 +296,7 @@ impl Editor {
         // Fill layers follow canvas size changes (crop, resize, rotate).
         lumenply_render::fill::refresh_stale(&mut next);
         compact_storage(&mut next);
-        self.last_affected = cmd.affected(&self.doc);
+        self.last_affected = smart_filter_cmds::widen_affected(&next, cmd.affected(&self.doc));
         self.last_target = cmd.target_layer();
         let prev = std::mem::replace(&mut self.doc, next);
         let bytes = delta_bytes(&prev, &self.doc);
