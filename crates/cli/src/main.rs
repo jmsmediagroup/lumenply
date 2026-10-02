@@ -4,6 +4,8 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+mod batch;
+
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use lumenply_core::commands::AddPixelLayer;
@@ -79,10 +81,63 @@ enum Cmd {
     },
     /// List the supported blend modes.
     Blends,
+    /// Convert many files at once (Photoshop's Image Processor): images,
+    /// camera RAW, PSD and projects in; PNG, JPEG or WebP out.
+    ///
+    /// e.g. `lumenply batch --out web --format jpeg --resize 2048 --auto *.CR3`
+    Batch {
+        /// Files to convert.
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
+        /// Output folder (created if missing).
+        #[arg(short, long)]
+        out: PathBuf,
+        /// png, jpeg or webp (lossless).
+        #[arg(long, default_value = "jpeg")]
+        format: String,
+        /// JPEG quality, 1-100.
+        #[arg(long, default_value_t = 90)]
+        quality: u8,
+        /// 50% (scale), 2048 (long edge) or 1920x1080 (fit inside); the last
+        /// two never enlarge.
+        #[arg(long)]
+        resize: Option<String>,
+        /// Camera RAW: set exposure, whites and blacks automatically.
+        #[arg(long, default_value_t = false)]
+        auto: bool,
+        /// PNG/WebP: place on white instead of keeping transparency.
+        #[arg(long, default_value_t = false)]
+        flatten: bool,
+    },
 }
 
 fn main() -> Result<()> {
     match Cli::parse().cmd {
+        Cmd::Batch {
+            inputs,
+            out,
+            format,
+            quality,
+            resize,
+            auto,
+            flatten,
+        } => {
+            let resize = resize.as_deref().map(batch::Resize::parse).transpose()?;
+            let flatten = flatten || matches!(format.to_ascii_lowercase().as_str(), "jpg" | "jpeg");
+            let opts = batch::Options {
+                out,
+                format,
+                quality: quality.clamp(1, 100),
+                resize,
+                auto,
+                flatten,
+            };
+            let failed = batch::run(&inputs, &opts)?;
+            if failed > 0 {
+                bail!("{failed} file(s) could not be converted");
+            }
+            Ok(())
+        }
         Cmd::Composite { out, layers, save } => composite(out, layers, save),
         Cmd::Paint {
             out,
@@ -165,6 +220,7 @@ fn print_tree(layers: &[Layer], depth: usize) {
             LayerContent::Text(t) => format!("text: {:?} ({}px)", t.text, t.size),
             LayerContent::Smart(s) => format!("smart object, {} source tiles", s.source.len()),
             LayerContent::Fill(f) => format!("fill: {}", f.fill.name()),
+            LayerContent::Shape(sh) => format!("shape: {}", sh.geometry.name()),
         };
         let mask = l
             .mask

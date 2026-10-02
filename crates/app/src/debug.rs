@@ -19,6 +19,7 @@ impl App {
             || self.debug_select(tok)
             || self.debug_crop_guides(ctx, tok)
             || self.debug_adjust(ctx, tok)
+            || self.debug_shape(ctx, tok)
             || self.debug_retouch(ctx, tok)
     }
 

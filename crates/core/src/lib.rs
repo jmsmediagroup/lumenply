@@ -23,6 +23,7 @@ pub mod quick_select;
 mod retouch;
 mod retouch_brush;
 mod select_ops;
+pub mod shape_cmds;
 pub mod smart_contents;
 pub mod snap;
 
@@ -159,6 +160,11 @@ pub fn compact_storage(doc: &mut Document) {
             }
             lumenply_doc::LayerContent::Fill(f) => {
                 if let Some(c) = f.cache.as_mut() {
+                    c.compact();
+                }
+            }
+            lumenply_doc::LayerContent::Shape(s) => {
+                if let Some(c) = s.cache.as_mut() {
                     c.compact();
                 }
             }

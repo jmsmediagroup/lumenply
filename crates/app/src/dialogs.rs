@@ -826,7 +826,7 @@ impl App {
                             }
                             // The shortcut list scrolls so the footer stays on screen in
                             // short windows (the dialog is anchored to the centre).
-                            let list_h = (ui.ctx().screen_rect().height() - 430.0).clamp(110.0, 560.0);
+                            let list_h = (ui.ctx().screen_rect().height() - 530.0).clamp(110.0, 560.0);
                             let scroll_out = egui::ScrollArea::vertical()
                                 .id_salt("prefs-shortcuts")
                                 .max_height(list_h)

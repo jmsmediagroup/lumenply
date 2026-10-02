@@ -38,6 +38,7 @@ mod history;
 mod layer_actions;
 mod layers;
 mod liquify;
+mod macos_open;
 mod menu;
 mod options_bar;
 mod palette;
@@ -48,6 +49,7 @@ mod retouch_ui;
 #[cfg(test)]
 mod select_fill_tests;
 mod session;
+mod shape_tool;
 mod smart_contents;
 mod start;
 mod status;
@@ -63,6 +65,29 @@ pub(crate) use tools::Tool;
 
 fn main() -> Result<(), eframe::Error> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `--write-icon PATH SIZE`: the app icon as a PNG (packaging builds the
+    // macOS .icns from these), then exit.
+    if let Some(i) = args.iter().position(|a| a == "--write-icon") {
+        let path = args.get(i + 1).map(String::as_str).unwrap_or("icon.png");
+        let size: usize = args
+            .get(i + 2)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1024)
+            .clamp(16, 2048);
+        // macOS icon grid: the tile takes 824/1024 of the canvas, centred,
+        // with transparent margins like every other Dock icon.
+        let inner = (size * 824 / 1024).max(1);
+        let tile = image::RgbaImage::from_raw(inner as u32, inner as u32, brand::icon_rgba(inner))
+            .expect("icon buffer matches its size");
+        let mut img = image::RgbaImage::new(size as u32, size as u32);
+        let off = ((size - inner) / 2) as i64;
+        image::imageops::overlay(&mut img, &tile, off, off);
+        if let Err(e) = img.save_with_format(path, image::ImageFormat::Png) {
+            eprintln!("could not write {path}: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_icon(std::sync::Arc::new(egui::IconData {
@@ -78,6 +103,7 @@ fn main() -> Result<(), eframe::Error> {
             .with_active(!args.iter().any(|a| a == "--screenshot")),
         ..Default::default()
     };
+    macos_open::install();
     eframe::run_native(
         "Lumenply",
         options,
@@ -381,6 +407,8 @@ struct App {
     crop: crop::CropTool,
     /// Rulers, guides, grid and snapping state (guides.rs).
     aids: guides::ViewAids,
+    /// The Shape tool's options and drag (shape_tool.rs).
+    shape: shape_tool::ShapeTool,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -417,6 +445,7 @@ impl App {
     fn new(cc: &eframe::CreationContext<'_>, args: &[String]) -> Self {
         theme::install(&cc.egui_ctx);
         pen::install();
+        macos_open::set_waker(&cc.egui_ctx);
         Self::launch(args)
     }
 
@@ -540,6 +569,7 @@ impl App {
             start_thumb: None,
             crop: crop::CropTool::default(),
             aids: guides::ViewAids::default(),
+            shape: Default::default(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -1166,6 +1196,8 @@ impl App {
                 Some(Tool::Hand)
             } else if i.key_pressed(Key::C) {
                 Some(Tool::Crop)
+            } else if i.key_pressed(Key::U) {
+                Some(Tool::Shape)
             } else {
                 None
             };
@@ -1346,6 +1378,10 @@ impl App {
             self.export_as_ui(ctx);
             self.debug_screenshot(ctx);
             return;
+        }
+        // Files opened from Finder (or the Dock) while running or at launch.
+        for path in macos_open::take_pending() {
+            self.open_path(&path);
         }
         self.handle_file_drop(ctx);
         // Intercept closing the window while there are unsaved changes.
@@ -1804,6 +1840,19 @@ pub(crate) mod a11y_tests {
             app.run_menu_action(id);
             assert!(app.active_layer().unwrap().fill_layer().is_some());
             check(&mut app, &format!("{name} fill layer"));
+            app.run_menu_action("undo");
+        }
+        for (kind, extra) in [
+            ("rectangle", "shape:fill=gradient"),
+            ("polygon", "shape:stroke=2"),
+            ("line", "shape:arrows=end"),
+            ("heart", "shape:fill=none"),
+        ] {
+            app.debug_shape(&ctx, &format!("shape:kind={kind}"));
+            app.debug_shape(&ctx, extra);
+            app.debug_shape(&ctx, "shape:draw=4:4:40:30");
+            assert!(app.active_layer().unwrap().shape_layer().is_some());
+            check(&mut app, &format!("{kind} shape layer"));
             app.run_menu_action("undo");
         }
         for (name, f) in filter_presets() {

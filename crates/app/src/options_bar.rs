@@ -46,7 +46,18 @@ impl App {
                             .doc()
                             .layer(x.layer)
                             .is_some_and(|l| l.smart_layer().is_some());
-                        let affine_only = "Smart objects keep affine transforms; rasterize first";
+                        // Shapes too: their outline takes an affine only.
+                        let shape = self
+                            .editor
+                            .doc()
+                            .layer(x.layer)
+                            .is_some_and(|l| l.shape_layer().is_some());
+                        let affine_only = if shape {
+                            "Shapes stay vector through affine transforms; rasterize first"
+                        } else {
+                            "Smart objects keep affine transforms; rasterize first"
+                        };
+                        let smart = smart || shape;
                         ui.add_enabled_ui(!persp && !warping, |ui| {
                             let mut sx = x.sx * 100.0;
                             let mut sy = x.sy * 100.0;
@@ -172,14 +183,17 @@ impl App {
                     ui.separator();
                     match self.tool {
                         Tool::Move => {
+                            let block = self.action_block("xform");
                             if ui
                                 .add_enabled(
-                                    self.active_is_pixel(),
+                                    block.is_none(),
                                     egui::Button::new("Free transform")
                                         .shortcut_text(self.action_keys(ui.ctx(), "xform")),
                                 )
                                 .on_hover_text("Scale, rotate, skew, distort or warp the active layer")
-                                .on_disabled_hover_text("Select a pixel layer to transform it")
+                                .on_disabled_hover_text(
+                                    block.unwrap_or("Select a pixel layer to transform it"),
+                                )
                                 .clicked()
                             {
                                 self.begin_free_transform();
@@ -192,14 +206,14 @@ impl App {
                             hint_label(ui, tier, self.tool);
                         }
                         Tool::Wand if self.quick.on => {
-                            self.wand_mode_switch(ui);
+                            self.wand_mode_switch(ui, tier == Tier::Tight);
                             self.quick_select_bar(ui);
                         }
                         Tool::Bucket | Tool::Wand => {
                             // Selection tools lead with how the selection
                             // combines, as the marquees and lassos do.
                             if self.tool == Tool::Wand {
-                                self.wand_mode_switch(ui);
+                                self.wand_mode_switch(ui, tier == Tier::Tight);
                                 select_ops(ui, &mut self.select_op);
                                 ui.separator();
                             }
@@ -219,6 +233,7 @@ impl App {
                             }
                         }
                         Tool::Text => self.text_options_bar(ui),
+                        Tool::Shape => self.shape_options_bar(ui, tier),
                         Tool::Gradient => {
                             segmented(
                                 ui,
@@ -317,19 +332,31 @@ impl App {
                             if pen::toggle(ui, &mut self.prefs.pen_size, "Pen pressure controls size") {
                                 self.prefs.save();
                             }
+                            // On a tight bar the secondary settings keep
+                            // their (scrubbable) number fields and drop the
+                            // sliders, so the row fits.
+                            let tight = tier == Tier::Tight;
+                            let row =
+                                |ui: &mut egui::Ui, label: &str, v: &mut f32, r: RangeInclusive<f32>| {
+                                    if tight {
+                                        bar_value(ui, label, v, r, "%")
+                                    } else {
+                                        bar_slider(ui, label, v, r, "%", false)
+                                    }
+                                };
                             let mut hard = self.brush.hardness * 100.0;
-                            if bar_slider(ui, "Hardness", &mut hard, 0.0..=100.0, "%", false) {
+                            if row(ui, "Hardness", &mut hard, 0.0..=100.0) {
                                 self.brush.hardness = hard / 100.0;
                             }
                             let mut op = self.brush.color[3] * 100.0;
-                            if bar_slider(ui, "Opacity", &mut op, 1.0..=100.0, "%", false) {
+                            if row(ui, "Opacity", &mut op, 1.0..=100.0) {
                                 self.brush.color[3] = op / 100.0;
                             }
                             if pen::toggle(ui, &mut self.prefs.pen_opacity, "Pen pressure controls opacity") {
                                 self.prefs.save();
                             }
                             let mut sc = self.brush.jitter * 100.0;
-                            if bar_slider(ui, "Scatter", &mut sc, 0.0..=100.0, "%", false) {
+                            if row(ui, "Scatter", &mut sc, 0.0..=100.0) {
                                 self.brush.jitter = sc / 100.0;
                             }
                             if self.tool == Tool::Brush && self.editing_mask {
@@ -661,6 +688,34 @@ fn bar_scroll(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> f32 {
     out.content_size.x
 }
 
+/// A label and a typeable, scrubbable value without a slider (tight bars).
+pub(crate) fn bar_value(
+    ui: &mut egui::Ui,
+    label: &str,
+    v: &mut f32,
+    range: RangeInclusive<f32>,
+    suffix: &str,
+) -> bool {
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.label(RichText::new(label).color(MUTED));
+        let span = range.end() - range.start();
+        let b = num_field(
+            ui,
+            egui::DragValue::new(v)
+                .range(range)
+                .speed(span / 300.0)
+                .fixed_decimals(0)
+                .suffix(suffix),
+            58.0,
+        );
+        a11y_name(&b, label);
+        b.on_hover_text(format!("{label}: drag to change, click to type"))
+            .changed()
+    })
+    .inner
+}
+
 /// A slider cluster in the bar: muted label, slider, typeable mono value.
 /// Returns true when the value changed.
 pub(crate) fn bar_slider(
@@ -721,6 +776,7 @@ fn tool_hint(tool: Tool) -> Option<&'static str> {
         Tool::RectSelect | Tool::EllipseSelect | Tool::Lasso => "Shift adds, Alt subtracts",
         Tool::PolyLasso => "Click to add points, double-click to close",
         Tool::Pen => "Click corners, drag curves; click the first point to close",
+        Tool::Shape => "Shift constrains, Alt draws from the centre",
         Tool::Hand => "Drag to pan, scroll to zoom",
         _ => return None,
     })
@@ -728,7 +784,7 @@ fn tool_hint(tool: Tool) -> Option<&'static str> {
 
 /// The tool's usage hint at the end of the bar (on narrow windows it lives
 /// in the tool name's tooltip instead).
-fn hint_label(ui: &mut egui::Ui, tier: Tier, tool: Tool) {
+pub(crate) fn hint_label(ui: &mut egui::Ui, tier: Tier, tool: Tool) {
     if let (false, Some(h)) = (tier == Tier::Tight, tool_hint(tool)) {
         ui.label(RichText::new(h).weak());
     }
