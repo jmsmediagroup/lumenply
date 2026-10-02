@@ -95,12 +95,12 @@ None of these could be tested in the container.
 - [~] Filters are row-parallel via rayon (box blur, noise, motion blur,
       median, high pass). Blend loops measured (`lumenply bench --size 2048
       --layers 10`, 14 threads): Normal-only 4.5 ms (~9.3 GP·layers/s),
-      mixed modes 20.9 ms (~2.0 GP·layers/s). Tried and rejected: a
-      branchless Normal loop (no gain beyond noise — Normal is bound by
-      decoding compact u16 tiles to f32 in `Tile::pixels()`, not ALU) and
-      per-mode monomorphised loops (75% slower, code bloat). Next lever if
-      needed: fuse the u16 decode into the blend loop instead of
-      materialising an f32 copy of each source tile
+      mixed modes 20.9 ms (~2.0 GP·layers/s). Tried A/B and rejected:
+      a branchless Normal loop (within noise), per-mode monomorphised
+      loops (mixed 75% slower), and fusing the u16→f32 decode into the
+      blend loop (Normal 2.7× slower — the separate decode pass vectorises,
+      the fused branchy loop doesn't). Profile (Instruments / flamegraph)
+      before trying anything else here
 - [x] Memory: cap undo history by bytes (Editor::history_memory_limit, default 1 GiB)
 - [ ] Optional 8-bit storage mode
 - [x] Incremental brush rendering (only the smoothing window repaints per frame)
