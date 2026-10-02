@@ -120,9 +120,11 @@ None of these could be tested in the container.
 - [ ] AVIF/HEIF; camera RAW via rawler or LibRaw
 - [~] PSD: 16-bit import (raw, RLE and ZIP ± prediction channels) and
       export (raw channels; Export menu), full precision both ways and
-      psd-tools-cross-checked. Still open: PSB (large documents),
-      Black & White/Exposure/Vibrance descriptors, text layers as
-      editable PSD text, live filters as smart filters
+      psd-tools-cross-checked; Black & White/Exposure/Vibrance round-trip
+      (expA fixed block; blwh/vibA Action Descriptors, psd-tools-parsed —
+      blwh maps PS's six weights onto our three). Still open: PSB (large
+      documents), text layers as editable PSD text, live filters as
+      smart filters
 - [x] OpenRaster (.ora) import/export for GIMP/Krita interchange (layers, groups,
       opacity, visibility, the ten blend modes; masks baked in, adjustments and
       live filters skipped with warnings)

@@ -535,8 +535,45 @@ fn adjustment_block(adj: &Adjustment) -> Option<Vec<u8>> {
             d.push(0);
             b"blnc"
         }
-        Adjustment::BlackWhite { .. } | Adjustment::Exposure { .. } | Adjustment::Vibrance { .. } => {
-            return None
+        Adjustment::Exposure {
+            exposure,
+            offset,
+            gamma,
+        } => {
+            put_u16(&mut d, 1); // version
+            for v in [*exposure, *offset, *gamma] {
+                d.extend_from_slice(&v.to_be_bytes());
+            }
+            b"expA"
+        }
+        Adjustment::Vibrance { vibrance, saturation } => {
+            put_u32(&mut d, 16); // descriptor version
+            put_u32(&mut d, 1); // unicode name: one code unit (the terminator)
+            put_u16(&mut d, 0);
+            desc_key(&mut d, b"null"); // class id
+            put_u32(&mut d, 2); // item count
+            desc_long(&mut d, b"vibrance", i16_of(*vibrance, 100.0, -100, 100) as i32);
+            desc_long(&mut d, b"Strt", i16_of(*saturation, 100.0, -100, 100) as i32);
+            b"vibA"
+        }
+        Adjustment::BlackWhite { red, green, blue } => {
+            // Photoshop's six channel weights in percent; the in-between
+            // channels interpolate ours so the grey mix stays close.
+            let pc = |v: f32| (v.clamp(0.0, 3.0) * 100.0 + 0.5) as i32;
+            put_u32(&mut d, 16); // descriptor version
+            put_u32(&mut d, 1);
+            put_u16(&mut d, 0);
+            desc_key(&mut d, b"null");
+            put_u32(&mut d, 8); // item count
+            desc_long(&mut d, b"Rd  ", pc(*red));
+            desc_long(&mut d, b"Yllw", pc((*red + *green) / 2.0));
+            desc_long(&mut d, b"Grn ", pc(*green));
+            desc_long(&mut d, b"Cyn ", pc((*green + *blue) / 2.0));
+            desc_long(&mut d, b"Bl  ", pc(*blue));
+            desc_long(&mut d, b"Mgnt", pc((*red + *blue) / 2.0));
+            desc_bool(&mut d, b"useTint", false);
+            desc_long(&mut d, b"bwPresetKind", 3); // custom
+            b"blwh"
         }
     };
     Some(additional_block(key, &d))
@@ -581,35 +618,61 @@ fn cged_block(brightness: i32, contrast: i32) -> Vec<u8> {
     additional_block(b"CgEd", &d)
 }
 
-/// Minimal descriptor reader: returns `(key, value)` for `long`/`bool`/`doub`
-/// items at the top level, or `None` if the structure uses anything else.
+fn desc_read_key(d: &mut Rd) -> Option<Vec<u8>> {
+    let len = d.u32().ok()? as usize;
+    let len = if len == 0 { 4 } else { len.min(256) };
+    Some(d.bytes(len).ok()?.to_vec())
+}
+
+/// Walk one descriptor body (after the version word): collects `long`/
+/// `bool`/`doub` items, skips `TEXT`/`enum`/`UntF` and nested `Objc`
+/// descriptors (their numeric items land in the same flat list, which is
+/// fine for the keys we look up), and gives up on anything else.
+fn walk_descriptor(d: &mut Rd, out: &mut Vec<(Vec<u8>, f64)>, depth: usize) -> Option<()> {
+    if depth > 8 {
+        return None;
+    }
+    let n = d.u32().ok()? as usize; // unicode name length, in code units
+    d.skip(n.min(1 << 20) * 2).ok()?;
+    desc_read_key(d)?; // class id
+    let count = d.u32().ok()? as usize;
+    for _ in 0..count.min(1024) {
+        let key = desc_read_key(d)?;
+        let ty = d.bytes(4).ok()?.to_vec();
+        match &ty[..] {
+            b"long" => out.push((key, d.i32().ok()? as f64)),
+            b"bool" => out.push((key, d.u8().ok()? as f64)),
+            b"doub" => out.push((key, f64::from_be_bytes(d.bytes(8).ok()?.try_into().ok()?))),
+            b"TEXT" => {
+                let n = d.u32().ok()? as usize;
+                d.skip(n.min(1 << 20) * 2).ok()?;
+            }
+            b"enum" => {
+                desc_read_key(d)?;
+                desc_read_key(d)?;
+            }
+            b"UntF" => {
+                d.bytes(4).ok()?;
+                d.bytes(8).ok()?;
+            }
+            b"Objc" => walk_descriptor(d, out, depth + 1)?,
+            _ => return None,
+        }
+    }
+    Some(())
+}
+
+/// Minimal descriptor reader: returns `(key, value)` for the numeric items
+/// (`long`/`bool`/`doub`), or `None` if the structure uses a type the
+/// walker doesn't know.
 fn parse_simple_descriptor(data: &[u8]) -> Option<Vec<(Vec<u8>, f64)>> {
     let mut d = Rd::new(data);
     let version = d.u32().ok()?;
     if version != 16 {
         return None;
     }
-    let n = d.u32().ok()? as usize;
-    d.skip(n * 2).ok()?;
-    let read_key = |d: &mut Rd| -> Option<Vec<u8>> {
-        let len = d.u32().ok()? as usize;
-        let len = if len == 0 { 4 } else { len };
-        Some(d.bytes(len).ok()?.to_vec())
-    };
-    read_key(&mut d)?; // class id
-    let count = d.u32().ok()? as usize;
     let mut out = Vec::new();
-    for _ in 0..count {
-        let key = read_key(&mut d)?;
-        let ty = d.bytes(4).ok()?.to_vec();
-        let v = match &ty[..] {
-            b"long" => d.i32().ok()? as f64,
-            b"bool" => d.u8().ok()? as f64,
-            b"doub" => f64::from_be_bytes(d.bytes(8).ok()?.try_into().ok()?),
-            _ => return None,
-        };
-        out.push((key, v));
-    }
+    walk_descriptor(&mut d, &mut out, 0)?;
     Some(out)
 }
 
@@ -732,6 +795,47 @@ fn parse_adjustment(key: &[u8], data: &[u8]) -> Result<Option<Adjustment>, PsdEr
                 midtones: tones[1],
                 highlights: tones[2],
                 preserve_luminosity: preserve,
+            }
+        }
+        b"expA" => {
+            let version = d.u16()?;
+            if version != 1 {
+                return Ok(None);
+            }
+            let mut v = [0f32; 3];
+            for x in &mut v {
+                *x = f32::from_be_bytes(d.bytes(4)?.try_into().expect("4 bytes"));
+            }
+            if !v.iter().all(|x| x.is_finite()) {
+                return Ok(None);
+            }
+            Adjustment::Exposure {
+                exposure: v[0].clamp(-20.0, 20.0),
+                offset: v[1].clamp(-0.5, 0.5),
+                gamma: v[2].clamp(0.01, 10.0),
+            }
+        }
+        b"vibA" => {
+            let Some(items) = parse_simple_descriptor(data) else {
+                return Ok(None);
+            };
+            let get = |k: &[u8]| items.iter().find(|(key, _)| key == k).map(|(_, v)| *v as f32);
+            Adjustment::Vibrance {
+                vibrance: (get(b"vibrance").unwrap_or(0.0) / 100.0).clamp(-1.0, 1.0),
+                saturation: (get(b"Strt").unwrap_or(0.0) / 100.0).clamp(-1.0, 1.0),
+            }
+        }
+        b"blwh" => {
+            let Some(items) = parse_simple_descriptor(data) else {
+                return Ok(None);
+            };
+            let get = |k: &[u8]| items.iter().find(|(key, _)| key == k).map(|(_, v)| *v as f32);
+            // Only the primary channels map onto our three weights.
+            let w = |k: &[u8], dflt: f32| (get(k).map_or(dflt, |v| v / 100.0)).clamp(0.0, 3.0);
+            Adjustment::BlackWhite {
+                red: w(b"Rd  ", 0.4),
+                green: w(b"Grn ", 0.4),
+                blue: w(b"Bl  ", 0.2),
             }
         }
         _ => return Ok(None),
@@ -1889,6 +1993,15 @@ mod tests {
             Adjustment::Posterize { levels: 5 },
             Adjustment::Invert,
             Adjustment::black_white_default(),
+            Adjustment::Exposure {
+                exposure: 1.5,
+                offset: -0.1,
+                gamma: 1.25,
+            },
+            Adjustment::Vibrance {
+                vibrance: 0.45,
+                saturation: -0.3,
+            },
         ];
         for a in &adjs {
             doc.add_adjustment(a.clone());
@@ -1897,12 +2010,12 @@ mod tests {
         let rep = save(&path, &doc).unwrap();
         assert_eq!(
             rep.warnings.len(),
-            1,
-            "only Black & White lacks a PSD block: {:?}",
+            0,
+            "every adjustment exports: {:?}",
             rep.warnings
         );
         let back = load(&path).unwrap().value;
-        assert_eq!(back.layer_count(), 9);
+        assert_eq!(back.layer_count(), 12);
         let got: Vec<Adjustment> = back.layers()[1..]
             .iter()
             .map(|l| match &l.content {
@@ -1972,6 +2085,32 @@ mod tests {
         assert!(matches!(got[5], Adjustment::Threshold { level } if close(level, 0.6)));
         assert!(matches!(got[6], Adjustment::Posterize { levels: 5 }));
         assert!(matches!(got[7], Adjustment::Invert));
+        match &got[8] {
+            Adjustment::BlackWhite { red, green, blue } => {
+                // The luminance defaults, through percent and back.
+                assert!(
+                    close(*red, 0.21) && close(*green, 0.72) && close(*blue, 0.07),
+                    "{got:?}"
+                );
+            }
+            _ => panic!("black & white lost"),
+        }
+        match &got[9] {
+            Adjustment::Exposure {
+                exposure,
+                offset,
+                gamma,
+            } => {
+                assert!(close(*exposure, 1.5) && close(*offset, -0.1) && close(*gamma, 1.25));
+            }
+            _ => panic!("exposure lost"),
+        }
+        match &got[10] {
+            Adjustment::Vibrance { vibrance, saturation } => {
+                assert!(close(*vibrance, 0.45) && close(*saturation, -0.3));
+            }
+            _ => panic!("vibrance lost"),
+        }
     }
 
     #[test]
