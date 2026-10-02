@@ -329,8 +329,22 @@ pub struct TextLayer {
     /// Font family name or a path to a .ttf/.otf; empty means the bundled default.
     #[serde(default)]
     pub font: String,
+    #[serde(default)]
+    pub italic: bool,
+    #[serde(default)]
+    pub align: TextAlign,
     #[serde(skip)]
     pub cache: Option<TileStore>,
+}
+
+/// Horizontal alignment of a text layer's lines relative to its anchor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
 }
 
 impl PartialEq for TextLayer {
@@ -344,6 +358,8 @@ impl PartialEq for TextLayer {
             && self.bold == o.bold
             && self.line_height == o.line_height
             && self.font == o.font
+            && self.italic == o.italic
+            && self.align == o.align
     }
 }
 
@@ -358,6 +374,8 @@ impl TextLayer {
             bold: false,
             line_height: 1.2,
             font: String::new(),
+            italic: false,
+            align: TextAlign::Left,
             cache: None,
         }
     }

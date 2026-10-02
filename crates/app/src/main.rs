@@ -16,7 +16,8 @@ use eframe::egui::{
 use lumenply_core::commands::*;
 use lumenply_core::{Command, Editor};
 use lumenply_doc::{
-    Adjustment, BlendMode, CombineOp, Document, Filter, Layer, LayerContent, LayerId, Selection, TextLayer,
+    Adjustment, BlendMode, CombineOp, Document, Filter, Layer, LayerContent, LayerId, Selection, TextAlign,
+    TextLayer,
 };
 use lumenply_io::project;
 use lumenply_tiles::{Affine, Raster, Rect};
@@ -166,6 +167,8 @@ struct App {
     gradient_to_transparent: bool,
     text_size: f32,
     text_bold: bool,
+    text_italic: bool,
+    text_font: String,
     /// Clone source point (document space), and whether the next click picks it.
     clone_source: Option<(f32, f32)>,
     clone_picking: bool,
@@ -314,6 +317,8 @@ impl App {
             gradient_to_transparent: false,
             text_size: 72.0,
             text_bold: false,
+            text_italic: false,
+            text_font: String::new(),
             clone_source: None,
             clone_picking: true,
             clone_offset: (0, 0),
@@ -538,7 +543,29 @@ impl App {
                 .text("Size"),
         );
         finished |= rs.drag_stopped() || (rs.changed() && !rs.dragged());
-        if ui.checkbox(&mut t.bold, "Bold").changed() {
+        ui.horizontal(|ui| {
+            if ui.checkbox(&mut t.bold, "Bold").changed() {
+                finished = true;
+            }
+            if ui.checkbox(&mut t.italic, "Italic").changed() {
+                finished = true;
+            }
+            ui.separator();
+            for (align, label, tip) in [
+                (TextAlign::Left, "⬅", "Align left"),
+                (TextAlign::Center, "⏺", "Align centre"),
+                (TextAlign::Right, "➡", "Align right"),
+            ] {
+                if ui
+                    .selectable_value(&mut t.align, align, label)
+                    .on_hover_text(tip)
+                    .changed()
+                {
+                    finished = true;
+                }
+            }
+        });
+        if font_picker(ui, &mut t.font) {
             finished = true;
         }
         let mut rgb = [
@@ -952,6 +979,37 @@ fn linear_rgba(rgb: [f32; 3], alpha: f32) -> [f32; 4] {
         srgb_to_linear_f(rgb[2]),
         alpha,
     ]
+}
+
+/// Font family picker: the bundled default plus every installed family.
+/// Returns true when the choice changed. The empty string means the
+/// bundled DejaVu Sans, so documents render identically on any machine.
+fn font_picker(ui: &mut egui::Ui, font: &mut String) -> bool {
+    let mut changed = false;
+    let shown = if font.is_empty() {
+        "Default (DejaVu Sans)"
+    } else {
+        font.as_str()
+    };
+    egui::ComboBox::from_id_salt("text-font-family")
+        .selected_text(shown)
+        .width(200.0)
+        .show_ui(ui, |ui| {
+            if ui
+                .selectable_label(font.is_empty(), "Default (DejaVu Sans)")
+                .clicked()
+            {
+                font.clear();
+                changed = true;
+            }
+            for fam in lumenply_render::text::system_font_families() {
+                if ui.selectable_label(font == fam, fam).clicked() {
+                    *font = fam.clone();
+                    changed = true;
+                }
+            }
+        });
+    changed
 }
 
 fn file_name(path: &str) -> String {

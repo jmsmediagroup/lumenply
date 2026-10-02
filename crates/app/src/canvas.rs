@@ -839,6 +839,8 @@ impl App {
                         let mut t =
                             TextLayer::new("Text", x, y, self.text_size, linear_rgba(self.brush_rgb, 1.0));
                         t.bold = self.text_bold;
+                        t.italic = self.text_italic;
+                        t.font = self.text_font.clone();
                         let new_id = self.editor.doc().next_id();
                         self.run(&AddTextLayer {
                             text: t,

@@ -139,6 +139,10 @@ impl App {
                                         .text("Size"),
                                 );
                                 ui.checkbox(&mut self.text_bold, "Bold");
+                                ui.checkbox(&mut self.text_italic, "Italic");
+                                let mut font = std::mem::take(&mut self.text_font);
+                                crate::font_picker(ui, &mut font);
+                                self.text_font = font;
                                 ui.label(RichText::new("Click on the canvas to add text").weak());
                             }
                         }

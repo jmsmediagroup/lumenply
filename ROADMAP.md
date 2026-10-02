@@ -150,7 +150,9 @@ None of these could be tested in the container.
 - [ ] Per-channel auto levels/colour (needs per-channel Levels first)
 - [x] More filters: noise (position-seeded), motion blur, median, high pass —
       destructive or live, with dialog previews and palette entries
-- [ ] Text: font picker (system fonts), italic, alignment, kerning/tracking, text on canvas
+- [~] Text: font picker (system fonts via fontdb, .ttc face index honoured),
+      italic (real face or synthetic oblique), alignment (left/centre/right).
+      Still to do: kerning/tracking controls, on-canvas text editing
 - [x] Animated marching ants (boundary dashes march; huge outlines fall back
       to the static texture)
 - [x] Select by colour range (Select menu + palette: fuzziness slider with live

@@ -14,4 +14,5 @@ lumenply-doc.workspace = true
 rayon.workspace = true
 wgpu.workspace = true
 pollster.workspace = true
+fontdb.workspace = true
 fontdue.workspace = true
