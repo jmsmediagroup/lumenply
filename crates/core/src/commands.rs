@@ -19,6 +19,7 @@ pub use crate::crop::CropCanvas;
 pub use crate::guides::{AddGuide, ClearGuides, MoveGuide, RemoveGuide};
 
 pub use crate::fill_cmds::{AddFillLayer, SetFill};
+pub use crate::retouch::{PatchHeal, RedEye};
 
 /// Add an empty pixel layer (or one filled from a raster) on top of the stack.
 pub struct AddPixelLayer {
@@ -1636,7 +1637,7 @@ pub fn flood_region(
     mask
 }
 
-fn sampler<'a>(
+pub(crate) fn sampler<'a>(
     doc: &'a Document,
     source: SampleSource,
 ) -> Result<Box<dyn Fn(i32, i32) -> Rgba + 'a>, EditError> {

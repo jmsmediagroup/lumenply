@@ -17,6 +17,7 @@ pub mod layer_ops;
 pub mod liquify;
 pub mod locks;
 pub mod quick_select;
+mod retouch;
 mod select_ops;
 pub mod snap;
 

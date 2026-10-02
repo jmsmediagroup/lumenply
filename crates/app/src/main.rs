@@ -42,6 +42,7 @@ mod options_bar;
 mod palette;
 mod pen;
 mod properties;
+mod retouch_ui;
 #[cfg(test)]
 mod select_fill_tests;
 mod session;
@@ -333,8 +334,8 @@ struct App {
     pen_hit: Option<PenHit>,
     /// Pen: the selected node (its handles are shown and grabbable).
     pen_sel: Option<(usize, usize)>,
-    /// Healing brush: true = spot mode (no texture source needed).
-    heal_spot: bool,
+    /// Retouching modes of the Heal and Eraser tools (retouch_ui.rs).
+    retouch: retouch_ui::Retouch,
     /// Quick-mask mode: paint the selection itself under a red overlay.
     quick_mask: bool,
     /// Selection boundary pixels for the animated marching ants.
@@ -480,7 +481,7 @@ impl App {
             pen_dragging: false,
             pen_hit: None,
             pen_sel: None,
-            heal_spot: true,
+            retouch: Default::default(),
             quick_mask: false,
             sel_points: Vec::new(),
             layer_drag: None,
@@ -906,7 +907,8 @@ impl App {
         }
         if self.tool == Tool::Heal {
             brush.mode = BrushMode::Paint;
-            let texture = !self.heal_spot && self.clone_source.is_some();
+            let texture =
+                self.retouch.heal_mode == retouch_ui::HealMode::Healing && self.clone_source.is_some();
             let sample = if self.sample_merged {
                 SampleSource::Merged
             } else {
@@ -1616,7 +1618,7 @@ pub(crate) mod a11y_tests {
     /// The app with no dialog up, and no autosave while frames run: a
     /// backup left in the test data folder would greet every later launch
     /// with the Recover dialog.
-    fn launch(args: &[String]) -> App {
+    pub(crate) fn launch(args: &[String]) -> App {
         let mut app = App::launch(args);
         app.dialog = None;
         app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);

@@ -1,0 +1,724 @@
+//! Retouching commands for the Heal tool's Patch and Red Eye modes.
+//! Re-exported from [`crate::commands`].
+//!
+//! Colour maths runs on straight, gamma-encoded RGB (ADR 0005): a patch's
+//! lighting correction and a pupil's redness follow what the eye sees, and
+//! a correction never pushes shadows below black the way a linear-light
+//! offset could.
+
+use lumenply_doc::adjust::{srgb_decode, srgb_encode};
+use lumenply_doc::{Document, LayerId};
+use lumenply_tiles::{Raster, Rect, Rgba};
+
+use crate::commands::{sampler, SampleSource};
+use crate::{Command, EditError, EditResult};
+
+/// Straight, gamma-encoded RGB and alpha of a premultiplied linear pixel.
+fn encoded(p: Rgba) -> ([f32; 3], f32) {
+    let [r, g, b, a] = p.to_straight();
+    ([srgb_encode(r), srgb_encode(g), srgb_encode(b)], a)
+}
+
+fn decoded(c: [f32; 3], a: f32) -> Rgba {
+    Rgba::from_straight(
+        srgb_decode(c[0].clamp(0.0, 1.0)),
+        srgb_decode(c[1].clamp(0.0, 1.0)),
+        srgb_decode(c[2].clamp(0.0, 1.0)),
+        a,
+    )
+}
+
+/// Fill the unknown cells of a `w`×`h` grid with the membrane (harmonic)
+/// interpolation of the known ones: the smoothest field that meets every
+/// known cell, as in seamless cloning. Cells beyond the grid edge are
+/// simply absent (a free boundary). Solved coarse to fine: each level
+/// starts from the coarser solution scaled up and relaxes with
+/// over-relaxed Gauss-Seidel sweeps in a fixed order, so large regions
+/// converge in a few dozen sweeps and the result is deterministic.
+/// Unknown cells keep their input value when no cell is known.
+pub(crate) fn membrane(vals: &mut [[f32; 3]], known: &[bool], w: usize, h: usize) {
+    assert_eq!(vals.len(), w * h);
+    assert_eq!(known.len(), w * h);
+    if known.iter().all(|&k| k) || !known.iter().any(|&k| k) {
+        return;
+    }
+    if w * h <= 64 || w < 4 || h < 4 {
+        let (mut sum, mut n) = ([0f32; 3], 0f32);
+        for (v, _) in vals.iter().zip(known).filter(|(_, &k)| k) {
+            for c in 0..3 {
+                sum[c] += v[c];
+            }
+            n += 1.0;
+        }
+        let mean = [sum[0] / n, sum[1] / n, sum[2] / n];
+        for (v, _) in vals.iter_mut().zip(known).filter(|(_, &k)| !k) {
+            *v = mean;
+        }
+        relax(vals, known, w, h, 200);
+        return;
+    }
+    // Coarse level: a cell is known when any of its children is, holding
+    // their mean.
+    let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+    let mut cv = vec![[0f32; 3]; cw * ch];
+    let mut ck = vec![false; cw * ch];
+    for cy in 0..ch {
+        for cx in 0..cw {
+            let (mut sum, mut n) = ([0f32; 3], 0f32);
+            for (fx, fy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let (x, y) = (2 * cx + fx, 2 * cy + fy);
+                if x < w && y < h && known[y * w + x] {
+                    for c in 0..3 {
+                        sum[c] += vals[y * w + x][c];
+                    }
+                    n += 1.0;
+                }
+            }
+            if n > 0.0 {
+                ck[cy * cw + cx] = true;
+                cv[cy * cw + cx] = [sum[0] / n, sum[1] / n, sum[2] / n];
+            }
+        }
+    }
+    membrane(&mut cv, &ck, cw, ch);
+    // Scale the coarse field up (bilinear) as the starting point.
+    for y in 0..h {
+        for x in 0..w {
+            if known[y * w + x] {
+                continue;
+            }
+            let fx = ((x as f32 + 0.5) / 2.0 - 0.5).clamp(0.0, (cw - 1) as f32);
+            let fy = ((y as f32 + 0.5) / 2.0 - 0.5).clamp(0.0, (ch - 1) as f32);
+            let (x0, y0) = (fx as usize, fy as usize);
+            let (x1, y1) = ((x0 + 1).min(cw - 1), (y0 + 1).min(ch - 1));
+            let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+            let mut out = [0f32; 3];
+            for (c, o) in out.iter_mut().enumerate() {
+                let top = cv[y0 * cw + x0][c] * (1.0 - tx) + cv[y0 * cw + x1][c] * tx;
+                let bot = cv[y1 * cw + x0][c] * (1.0 - tx) + cv[y1 * cw + x1][c] * tx;
+                *o = top * (1.0 - ty) + bot * ty;
+            }
+            vals[y * w + x] = out;
+        }
+    }
+    relax(vals, known, w, h, 80);
+}
+
+/// Over-relaxed Gauss-Seidel sweeps of the discrete Laplace equation over
+/// the unknown cells, in row-major order.
+fn relax(vals: &mut [[f32; 3]], known: &[bool], w: usize, h: usize, sweeps: usize) {
+    const OMEGA: f32 = 1.7;
+    let unknown: Vec<usize> = (0..w * h).filter(|&i| !known[i]).collect();
+    for _ in 0..sweeps {
+        for &i in &unknown {
+            let (x, y) = (i % w, i / w);
+            let mut acc = [0f32; 3];
+            let mut n = 0f32;
+            let mut add = |j: usize| {
+                for c in 0..3 {
+                    acc[c] += vals[j][c];
+                }
+                n += 1.0;
+            };
+            if x > 0 {
+                add(i - 1);
+            }
+            if x + 1 < w {
+                add(i + 1);
+            }
+            if y > 0 {
+                add(i - w);
+            }
+            if y + 1 < h {
+                add(i + w);
+            }
+            for c in 0..3 {
+                let v = vals[i][c];
+                vals[i][c] = v + OMEGA * (acc[c] / n - v);
+            }
+        }
+    }
+}
+
+/// Heal ▸ Patch: replace the selected area of a pixel layer with the
+/// texture found `offset` pixels away (where the user dragged the patch),
+/// healed into place: the colour and lighting difference measured along
+/// the patch's rim is spread smoothly across it (a membrane, as in seamless
+/// cloning), so the copied detail takes on the destination's tone. A soft
+/// selection blends the result in by its coverage. With `content_aware`
+/// the area is synthesised by PatchMatch from the dragged-to area and the
+/// patch's own surroundings instead. One undo step; the selection stays.
+pub struct PatchHeal {
+    pub layer: LayerId,
+    /// Source position = destination + offset (canvas pixels).
+    pub offset: (i32, i32),
+    pub sample: SampleSource,
+    pub content_aware: bool,
+}
+
+impl PatchHeal {
+    fn hole(doc: &Document) -> EditResult<Rect> {
+        let none = || EditError::Invalid("draw around the area to patch first".into());
+        let sel = doc.selection.as_ref().ok_or_else(none)?;
+        let hole = sel.tight_bounds(doc.canvas());
+        if hole.is_empty() {
+            return Err(none());
+        }
+        Ok(hole)
+    }
+}
+
+impl Command for PatchHeal {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn label(&self) -> String {
+        if self.content_aware {
+            "Patch (content-aware)".into()
+        } else {
+            "Patch".into()
+        }
+    }
+
+    fn affected(&self, doc: &Document) -> Option<Rect> {
+        PatchHeal::hole(doc).ok()
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        let hole = PatchHeal::hole(doc)?;
+        if self.offset == (0, 0) {
+            return Err(EditError::Invalid(
+                "drag the patch onto the area to copy from".into(),
+            ));
+        }
+        let canvas = doc.canvas();
+        let sel = doc.selection.clone().expect("checked by hole()");
+        // The source as it is before the patch, so it never reads its own
+        // writes where source and destination overlap.
+        let (ox, oy) = self.offset;
+        let source = |area: Rect, doc: &Document| -> EditResult<Raster> {
+            let sample = sampler(doc, self.sample)?;
+            let mut r = Raster::new(area.w, area.h);
+            for y in 0..area.h as i32 {
+                for x in 0..area.w as i32 {
+                    let sx = (area.x + x + ox).clamp(canvas.x, canvas.right() - 1);
+                    let sy = (area.y + y + oy).clamp(canvas.y, canvas.bottom() - 1);
+                    r.set(x as u32, y as u32, sample(sx, sy));
+                }
+            }
+            Ok(r)
+        };
+        let layer = doc.layer(self.layer).ok_or(EditError::NoLayer(self.layer))?;
+        layer.pixels().ok_or(EditError::NotPixel(self.layer))?;
+        let filled: Raster;
+        let area: Rect;
+        if self.content_aware {
+            let m = (hole.w.max(hole.h) / 2).clamp(16, 96) as i32;
+            area = Rect::new(
+                hole.x - m,
+                hole.y - m,
+                hole.w + 2 * m as u32,
+                hole.h + 2 * m as u32,
+            )
+            .intersect(&canvas);
+            let src = source(area, doc)?;
+            let store = doc.layer(self.layer).and_then(|l| l.pixels()).expect("checked");
+            filled = content_aware_patch(
+                &store.to_raster(area),
+                &src,
+                &sel.coverage.to_dense(area),
+                area,
+                |x, y| !canvas.contains(x + ox, y + oy) || sel.value(x + ox, y + oy) > 0.0,
+            )?;
+        } else {
+            area = Rect::new(hole.x - 1, hole.y - 1, hole.w + 2, hole.h + 2).intersect(&canvas);
+            let src = source(area, doc)?;
+            let store = doc.layer(self.layer).and_then(|l| l.pixels()).expect("checked");
+            filled = heal_patch(&store.to_raster(area), &src, &sel.coverage.to_dense(area))?;
+        }
+        let cov = sel.coverage.to_dense(area);
+        let store = doc
+            .layer_mut(self.layer)
+            .and_then(|l| l.pixels_mut())
+            .expect("checked above");
+        let w = area.w as usize;
+        for (i, &k) in cov.iter().enumerate() {
+            if k > 0.0 {
+                let (x, y) = (area.x + (i % w) as i32, area.y + (i / w) as i32);
+                store.set_pixel(x, y, filled.pixels[i]);
+            }
+        }
+        store.prune_blank();
+        Ok(())
+    }
+}
+
+/// The healed patch over `dst`'s area: `src` (the dragged-to texture,
+/// aligned with `dst`) plus the membrane of `dst − src` along the rim,
+/// blended in by `cov`. Pixels outside the patch come back as they were.
+fn heal_patch(dst: &Raster, src: &Raster, cov: &[f32]) -> EditResult<Raster> {
+    let (w, h) = (dst.width as usize, dst.height as usize);
+    let n = w * h;
+    let mut d = Vec::with_capacity(n);
+    let mut s = Vec::with_capacity(n);
+    let mut alpha = Vec::with_capacity(n);
+    for i in 0..n {
+        let (dc, da) = encoded(dst.pixels[i]);
+        let (sc, _) = encoded(src.pixels[i]);
+        d.push(dc);
+        s.push(sc);
+        alpha.push(da);
+    }
+    // The rim: unpatched pixels with colour. Transparent ones carry none,
+    // so they are interpolated over rather than matched.
+    let known: Vec<bool> = (0..n).map(|i| cov[i] <= 0.0 && alpha[i] > 0.0).collect();
+    if !known.iter().any(|&k| k) {
+        return Err(EditError::Invalid(
+            "nothing around the patch to blend it into".into(),
+        ));
+    }
+    let mut diff: Vec<[f32; 3]> = (0..n)
+        .map(|i| {
+            if known[i] {
+                [d[i][0] - s[i][0], d[i][1] - s[i][1], d[i][2] - s[i][2]]
+            } else {
+                [0.0; 3]
+            }
+        })
+        .collect();
+    membrane(&mut diff, &known, w, h);
+    let mut out = dst.clone();
+    for i in 0..n {
+        let k = cov[i].clamp(0.0, 1.0);
+        if k <= 0.0 || alpha[i] <= 0.0 {
+            continue;
+        }
+        let healed = [s[i][0] + diff[i][0], s[i][1] + diff[i][1], s[i][2] + diff[i][2]];
+        let mixed = [
+            d[i][0] + (healed[0].clamp(0.0, 1.0) - d[i][0]) * k,
+            d[i][1] + (healed[1].clamp(0.0, 1.0) - d[i][1]) * k,
+            d[i][2] + (healed[2].clamp(0.0, 1.0) - d[i][2]) * k,
+        ];
+        out.pixels[i] = decoded(mixed, alpha[i]);
+    }
+    Ok(out)
+}
+
+/// Content-aware patch: PatchMatch fills the patch from a canvas made of
+/// two blocks side by side — the patch with its surroundings, and the same
+/// area at the dragged-to place — so the synthesis prefers texture from
+/// where the user pointed. `excluded(x, y)` marks dragged-to pixels that
+/// must not be copied (off the canvas, or inside the patch itself).
+fn content_aware_patch(
+    dst: &Raster,
+    src: &Raster,
+    cov: &[f32],
+    area: Rect,
+    excluded: impl Fn(i32, i32) -> bool,
+) -> EditResult<Raster> {
+    let (w, h) = (dst.width as usize, dst.height as usize);
+    let mut synth = Raster::new(2 * w as u32, h as u32);
+    let mut hole = vec![false; 2 * w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            synth.set(x as u32, y as u32, dst.pixels[i]);
+            synth.set((w + x) as u32, y as u32, src.pixels[i]);
+            hole[y * 2 * w + x] = cov[i] > 0.0;
+            hole[y * 2 * w + w + x] = excluded(area.x + x as i32, area.y + y as i32);
+        }
+    }
+    let filled = lumenply_render::inpaint::inpaint(&synth, &hole, 0x5EED_0002)
+        .map_err(|e| EditError::Invalid(e.to_string()))?;
+    let mut out = dst.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            let k = cov[i].clamp(0.0, 1.0);
+            if k <= 0.0 {
+                continue;
+            }
+            let (o, f) = (dst.pixels[i], filled.pixels[y * 2 * w + x]);
+            out.pixels[i] = Rgba::new(
+                o.r + (f.r - o.r) * k,
+                o.g + (f.g - o.g) * k,
+                o.b + (f.b - o.b) * k,
+                o.a + (f.a - o.a) * k,
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// Heal ▸ Red Eye: find the red pupil in `area` (the reddest connected
+/// patch nearest the box centre) and turn it a dark neutral.
+///
+/// Redness is `(r − max(g, b)) / r` on gamma-encoded values, so a red
+/// pupil scores near 1 and skin about 0.25. `pupil_size` (0–1) lowers the
+/// threshold from 0.75 to 0.25, taking in less saturated edge pixels. The
+/// pupil becomes `(g + b) / 2 × (1 − darken)` in every channel; edge pixels
+/// just below the threshold blend partly, by how red they are.
+pub struct RedEye {
+    pub layer: LayerId,
+    pub area: Rect,
+    pub pupil_size: f32,
+    pub darken: f32,
+}
+
+impl RedEye {
+    /// Redness threshold for a pupil size.
+    pub fn threshold(pupil_size: f32) -> f32 {
+        0.75 - 0.5 * pupil_size.clamp(0.0, 1.0)
+    }
+}
+
+fn redness(c: [f32; 3], a: f32) -> f32 {
+    if a <= 0.0 || c[0] < 0.15 {
+        return 0.0;
+    }
+    ((c[0] - c[1].max(c[2])) / c[0]).max(0.0)
+}
+
+impl Command for RedEye {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn label(&self) -> String {
+        "Red eye".into()
+    }
+
+    fn affected(&self, doc: &Document) -> Option<Rect> {
+        Some(self.area.intersect(&doc.canvas()))
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        let area = self.area.intersect(&doc.canvas());
+        if area.is_empty() {
+            return Err(EditError::Invalid("the red-eye box is off the canvas".into()));
+        }
+        let sel = doc.selection.clone();
+        let layer = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
+        let store = layer.pixels_mut().ok_or(EditError::NotPixel(self.layer))?;
+        let img = store.to_raster(area);
+        let (w, h) = (area.w as usize, area.h as usize);
+        let px: Vec<([f32; 3], f32)> = img.pixels.iter().map(|&p| encoded(p)).collect();
+        let red: Vec<f32> = px.iter().map(|&(c, a)| redness(c, a)).collect();
+        let thr = RedEye::threshold(self.pupil_size);
+        // Seed: the qualifying pixel nearest the box centre.
+        let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
+        let seed = (0..w * h)
+            .filter(|&i| red[i] >= thr)
+            .min_by(|&a, &b| {
+                let d = |i: usize| {
+                    let (x, y) = ((i % w) as f32 + 0.5 - cx, (i / w) as f32 + 0.5 - cy);
+                    x * x + y * y
+                };
+                d(a).total_cmp(&d(b)).then(a.cmp(&b))
+            })
+            .ok_or_else(|| EditError::Invalid("no red pupil found here".into()))?;
+        // The pupil: pixels at or above the threshold, 8-connected to it.
+        let mut inside = vec![false; w * h];
+        let mut stack = vec![seed];
+        inside[seed] = true;
+        while let Some(i) = stack.pop() {
+            let (x, y) = ((i % w) as i32, (i / w) as i32);
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 {
+                        continue;
+                    }
+                    let j = ny as usize * w + nx as usize;
+                    if !inside[j] && red[j] >= thr {
+                        inside[j] = true;
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+        // Its one-pixel rim blends partly, by how red each pixel is.
+        let lower = (thr - 0.2).max(0.0);
+        let strength = |i: usize| -> f32 {
+            if inside[i] {
+                return 1.0;
+            }
+            let (x, y) = ((i % w) as i32, (i / w) as i32);
+            let touches = (-1..=1).any(|dy| {
+                (-1..=1).any(|dx| {
+                    let (nx, ny) = (x + dx, y + dy);
+                    nx >= 0
+                        && ny >= 0
+                        && nx < w as i32
+                        && ny < h as i32
+                        && inside[ny as usize * w + nx as usize]
+                })
+            });
+            if touches {
+                ((red[i] - lower) / (thr - lower).max(1e-3)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        let dark = 1.0 - self.darken.clamp(0.0, 1.0);
+        for (i, &(c, a)) in px.iter().enumerate() {
+            let (x, y) = (area.x + (i % w) as i32, area.y + (i / w) as i32);
+            let k = strength(i) * sel.as_ref().map_or(1.0, |s| s.value(x, y));
+            if k <= 0.0 {
+                continue;
+            }
+            let v = 0.5 * (c[1] + c[2]) * dark;
+            let out = [
+                c[0] + (v - c[0]) * k,
+                c[1] + (v - c[1]) * k,
+                c[2] + (v - c[2]) * k,
+            ];
+            store.set_pixel(x, y, decoded(out, a));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::{AddPixelLayer, SetSelection};
+    use crate::Editor;
+    use lumenply_doc::Selection;
+
+    /// A pixel from gamma-encoded straight RGB, fully opaque.
+    fn g(r: f32, gg: f32, b: f32) -> Rgba {
+        decoded([r, gg, b], 1.0)
+    }
+
+    fn enc(p: Rgba) -> [f32; 3] {
+        encoded(p).0
+    }
+
+    #[test]
+    fn the_membrane_reproduces_a_harmonic_field_inside_a_large_hole() {
+        // f = 0.004 x + 0.006 y is harmonic, so knowing it on the border
+        // alone pins the whole interior to it.
+        let (w, h) = (120usize, 90usize);
+        let f = |x: usize, y: usize| 0.004 * x as f32 + 0.006 * y as f32;
+        let mut vals = vec![[0f32; 3]; w * h];
+        let mut known = vec![false; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                if x == 0 || y == 0 || x == w - 1 || y == h - 1 {
+                    let v = f(x, y);
+                    vals[y * w + x] = [v, -v, 0.5];
+                    known[y * w + x] = true;
+                }
+            }
+        }
+        membrane(&mut vals, &known, w, h);
+        let mut worst = 0f32;
+        for y in 0..h {
+            for x in 0..w {
+                let v = vals[y * w + x];
+                let e = f(x, y);
+                worst = worst
+                    .max((v[0] - e).abs())
+                    .max((v[1] + e).abs())
+                    .max((v[2] - 0.5).abs());
+            }
+        }
+        // Within half an 8-bit level everywhere.
+        assert!(worst < 1.5e-3, "worst error {worst}");
+        // The centre: 0.004·60 + 0.006·45 = 0.51.
+        assert!((vals[45 * w + 60][0] - 0.51).abs() < 2e-3);
+    }
+
+    /// Gamma grey of the test image: vertical stripes of ±0.1 every 3
+    /// pixels over 0.4, brighter by 0.25 from row 40 down.
+    fn stripes(x: u32, y: u32) -> f32 {
+        let stripe = if x % 6 < 3 { 0.1 } else { -0.1 };
+        0.4 + stripe + if y >= 40 { 0.25 } else { 0.0 }
+    }
+
+    fn patch_doc() -> (Editor, LayerId) {
+        let (w, h) = (64u32, 64u32);
+        let mut r = Raster::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                // A white blemish over the stripes.
+                let blemish = (20..28).contains(&x) && (14..22).contains(&y);
+                let v = if blemish { 1.0 } else { stripes(x, y) };
+                r.set(x, y, g(v, v, v));
+            }
+        }
+        let mut ed = Editor::new(Document::new(w, h));
+        ed.execute(&AddPixelLayer::from_raster("photo", r, 0, 0)).unwrap();
+        let id = ed.doc().layers()[0].id;
+        (ed, id)
+    }
+
+    #[test]
+    fn a_patch_takes_texture_from_the_source_and_tone_from_its_rim() {
+        let (mut ed, id) = patch_doc();
+        let patch = PatchHeal {
+            layer: id,
+            offset: (0, 36),
+            sample: SampleSource::Layer(id),
+            content_aware: false,
+        };
+        assert!(ed.execute(&patch).is_err(), "needs a selection");
+        ed.execute(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(16, 10, 16, 16))),
+        })
+        .unwrap();
+        assert_eq!(patch.affected(ed.doc()), Some(Rect::new(16, 10, 16, 16)));
+        ed.execute(&patch).unwrap();
+        assert_eq!(ed.history().last().copied(), Some("Patch"));
+        // The source rows 46..62 carry the same stripes 0.25 brighter; the
+        // rim says "0.25 darker" all round, so the patch lands exactly on
+        // the stripes that belong here: 0.5 on bright columns, 0.3 on dark.
+        let px = ed.doc().layer(id).unwrap().pixels().unwrap().clone();
+        let mut worst = 0f32;
+        for y in 10..26 {
+            for x in 16..32 {
+                let c = enc(px.get_pixel(x, y));
+                let want = stripes(x as u32, y as u32);
+                worst = worst.max((c[0] - want).abs()).max((c[2] - want).abs());
+            }
+        }
+        assert!(worst < 2e-3, "worst {worst}");
+        let c = enc(px.get_pixel(24, 18));
+        // Inside the old blemish: column 24 is bright (24 % 6 < 3), 27 dark.
+        assert!((c[1] - 0.5).abs() < 2e-3, "{c:?}");
+        let c = enc(px.get_pixel(27, 18));
+        assert!((c[1] - 0.3).abs() < 2e-3, "{c:?}");
+        // Untouched outside the selection; the selection stays.
+        let c = enc(px.get_pixel(40, 18));
+        assert!((c[0] - 0.3).abs() < 1e-3, "{c:?}");
+        assert!(ed.doc().selection.is_some());
+        ed.undo();
+        let back = enc(ed.doc().layer(id).unwrap().pixels().unwrap().get_pixel(24, 18));
+        assert!((back[0] - 1.0).abs() < 1e-3, "undo brings the blemish back");
+    }
+
+    #[test]
+    fn a_content_aware_patch_fills_from_the_dragged_area() {
+        let (mut ed, id) = patch_doc();
+        ed.execute(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(18, 12, 12, 12))),
+        })
+        .unwrap();
+        ed.execute(&PatchHeal {
+            layer: id,
+            offset: (0, -12),
+            sample: SampleSource::Layer(id),
+            content_aware: true,
+        })
+        .unwrap();
+        assert_eq!(ed.history().last().copied(), Some("Patch (content-aware)"));
+        let px = ed.doc().layer(id).unwrap().pixels().unwrap();
+        let mut worst = 0f32;
+        for y in 14..22 {
+            for x in 20..28 {
+                let c = enc(px.get_pixel(x, y));
+                worst = worst.max((c[0] - stripes(x as u32, y as u32)).abs());
+            }
+        }
+        assert!(worst < 0.03, "the stripes run through the patch (worst {worst})");
+    }
+
+    #[test]
+    fn a_patch_without_a_drag_or_on_a_non_pixel_layer_is_refused() {
+        let (mut ed, id) = patch_doc();
+        ed.execute(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(16, 10, 16, 16))),
+        })
+        .unwrap();
+        let steps = ed.history().len();
+        for (layer, offset) in [(id, (0, 0)), (99, (0, 30))] {
+            let r = ed.execute(&PatchHeal {
+                layer,
+                offset,
+                sample: SampleSource::Merged,
+                content_aware: false,
+            });
+            assert!(r.is_err());
+        }
+        assert_eq!(ed.history().len(), steps);
+    }
+
+    fn eye_doc() -> (Document, LayerId) {
+        let (w, h) = (40u32, 40u32);
+        let skin = g(0.85, 0.62, 0.52);
+        let pupil = g(0.8, 0.1, 0.1);
+        let mut r = Raster::filled(w, h, skin);
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let d2 = |cx: i32, cy: i32| (x - cx).pow(2) + (y - cy).pow(2);
+                if d2(20, 20) <= 36 || d2(35, 5) <= 4 {
+                    r.set(x as u32, y as u32, pupil);
+                }
+            }
+        }
+        let mut doc = Document::new(w, h);
+        let id = doc.add_pixel_layer("face");
+        *doc.layer_mut(id).unwrap().pixels_mut().unwrap() = lumenply_tiles::TileStore::from_raster(&r, 0, 0);
+        (doc, id)
+    }
+
+    #[test]
+    fn red_eye_darkens_the_connected_pupil_only() {
+        let (mut doc, id) = eye_doc();
+        RedEye {
+            layer: id,
+            area: Rect::new(0, 0, 40, 40),
+            pupil_size: 0.5,
+            darken: 0.5,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let px = doc.layer(id).unwrap().pixels().unwrap();
+        // (g + b) / 2 = 0.1, halved: 0.05 in every channel.
+        for (x, y) in [(20, 20), (14, 20), (20, 25)] {
+            let c = enc(px.get_pixel(x, y));
+            for v in c {
+                assert!((v - 0.05).abs() < 1e-4, "({x}, {y}): {c:?}");
+            }
+        }
+        // Skin right next to the pupil is untouched (redness 0.27 is below
+        // the rim's lower bound of 0.3).
+        for (x, y) in [(27, 20), (20, 13), (12, 12)] {
+            let c = enc(px.get_pixel(x, y));
+            assert!(
+                (c[0] - 0.85).abs() < 1e-5 && (c[1] - 0.62).abs() < 1e-5,
+                "({x}, {y}): {c:?}"
+            );
+        }
+        // The second red spot is not connected to the pupil: still red.
+        let c = enc(px.get_pixel(35, 5));
+        assert!((c[0] - 0.8).abs() < 1e-5 && (c[1] - 0.1).abs() < 1e-5, "{c:?}");
+    }
+
+    #[test]
+    fn red_eye_honours_darken_and_refuses_a_box_without_red() {
+        let (mut doc, id) = eye_doc();
+        RedEye {
+            layer: id,
+            area: Rect::new(14, 14, 13, 13),
+            pupil_size: 0.5,
+            darken: 0.0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let c = enc(doc.layer(id).unwrap().pixels().unwrap().get_pixel(20, 20));
+        assert!(c.iter().all(|v| (v - 0.1).abs() < 1e-4), "{c:?}");
+        assert_eq!(RedEye::threshold(0.5), 0.5);
+        assert_eq!(RedEye::threshold(1.0), 0.25);
+        let err = RedEye {
+            layer: id,
+            area: Rect::new(0, 30, 10, 10),
+            pupil_size: 0.5,
+            darken: 0.5,
+        }
+        .apply(&mut doc);
+        assert!(err.is_err(), "skin alone is not a pupil");
+    }
+}

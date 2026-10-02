@@ -55,16 +55,23 @@ impl App {
                             let field = |ui: &mut egui::Ui, label: &str, dv: egui::DragValue| {
                                 ui.label(RichText::new(label).color(MUTED));
                                 let r = num_field(ui, dv.fixed_decimals(1), 70.0);
-                                a11y_name(&r, match label {
-                                    "W" => "Width",
-                                    "H" => "Height",
-                                    other => other,
-                                });
+                                a11y_name(
+                                    &r,
+                                    match label {
+                                        "W" => "Width",
+                                        "H" => "Height",
+                                        other => other,
+                                    },
+                                );
                                 r.changed()
                             };
                             let c1 = field(ui, "W", egui::DragValue::new(&mut sx).speed(1.0).suffix("%"));
                             let c2 = field(ui, "H", egui::DragValue::new(&mut sy).speed(1.0).suffix("%"));
-                            let c3 = field(ui, "Rotate", egui::DragValue::new(&mut rot).speed(0.5).suffix("°"));
+                            let c3 = field(
+                                ui,
+                                "Rotate",
+                                egui::DragValue::new(&mut rot).speed(0.5).suffix("°"),
+                            );
                             let c4 = field(
                                 ui,
                                 "Skew",
@@ -111,8 +118,9 @@ impl App {
                         ui.separator();
                         if ui
                             .add(
-                                primary_button("Apply")
-                                    .shortcut_text(RichText::new("Enter").color(ACCENT_INK.gamma_multiply(0.7))),
+                                primary_button("Apply").shortcut_text(
+                                    RichText::new("Enter").color(ACCENT_INK.gamma_multiply(0.7)),
+                                ),
                             )
                             .on_hover_text("Commit the transform (Enter)")
                             .clicked()
@@ -221,6 +229,9 @@ impl App {
                             hint_label(ui, tier, self.tool);
                         }
                         Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal => {
+                            if self.retouch_options_bar(ui, tier == Tier::Wide) {
+                                return;
+                            }
                             if self.tool == Tool::Brush {
                                 const MODES: [(BrushMode, &str); 6] = [
                                     (BrushMode::Paint, "Paint"),
@@ -254,13 +265,9 @@ impl App {
                                 self.brush_presets_ui(ui, tier);
                                 ui.separator();
                             }
-                            if self.tool == Tool::Heal {
-                                check(ui, &mut self.heal_spot, "Spot").on_hover_text(
-                                    "Heal from the surroundings alone; untick to add texture from a picked source",
-                                );
-                            }
                             let needs_source = self.tool == Tool::Clone
-                                || (self.tool == Tool::Heal && !self.heal_spot);
+                                || (self.tool == Tool::Heal
+                                    && self.retouch.heal_mode == crate::retouch_ui::HealMode::Healing);
                             if needs_source {
                                 let picking = self.clone_picking || self.clone_source.is_none();
                                 let status = match self.clone_source {
@@ -285,10 +292,11 @@ impl App {
                                         None => text.color(MUTED),
                                     });
                                 }
-                                check(ui, &mut self.sample_merged, "All layers")
-                                    .on_hover_text("Sample the merged image instead of the active layer only");
+                                check(ui, &mut self.sample_merged, "All layers").on_hover_text(
+                                    "Sample the merged image instead of the active layer only",
+                                );
                             }
-                            if self.tool == Tool::Heal || needs_source {
+                            if needs_source {
                                 ui.separator();
                             }
                             let mut size = self.brush.radius * 2.0;
@@ -397,9 +405,7 @@ impl App {
                                 .on_disabled_hover_text(need_path)
                                 .clicked()
                             {
-                                self.run(&PathToSelection {
-                                    op: self.select_op,
-                                });
+                                self.run(&PathToSelection { op: self.select_op });
                             }
                             if ui
                                 .add_enabled(has_path, egui::Button::new("Clear path"))
@@ -646,7 +652,7 @@ fn bar_scroll(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> f32 {
 
 /// A slider cluster in the bar: muted label, slider, typeable mono value.
 /// Returns true when the value changed.
-fn bar_slider(
+pub(crate) fn bar_slider(
     ui: &mut egui::Ui,
     label: &str,
     v: &mut f32,
