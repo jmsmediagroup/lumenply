@@ -1148,7 +1148,8 @@ impl App {
                     ctx.set_cursor_icon(egui::CursorIcon::Move);
                 }
                 if resp.drag_started_by(primary) {
-                    if self.active_is_pixel() || self.active_is_text() {
+                    let fill = self.active_layer().is_some_and(|l| l.fill_layer().is_some());
+                    if self.active_is_pixel() || self.active_is_text() || fill {
                         self.drag = Some(DragKind::Move);
                         self.drag_start = ctx.input(|i| i.pointer.press_origin());
                         self.move_offset = (0, 0);

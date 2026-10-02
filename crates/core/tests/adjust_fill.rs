@@ -228,6 +228,48 @@ fn gradient_fill_spans_the_canvas_and_follows_canvas_changes() {
 }
 
 #[test]
+fn moving_a_gradient_fill_shifts_its_centre_and_its_mask() {
+    let mut ed = Editor::new(Document::new(100, 10));
+    ed.execute(&SetSelection {
+        selection: Some(Selection::rect(Rect::new(0, 0, 20, 10))),
+    })
+    .unwrap();
+    ed.execute(&AddFillLayer::new(Fill::Gradient {
+        gradient: Gradient::default(),
+        style: GradientStyle::Linear,
+        angle: 0.0,
+        scale: 1.0,
+        reverse: false,
+        offset: [0.0, 0.0],
+    }))
+    .unwrap();
+    let id = top_id(&ed);
+    ed.execute(&lumenply_core::commands::MoveLayer {
+        layer: id,
+        dx: 50,
+        dy: 0,
+    })
+    .unwrap();
+    let l = ed.doc().layer(id).unwrap();
+    assert!(matches!(
+        l.fill_layer().unwrap().fill,
+        Fill::Gradient { offset: [o, 0.0], .. } if (o - 0.5).abs() < 1e-6
+    ));
+    // The ramp's centre moved to x = 100: x = 99 is just below mid grey.
+    let p = l.raster_store().unwrap().get_pixel(99, 5);
+    assert!(close(srgb_encode(p.r), 0.495), "{p:?}");
+    // The mask moved with it: 50..70 shows, 0..20 no longer does.
+    let m = l.mask.as_ref().unwrap();
+    assert_eq!((m.value(10, 5), m.value(60, 5)), (0.0, 1.0));
+    // Scaling a fill asks for a rasterize instead.
+    let scale = lumenply_core::commands::TransformLayer {
+        layer: id,
+        transform: lumenply_tiles::Affine::scale(2.0, 2.0),
+    };
+    assert!(ed.execute(&scale).is_err());
+}
+
+#[test]
 fn a_solid_fill_costs_one_tile_of_history() {
     // 1024² is 16 tiles, all interior: one shared 16-bit tile of 512 KiB.
     let mut ed = Editor::new(Document::new(1024, 1024));
