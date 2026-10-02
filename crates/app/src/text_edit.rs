@@ -121,6 +121,8 @@ pub(crate) enum KeyAction {
     SelectAll,
     Undo,
     Redo,
+    /// Cmd+Shift+> / <: the selection (or all text) 2 px larger or smaller.
+    Resize(i8),
     /// Esc, Cmd+Enter: finish editing.
     Commit,
 }
@@ -156,6 +158,8 @@ pub(crate) fn key_action(key: Key, m: egui::Modifiers, mac: bool) -> Option<KeyA
         Key::Enter if m.command => A::Commit,
         Key::Enter => A::Insert("\n"),
         Key::Escape => A::Commit,
+        Key::Period if m.command && m.shift => A::Resize(1),
+        Key::Comma if m.command && m.shift => A::Resize(-1),
         Key::Tab if !m.command => A::Insert("\t"),
         Key::A if m.command => A::SelectAll,
         Key::Z if m.command && m.shift => A::Redo,
@@ -315,6 +319,13 @@ enum Grab {
     },
 }
 
+/// What an in-session undo step puts back.
+struct Snap {
+    buf: Buffer,
+    runs: Vec<TextRun>,
+    size: f32,
+}
+
 /// One open editing session.
 pub(crate) struct TextSession {
     pub layer: LayerId,
@@ -337,9 +348,9 @@ pub(crate) struct TextSession {
     grab: Option<Grab>,
     /// Last press: time, document position, click count.
     last_press: (f64, (f32, f32), u32),
-    /// In-session undo: the buffer and the style runs before each change.
-    undo: Vec<(Buffer, Vec<TextRun>)>,
-    redo: Vec<(Buffer, Vec<TextRun>)>,
+    /// In-session undo: the buffer, style runs and size before each change.
+    undo: Vec<Snap>,
+    redo: Vec<Snap>,
     /// The last change was typing, so more typing joins its undo entry.
     typing: bool,
     focus_pending: bool,
@@ -644,7 +655,11 @@ impl App {
             return;
         }
         if !(typing && s.typing) {
-            s.undo.push((before.clone(), s.t.runs.clone()));
+            s.undo.push(Snap {
+                buf: before.clone(),
+                runs: s.t.runs.clone(),
+                size: s.t.size,
+            });
         }
         s.redo.clear();
         s.typing = typing;
@@ -669,13 +684,14 @@ impl App {
             return;
         };
         let popped = if redo { s.redo.pop() } else { s.undo.pop() };
-        let Some((b, runs)) = popped else {
+        let Some(snap) = popped else {
             return;
         };
-        let current = (
-            std::mem::replace(&mut s.buf, b),
-            std::mem::replace(&mut s.t.runs, runs),
-        );
+        let current = Snap {
+            buf: std::mem::replace(&mut s.buf, snap.buf),
+            runs: std::mem::replace(&mut s.t.runs, snap.runs),
+            size: std::mem::replace(&mut s.t.size, snap.size),
+        };
         if redo {
             s.undo.push(current);
         } else {
@@ -762,6 +778,7 @@ impl App {
                 }
             }
             KeyAction::Undo => self.text_restore(now, false),
+            KeyAction::Resize(dir) => self.text_resize(now, dir),
             KeyAction::Redo => self.text_restore(now, true),
             KeyAction::Move(nav, extend) => {
                 let Some(s) = self.typer.session.as_mut() else {
@@ -788,6 +805,39 @@ impl App {
                 self.text_change(now, false, |b| b.delete_to(to));
             }
         }
+    }
+
+    /// Photoshop's Cmd+Shift+> / <: grow or shrink the selection's size
+    /// by 2 px (from its first character's size), or the whole text's
+    /// with no selection. One in-session undo step per press.
+    fn text_resize(&mut self, now: f64, dir: i8) {
+        let Some(s) = self.typer.session.as_mut() else {
+            return;
+        };
+        let (a, b) = s.buf.range();
+        let from = if a < b { s.t.style_at(a).size } else { s.t.size };
+        let size = (from + 2.0 * dir as f32).clamp(1.0, 2000.0);
+        if size == from {
+            return;
+        }
+        s.undo.push(Snap {
+            buf: s.buf.clone(),
+            runs: s.t.runs.clone(),
+            size: s.t.size,
+        });
+        s.redo.clear();
+        s.typing = false;
+        s.moved_at = now;
+        let patch = CharStyle {
+            size: Some(size),
+            ..CharStyle::default()
+        };
+        if a < b {
+            s.t.apply_style(a, b, patch);
+        } else {
+            s.t.set_base_style(patch);
+        }
+        self.text_apply();
     }
 
     /// The Text tool's canvas input: presses, drags and releases, keys
@@ -1409,6 +1459,12 @@ mod tests {
         );
         assert_eq!(key_action(Key::Y, ctrl, false), Some(A::Redo));
         assert_eq!(key_action(Key::Y, mac_cmd, true), None);
+        let cmd_shift = M {
+            shift: true,
+            ..mac_cmd
+        };
+        assert_eq!(key_action(Key::Period, cmd_shift, true), Some(A::Resize(1)));
+        assert_eq!(key_action(Key::Comma, cmd_shift, true), Some(A::Resize(-1)));
     }
 
     #[test]
@@ -1947,6 +2003,35 @@ mod tests {
         let [w, h] = s.t.box_size.expect("paragraph text");
         assert!((s.t.x - 10.0).abs() < 0.5 && (s.t.y - 10.0).abs() < 0.5);
         assert!((w - 100.0).abs() < 0.5 && (h - 50.0).abs() < 0.5, "{w} × {h}");
+    }
+
+    #[test]
+    fn size_keys_grow_the_selection_or_the_whole_text() {
+        let (mut app, ctx, id) = app();
+        app.begin_text_edit(&ctx, id, EditStart::End);
+        if let Some(s) = app.typer.session.as_mut() {
+            s.buf.select(1, 3);
+        }
+        app.text_key(1.0, KeyAction::Resize(1));
+        app.text_key(1.1, KeyAction::Resize(1));
+        let t = app.editor.doc().layer(id).unwrap().text_layer().unwrap().clone();
+        assert_eq!((t.style_at(1).size, t.style_at(2).size), (28.0, 28.0));
+        assert_eq!(
+            (t.style_at(0).size, t.style_at(3).size, t.size),
+            (24.0, 24.0, 24.0)
+        );
+        // No selection: the whole text, the run's override folded in.
+        if let Some(s) = app.typer.session.as_mut() {
+            s.buf.move_to(5, false);
+        }
+        app.text_key(1.2, KeyAction::Resize(-1));
+        let t = app.editor.doc().layer(id).unwrap().text_layer().unwrap().clone();
+        assert_eq!((t.size, t.style_at(1).size), (22.0, 22.0));
+        assert!(t.runs.is_empty());
+        // Each press is one in-session undo step.
+        app.text_key(1.3, KeyAction::Undo);
+        let t = app.editor.doc().layer(id).unwrap().text_layer().unwrap().clone();
+        assert_eq!((t.size, t.style_at(1).size), (24.0, 28.0));
     }
 
     #[test]
