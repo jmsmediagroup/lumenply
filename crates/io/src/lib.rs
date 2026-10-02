@@ -9,6 +9,7 @@
 pub mod ora;
 pub mod project;
 pub mod psd;
+mod psd_guides;
 
 use std::path::Path;
 
