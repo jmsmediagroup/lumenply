@@ -28,10 +28,12 @@ hashes (salts and dab indices) are kept. A test compares against a
 verbatim copy of the old painter.
 
 **Dynamics are hashed, never random**: size, angle, roundness, flips,
-scatter, count and transfer jitter each hash the dab's index in the
-stroke with their own salt. Texture is a canvas-anchored grain (value
-noise over a per-pixel tooth) applied through a soft threshold at the
-depth, so the bare paper survives dab build-up. Dabs still build up per
+scatter, count, transfer and colour jitter each hash the dab's index in
+the stroke with their own salt (colour dynamics mix and shift in
+gamma-encoded HSL, toward the background colour the app passes in).
+Texture is a canvas-anchored grain (value noise over a per-pixel tooth)
+applied through a soft threshold at the depth, so the bare paper
+survives dab build-up. Dabs still build up per
 dab (flow-like); there is no stroke-level opacity buffer, so opacity and
 flow jitter compound rather than differ as in Photoshop.
 
@@ -56,5 +58,5 @@ to tips by id; a missing tip falls back to round.
   the `Arc`), but a macro or script that names a tip needs the tip
   installed.
 - A stroke-level opacity buffer (true Photoshop flow vs opacity), pen
-  tilt/rotation controls, dual brush, colour dynamics and pattern
-  textures from ABR files remain open.
+  tilt/rotation controls, dual brush and pattern textures from ABR
+  files remain open.
