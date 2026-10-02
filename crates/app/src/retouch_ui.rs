@@ -229,7 +229,14 @@ impl App {
             Some(s) => Some(&s.doc),
             None => self.editor.state(0),
         };
-        let source = doc.and_then(|d| d.layer(layer)).and_then(|l| l.pixels()).cloned();
+        // A state with another canvas size (before a crop, say) can't be
+        // painted back pixel for pixel.
+        let same_size = |d: &&Document| d.canvas() == self.editor.doc().canvas();
+        let source = doc
+            .filter(same_size)
+            .and_then(|d| d.layer(layer))
+            .and_then(|l| l.pixels())
+            .cloned();
         HistoryStroke {
             layer,
             brush,
@@ -1039,6 +1046,16 @@ mod tests {
         app.brush.mode = BrushMode::Blur;
         let cmd = app.stroke_command(layer, vec![StrokePoint::new(24.0, 24.0, 1.0)]);
         assert_eq!(cmd.label(), "Blur");
+        // A crop since the source state: nothing lines up any more.
+        app.run(&CropDocument {
+            rect: Rect::new(0, 0, 40, 40),
+        });
+        app.brush.mode = BrushMode::History;
+        let cmd = app.stroke_command(layer, vec![StrokePoint::new(24.0, 24.0, 1.0)]);
+        let steps = app.editor.history().len();
+        app.run(cmd.as_ref());
+        assert_eq!(app.editor.history().len(), steps, "refused");
+        assert!(app.status.contains("canvas size"), "{}", app.status);
         // Another document drops the source.
         app.retouch.reset();
         assert_eq!(app.history_source_step(), 0);

@@ -125,7 +125,8 @@ pub(crate) fn filter_stroke(
 
 /// The history brush: paint a layer's pixels back from a past state.
 /// `source` is the layer's pixels in that state (`None` when the layer did
-/// not exist then). Each dab moves the layer toward the source by
+/// not exist then, or the canvas has changed size since: pixels would no
+/// longer line up). Each dab moves the layer toward the source by
 /// strength (`brush.color[3]`) × coverage, premultiplied.
 pub struct HistoryStroke {
     pub layer: LayerId,
@@ -152,7 +153,9 @@ impl Command for HistoryStroke {
             return Err(EditError::Invalid("stroke has no points".into()));
         }
         let source = self.source.as_ref().ok_or_else(|| {
-            EditError::Invalid("this layer did not exist in the history brush's source state".into())
+            EditError::Invalid(
+                "the history brush's source state lacks this layer or has another canvas size".into(),
+            )
         })?;
         let canvas = doc.canvas();
         let sel = doc.selection.clone();
