@@ -12,6 +12,7 @@ use lumenply_tiles::{Raster, Rect, Rgba};
 
 use crate::commands::{dab_coverage, interpolate_dabs, stroke_bounds, Brush, StrokePoint};
 use crate::{Command, EditError, EditResult};
+use lumenply_render::membrane::membrane;
 
 /// Straight, gamma-encoded RGB and alpha of a premultiplied linear pixel.
 fn encoded(p: Rgba) -> ([f32; 3], f32) {
@@ -26,118 +27,6 @@ fn decoded(c: [f32; 3], a: f32) -> Rgba {
         srgb_decode(c[2].clamp(0.0, 1.0)),
         a,
     )
-}
-
-/// Fill the unknown cells of a `w`×`h` grid with the membrane (harmonic)
-/// interpolation of the known ones: the smoothest field that meets every
-/// known cell, as in seamless cloning. Cells beyond the grid edge are
-/// simply absent (a free boundary). Solved coarse to fine: each level
-/// starts from the coarser solution scaled up and relaxes with
-/// over-relaxed Gauss-Seidel sweeps in a fixed order, so large regions
-/// converge in a few dozen sweeps and the result is deterministic.
-/// Unknown cells keep their input value when no cell is known.
-pub(crate) fn membrane(vals: &mut [[f32; 3]], known: &[bool], w: usize, h: usize) {
-    assert_eq!(vals.len(), w * h);
-    assert_eq!(known.len(), w * h);
-    if known.iter().all(|&k| k) || !known.iter().any(|&k| k) {
-        return;
-    }
-    if w * h <= 64 || w < 4 || h < 4 {
-        let (mut sum, mut n) = ([0f32; 3], 0f32);
-        for (v, _) in vals.iter().zip(known).filter(|(_, &k)| k) {
-            for c in 0..3 {
-                sum[c] += v[c];
-            }
-            n += 1.0;
-        }
-        let mean = [sum[0] / n, sum[1] / n, sum[2] / n];
-        for (v, _) in vals.iter_mut().zip(known).filter(|(_, &k)| !k) {
-            *v = mean;
-        }
-        relax(vals, known, w, h, 200);
-        return;
-    }
-    // Coarse level: a cell is known when any of its children is, holding
-    // their mean.
-    let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
-    let mut cv = vec![[0f32; 3]; cw * ch];
-    let mut ck = vec![false; cw * ch];
-    for cy in 0..ch {
-        for cx in 0..cw {
-            let (mut sum, mut n) = ([0f32; 3], 0f32);
-            for (fx, fy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                let (x, y) = (2 * cx + fx, 2 * cy + fy);
-                if x < w && y < h && known[y * w + x] {
-                    for c in 0..3 {
-                        sum[c] += vals[y * w + x][c];
-                    }
-                    n += 1.0;
-                }
-            }
-            if n > 0.0 {
-                ck[cy * cw + cx] = true;
-                cv[cy * cw + cx] = [sum[0] / n, sum[1] / n, sum[2] / n];
-            }
-        }
-    }
-    membrane(&mut cv, &ck, cw, ch);
-    // Scale the coarse field up (bilinear) as the starting point.
-    for y in 0..h {
-        for x in 0..w {
-            if known[y * w + x] {
-                continue;
-            }
-            let fx = ((x as f32 + 0.5) / 2.0 - 0.5).clamp(0.0, (cw - 1) as f32);
-            let fy = ((y as f32 + 0.5) / 2.0 - 0.5).clamp(0.0, (ch - 1) as f32);
-            let (x0, y0) = (fx as usize, fy as usize);
-            let (x1, y1) = ((x0 + 1).min(cw - 1), (y0 + 1).min(ch - 1));
-            let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
-            let mut out = [0f32; 3];
-            for (c, o) in out.iter_mut().enumerate() {
-                let top = cv[y0 * cw + x0][c] * (1.0 - tx) + cv[y0 * cw + x1][c] * tx;
-                let bot = cv[y1 * cw + x0][c] * (1.0 - tx) + cv[y1 * cw + x1][c] * tx;
-                *o = top * (1.0 - ty) + bot * ty;
-            }
-            vals[y * w + x] = out;
-        }
-    }
-    relax(vals, known, w, h, 80);
-}
-
-/// Over-relaxed Gauss-Seidel sweeps of the discrete Laplace equation over
-/// the unknown cells, in row-major order.
-fn relax(vals: &mut [[f32; 3]], known: &[bool], w: usize, h: usize, sweeps: usize) {
-    const OMEGA: f32 = 1.7;
-    let unknown: Vec<usize> = (0..w * h).filter(|&i| !known[i]).collect();
-    for _ in 0..sweeps {
-        for &i in &unknown {
-            let (x, y) = (i % w, i / w);
-            let mut acc = [0f32; 3];
-            let mut n = 0f32;
-            let mut add = |j: usize| {
-                for c in 0..3 {
-                    acc[c] += vals[j][c];
-                }
-                n += 1.0;
-            };
-            if x > 0 {
-                add(i - 1);
-            }
-            if x + 1 < w {
-                add(i + 1);
-            }
-            if y > 0 {
-                add(i - w);
-            }
-            if y + 1 < h {
-                add(i + w);
-            }
-            for c in 0..3 {
-                let v = vals[i][c];
-                vals[i][c] = v + OMEGA * (acc[c] / n - v);
-            }
-        }
-    }
 }
 
 /// Heal ▸ Patch: replace the selected area of a pixel layer with the
@@ -843,41 +732,6 @@ mod tests {
 
     fn enc(p: Rgba) -> [f32; 3] {
         encoded(p).0
-    }
-
-    #[test]
-    fn the_membrane_reproduces_a_harmonic_field_inside_a_large_hole() {
-        // f = 0.004 x + 0.006 y is harmonic, so knowing it on the border
-        // alone pins the whole interior to it.
-        let (w, h) = (120usize, 90usize);
-        let f = |x: usize, y: usize| 0.004 * x as f32 + 0.006 * y as f32;
-        let mut vals = vec![[0f32; 3]; w * h];
-        let mut known = vec![false; w * h];
-        for y in 0..h {
-            for x in 0..w {
-                if x == 0 || y == 0 || x == w - 1 || y == h - 1 {
-                    let v = f(x, y);
-                    vals[y * w + x] = [v, -v, 0.5];
-                    known[y * w + x] = true;
-                }
-            }
-        }
-        membrane(&mut vals, &known, w, h);
-        let mut worst = 0f32;
-        for y in 0..h {
-            for x in 0..w {
-                let v = vals[y * w + x];
-                let e = f(x, y);
-                worst = worst
-                    .max((v[0] - e).abs())
-                    .max((v[1] + e).abs())
-                    .max((v[2] - 0.5).abs());
-            }
-        }
-        // Within half an 8-bit level everywhere.
-        assert!(worst < 1.5e-3, "worst error {worst}");
-        // The centre: 0.004·60 + 0.006·45 = 0.51.
-        assert!((vals[45 * w + 60][0] - 0.51).abs() < 2e-3);
     }
 
     /// Gamma grey of the test image: vertical stripes of ±0.1 every 3

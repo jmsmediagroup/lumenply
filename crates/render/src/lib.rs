@@ -21,6 +21,7 @@ mod filters_more;
 pub mod gpu;
 pub mod inpaint;
 pub mod liquify;
+pub mod membrane;
 pub mod resample;
 pub mod text;
 pub mod transform;
