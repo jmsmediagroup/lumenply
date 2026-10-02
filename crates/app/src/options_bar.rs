@@ -161,7 +161,8 @@ impl App {
                             if ui
                                 .add_enabled(
                                     self.active_is_pixel(),
-                                    egui::Button::new("Free transform").shortcut_text("Ctrl+T"),
+                                    egui::Button::new("Free transform")
+                                        .shortcut_text(self.action_keys(ui.ctx(), "xform")),
                                 )
                                 .on_hover_text("Scale, rotate, skew, distort or warp the active layer")
                                 .on_disabled_hover_text("Select a pixel layer to transform it")

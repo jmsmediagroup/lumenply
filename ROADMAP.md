@@ -73,7 +73,7 @@ None of these could be tested in the container.
 - [ ] Keyboard shortcuts: V B E S G Shift+G W L Shift+L T I M Shift+M H [ ] 0 1,
       Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y, Ctrl+A/D/Shift+I, Ctrl+S/O/T/G, Shift+F5, Delete,
       Enter/Esc in free transform -- i checked this
-- [ ] Typing in text fields: text tool, layer rename (double-click), file-path dialogs
+- [ ] Typing in text fields: text tool, layer rename (double-click), dialog fields
 - [ ] HiDPI / display scaling (canvas maths assume `pixels_per_point` handled by egui)
 - [ ] Brush responsiveness at 4K in a release build; measure stroke latency
 - [ ] Run the CI workflow on GitHub and fix what breaks -- skip for now
@@ -197,10 +197,13 @@ None of these could be tested in the container.
       stretch as a Levels adjustment layer)
 - [x] More filters: noise (position-seeded), motion blur, median, high pass —
       destructive or live, with dialog previews and palette entries
-- [~] Text: font picker (system fonts via fontdb, .ttc face index honoured),
-      italic (real face or synthetic oblique), alignment (left/centre/right),
-      tracking in em/1000 (pair kerning comes from the font via fontdue).
-      Still to do: on-canvas text editing
+- [~] Text: searchable font picker (system fonts via fontdb, .ttc face index
+      honoured), bold/italic/bold-italic (real faces, else synthetic oblique
+      and synthetic bold), alignment (left/centre/right), tracking in em/1000;
+      missing fonts render in DejaVu Sans with a "Missing fonts" notice on open;
+      Text-tool clicks edit or reposition the active text (Shift+click or
+      "New text" adds a layer). Still to do: on-canvas caret editing,
+      editable PSD text (TySh; export rasterises and names the font)
 - [x] Animated marching ants (boundary dashes march; huge outlines fall back
       to the static texture)
 - [x] Select by colour range (Select menu + palette: fuzziness slider with live
@@ -220,7 +223,9 @@ None of these could be tested in the container.
       action bar "New layer" and palette "Layer via copy")
 
 
-- [x] Native file dialogs (`rfd`) instead of typed paths
+- [x] Native file dialogs (`rfd`) instead of typed paths: per-kind filters,
+      start in an existing folder, suggested names, enforced extensions
+      (Linux needs xdg-desktop-portal or zenity at run time)
 - [x] Autosave every 2 min to ~/.nge (atomic, off-thread), crash-recovery prompt
       at startup, recent-files menu
 - [x] Unsaved-changes prompt on close
@@ -231,7 +236,33 @@ None of these could be tested in the container.
       colour, undo step and memory caps, autosave interval
 - [x] Split `crates/app/src/main.rs` into modules (theme, tools, menu, options bar,
       canvas, layers, properties, history, status, dialogs, palette)
-- [ ] Accessibility (AccessKit labels), translations
+- [~] Accessibility: every icon-only button and tool has an accessible name
+      (`widget_info`), visible keyboard focus rings, sensible Tab order. Still
+      open: eframe's `accesskit` feature is off, so names don't yet reach
+      screen readers; translations
+
+## 6b. Quality pass (2026-10-02)
+
+- [x] Popups, menus, context menus and combo boxes size to their content,
+      never wrap, and stay on-screen (shared helpers in theme.rs; the
+      "one letter per line" bug is gone everywhere)
+- [x] One action registry (palette.rs) behind menus, palette and runner:
+      unavailable items are greyed with a reason; shortcut labels follow the
+      platform and the user's rebindings; File ▸ Export submenu; Help menu
+- [x] Layout: responsive at 900×600 and up (two-column rail, folding options
+      bar, capped dock), elided names with tooltips (no hard clips), compact
+      foldable History strip, modal dialogs with Enter/Esc, consistent
+      label-left rows, mono numbers, hover/focus/disabled states
+- [x] Colour picker: one sRGB picker (spectrum, hex, R/G/B, recents,
+      canvas eyedropper) for every colour control; fixed swatches that
+      displayed sRGB values as linear (washed out)
+- [x] Welcome screen and no-document state (New, Open, demo, recent files,
+      drop zone); File ▸ Close / Ctrl+W; crash recovery as a tested method
+- [x] Demo document is a real photograph ("Aoraki Sunrise", CC0, see
+      crates/app/assets/NOTICE.md) with non-destructive layers
+- [x] Headless verification: `--screenshot-do` debug tokens per UI area,
+      `--window-size`, screenshot windows open without taking focus;
+      before/after images in docs/screenshots/quality/
 
 ## 7. Ecosystem and release
 
@@ -268,6 +299,7 @@ None of these could be tested in the container.
 - Pressure is fixed at 1.0 in the app (engine supports it).
 
 - Text layers cannot be scaled or rotated without rasterizing.
-- The selection outline is static, not animated.
-- `LICENSE` is a placeholder pointing to the GPLv3 text.
+- Opening files from Finder (double-click, Open With, Dock drop) does nothing:
+  eframe 0.29 does not deliver those events.
+- egui menus cannot scroll; the quick-add "More..." list is tall (~500 px).
 

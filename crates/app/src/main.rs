@@ -59,7 +59,10 @@ fn main() -> Result<(), eframe::Error> {
             }))
             .with_inner_size(window_size(&args))
             .with_min_inner_size([900.0, 600.0])
-            .with_title("Lumenply"),
+            .with_title("Lumenply")
+            // A headless screenshot run must not take keyboard focus from
+            // whatever the user is typing into meanwhile.
+            .with_active(!args.iter().any(|a| a == "--screenshot")),
         ..Default::default()
     };
     eframe::run_native(

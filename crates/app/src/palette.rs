@@ -456,7 +456,7 @@ impl App {
             return;
         }
         match id {
-            "new" => self.dialog = Some(Dialog::New(1200, 800)),
+            "new" => self.dialog = Some(Dialog::New(1920, 1080)),
             "open" => self.pick_open(),
             "demo" => self.open_demo(),
             "place" => self.pick_place(),

@@ -575,7 +575,7 @@ impl App {
                                 let text = if capturing.as_deref() == Some(*id) {
                                     "press keys…".to_string()
                                 } else {
-                                    session::chord_label(p, id)
+                                    session::chord_label(ui.ctx(), p, id)
                                 };
                                 let highlight = capturing.as_deref() == Some(*id);
                                 let btn = egui::Button::new(RichText::new(text).monospace())

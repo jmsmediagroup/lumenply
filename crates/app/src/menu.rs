@@ -260,21 +260,27 @@ impl App {
                         // document tabs on a narrow window.
                         let keys = self.action_keys(ui.ctx(), "palette");
                         let room = ui.available_width() - 8.0;
-                        let (search, search_w) = if room >= 230.0 {
-                            (format!("Search tools, filters...   {keys}"), 230.0)
+                        let search = if room >= 230.0 {
+                            Some((format!("Search tools, filters...   {keys}"), 230.0))
+                        } else if room >= 140.0 {
+                            Some((format!("Search...   {keys}"), room))
+                        } else if room >= 64.0 {
+                            Some((keys.clone(), room.min(80.0)))
                         } else {
-                            (format!("Search...   {keys}"), room.max(110.0))
+                            None // too tight: the shortcut still opens it
                         };
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new(search).color(MUTED))
+                        if let Some((label, w)) = search {
+                            let r = ui.add(
+                                egui::Button::new(RichText::new(label).color(MUTED))
                                     .fill(GROUND)
                                     .stroke(Stroke::new(1.0, LINE))
-                                    .min_size(egui::vec2(search_w, 26.0)),
-                            )
-                            .clicked()
-                        {
-                            self.toggle_palette();
+                                    .min_size(egui::vec2(w, 26.0)),
+                            );
+                            if r.on_hover_text(format!("Search tools, filters and commands ({keys})"))
+                                .clicked()
+                            {
+                                self.toggle_palette();
+                            }
                         }
                     });
                 });

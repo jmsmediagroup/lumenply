@@ -365,7 +365,7 @@ impl App {
             self.dialog = Some(Dialog::New(1920, 1080));
         }
         ui.add_space(10.0);
-        let open_hint = session::chord_label(&self.prefs, "open");
+        let open_hint = session::chord_label(ui.ctx(), &self.prefs, "open");
         if action_button(
             ui,
             Glyph::Open,

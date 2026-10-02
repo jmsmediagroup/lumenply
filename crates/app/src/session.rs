@@ -51,20 +51,13 @@ pub(crate) fn resolve_chord(prefs: &Prefs, id: &str) -> Option<(egui::Modifiers,
     Some((m, key))
 }
 
-/// Human-readable form of an action's effective chord.
-pub(crate) fn chord_label(prefs: &Prefs, id: &str) -> String {
-    let Some((m, k)) = resolve_chord(prefs, id) else {
-        return "—".into();
-    };
-    let mut out = String::new();
-    if m.contains(egui::Modifiers::COMMAND) {
-        out.push_str("Ctrl+");
+/// Human-readable form of an action's effective chord, written the way
+/// this platform writes shortcuts (as the menus do).
+pub(crate) fn chord_label(ctx: &egui::Context, prefs: &Prefs, id: &str) -> String {
+    match resolve_chord(prefs, id) {
+        Some((m, k)) => crate::theme::shortcut_text(ctx, m, k),
+        None => "—".into(),
     }
-    if m.contains(egui::Modifiers::SHIFT) {
-        out.push_str("Shift+");
-    }
-    out.push_str(k.name());
-    out
 }
 
 /// User preferences, persisted as JSON in the data dir.

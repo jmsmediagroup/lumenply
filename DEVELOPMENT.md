@@ -62,17 +62,36 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
 - **Verify UI changes by looking at them**: `cargo run --release -p lumenply-app -- --demo
   --screenshot /tmp/ui.png` renders a few frames, saves the window and exits —
   no macOS screen-recording permission needed. To reach a state behind a click,
-  add `--screenshot-do select-pixel,warp,debug-bend` (palette action ids, run
-  once before the capture; `select-pixel` and `debug-bend` are debug-only
-  tokens in `debug_screenshot`). The dark theme is forced via
+  add `--screenshot-do tok,tok` (palette action ids, plus per-area debug
+  tokens in `debug.rs`: `popups:click=File`, `popups:rclick=X:Y`,
+  `text:click:X:Y`, `color:fg`, `start:fake-recent`, `layout:tool=…`), and
+  `--window-size 960x640` for narrow layouts. Run screenshots with `HOME`
+  pointed at a scratch folder so recent files, prefs and the autosave of the
+  real user are never read or written. The dark theme is forced via
   `ctx.set_theme(ThemePreference::Dark)`; without it eframe follows the OS and
   repaints everything in egui's stock light palette on a light-mode system.
+- **Menus, palette and keys share one action registry** (`palette.rs`:
+  `action_block` says why an action can't run, `action_keys` formats its
+  shortcut for this platform, `run_menu_action` runs it). Add new actions
+  there, then reference the id from a menu with `self.act(ui, label, id)`.
+  Popups go through the theme helpers (`button_menu`, `context_menu`,
+  `popup_style`) so they size to content and never wrap.
+- The app has a no-document state (`App::no_doc`, the welcome screen):
+  `run`/`run_coalescing` refuse edits and `action_block` greys out
+  document-only actions. Tests can build the whole app with `App::launch`;
+  under `cfg(test)` `session::data_dir` is a temp folder.
+- Several git worktrees sharing one `CARGO_TARGET_DIR` share cargo units, so
+  a "fresh" build can silently link another worktree's code. Give the
+  worktree's sources a future mtime before building
+  (`find crates -name '*.rs' -exec touch -t 203001010000 {} +`).
 
 - egui is 0.29: `drag_stopped()`, `id_salt()`, `ComboBox::from_label`. Record a drag's start
   position yourself on `drag_started` — `press_origin()` is already cleared on release.
 - Shortcuts must be ignored while a text field has focus (`ctx.wants_keyboard_input()`).
 - Pen pressure is not wired: the app passes pressure 1.0 to every stroke point.
 - The bundled font is DejaVu Sans in `crates/render/fonts/` (Bitstream Vera licence).
+- The `--demo` document is built in `crates/app/src/demo.rs` from a CC0 photo
+  (`crates/app/assets/NOTICE.md`); the CLI keeps the synthetic `lumenply_core::demo`.
 
 ## Working style
 

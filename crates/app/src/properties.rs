@@ -272,7 +272,10 @@ impl App {
                     flip = Some(false);
                 }
                 if ui
-                    .add(egui::Button::new("Free transform…").shortcut_text("Ctrl+T"))
+                    .add(
+                        egui::Button::new("Free transform…")
+                            .shortcut_text(self.action_keys(ui.ctx(), "xform")),
+                    )
                     .on_hover_text("Transform on the canvas with handles")
                     .clicked()
                 {
