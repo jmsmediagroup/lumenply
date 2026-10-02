@@ -510,10 +510,13 @@ fn dist2(a: &[f32; 4], b: &[f32; 4]) -> f32 {
     (0..4).map(|c| (a[c] - b[c]) * (a[c] - b[c])).sum()
 }
 
-/// A few representative colours of `samples` with their spread (RMS
-/// distance of the members to their centre): k-means from a
+/// A colour cluster: centre, spread (RMS distance of the members to the
+/// centre) and share of the samples.
+type Cluster = ([f32; 4], f32, f32);
+
+/// A few representative colours of `samples`: k-means from a
 /// farthest-point start, so it is deterministic.
-fn clusters(samples: &[[f32; 4]]) -> Vec<([f32; 4], f32)> {
+fn clusters(samples: &[[f32; 4]]) -> Vec<Cluster> {
     let k = samples.len().min(CLUSTERS);
     if k == 0 {
         return Vec::new();
@@ -532,6 +535,7 @@ fn clusters(samples: &[[f32; 4]]) -> Vec<([f32; 4], f32)> {
     }
     let k = centres.len();
     let mut spread = vec![0f32; k];
+    let mut share = vec![0f32; k];
     for _ in 0..6 {
         let mut sum = vec![[0f32; 4]; k];
         let mut err = vec![0f32; k];
@@ -554,9 +558,35 @@ fn clusters(samples: &[[f32; 4]]) -> Vec<([f32; 4], f32)> {
                 }
                 spread[j] = (err[j] / count[j] as f32).sqrt();
             }
+            share[j] = count[j] as f32 / samples.len() as f32;
         }
     }
-    centres.into_iter().zip(spread).collect()
+    (0..k).map(|j| (centres[j], spread[j], share[j])).collect()
+}
+
+/// Where both sides hold the same colour (a selection edge that missed
+/// by more than the radius puts sky inside it, or mountain outside), the
+/// colour belongs to the side where it is common; the other side drops
+/// it. Each side keeps at least one cluster.
+fn settle(fc: &mut Vec<Cluster>, bc: &mut Vec<Cluster>) {
+    const SAME: f32 = 0.02;
+    let overlaps = |a: &Cluster, b: &Cluster| dist2(&a.0, &b.0).sqrt() < (a.1 + b.1).max(SAME);
+    let drop_f: Vec<bool> = fc
+        .iter()
+        .map(|f| bc.iter().any(|b| overlaps(f, b) && b.2 > f.2))
+        .collect();
+    let drop_b: Vec<bool> = bc
+        .iter()
+        .map(|b| fc.iter().any(|f| overlaps(f, b) && f.2 > b.2))
+        .collect();
+    if drop_f.iter().any(|d| !d) {
+        let mut keep = drop_f.iter().map(|d| !d);
+        fc.retain(|_| keep.next().unwrap_or(true));
+    }
+    if drop_b.iter().any(|d| !d) {
+        let mut keep = drop_b.iter().map(|d| !d);
+        bc.retain(|_| keep.next().unwrap_or(true));
+    }
 }
 
 /// Coverage estimate from the colour models of each cell, for every
@@ -611,8 +641,9 @@ fn sample_matte(colours: &[[f32; 4]], tri: &Trimap, coverage: &[f32], w: usize, 
                 let step = v.len().div_ceil(SAMPLES).max(1);
                 v.into_iter().step_by(step).collect()
             };
-            let fc = clusters(&thin(fs));
-            let bc = clusters(&thin(bs));
+            let mut fc = clusters(&thin(fs));
+            let mut bc = clusters(&thin(bs));
+            settle(&mut fc, &mut bc);
             let mut out = Vec::new();
             for y in y0..y1 {
                 for x in x0..x1 {
@@ -642,10 +673,10 @@ fn sample_matte(colours: &[[f32; 4]], tri: &Trimap, coverage: &[f32], w: usize, 
 
 /// The coverage of colour `c` under the foreground/background pair that
 /// explains it best.
-fn best_alpha(c: &[f32; 4], fc: &[([f32; 4], f32)], bc: &[([f32; 4], f32)]) -> f32 {
-    let near = |set: &[([f32; 4], f32)]| {
+fn best_alpha(c: &[f32; 4], fc: &[Cluster], bc: &[Cluster]) -> f32 {
+    let near = |set: &[Cluster]| {
         set.iter()
-            .map(|(m, s)| (dist2(c, m).sqrt(), *s))
+            .map(|(m, s, _)| (dist2(c, m).sqrt(), *s))
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .expect("non-empty")
     };
@@ -665,8 +696,8 @@ fn best_alpha(c: &[f32; 4], fc: &[([f32; 4], f32)], bc: &[([f32; 4], f32)]) -> f
     }
     let nearer = if df < db { 1.0 } else { 0.0 };
     let mut best = (f32::MAX, nearer);
-    for (f, _) in fc {
-        for (b, _) in bc {
+    for (f, ..) in fc {
+        for (b, ..) in bc {
             let mut fb = [0f32; 4];
             let mut cb = [0f32; 4];
             for k in 0..4 {
@@ -1596,6 +1627,29 @@ mod tests {
         assert_eq!(d[4 * 7 + 5], 8.0);
         assert_eq!(d[0], 13.0);
         assert_eq!(edt_sq(&[false; 4], 2, 2)[0], FAR as f32);
+    }
+
+    #[test]
+    fn a_colour_on_both_sides_stays_with_the_side_where_it_is_common() {
+        let sky = [0.6, 0.5, 0.7, 1.0];
+        let rock = [0.05, 0.04, 0.06, 1.0];
+        let cloud = [0.9, 0.85, 0.8, 1.0];
+        // The selection overshot into the sky: a fifth of the inside ring
+        // is sky, nine tenths of the outside ring.
+        let mut fc = vec![(sky, 0.01, 0.2), (rock, 0.02, 0.8)];
+        let mut bc = vec![(sky, 0.01, 0.9), (cloud, 0.01, 0.1)];
+        settle(&mut fc, &mut bc);
+        assert_eq!(fc.len(), 1);
+        assert_eq!(fc[0].0, rock);
+        assert_eq!(bc.len(), 2);
+        // Sky now reads as background, rock as foreground.
+        assert_eq!(best_alpha(&sky, &fc, &bc), 0.0);
+        assert_eq!(best_alpha(&rock, &fc, &bc), 1.0);
+        // A side never loses its last colour.
+        let mut f1 = vec![(sky, 0.01, 1.0)];
+        let mut b1 = vec![(sky, 0.01, 1.0), (cloud, 0.01, 0.0)];
+        settle(&mut f1, &mut b1);
+        assert_eq!(f1.len(), 1);
     }
 
     #[test]

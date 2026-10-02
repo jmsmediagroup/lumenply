@@ -14,7 +14,7 @@ use lumenply_core::refine::{
 use rayon::prelude::*;
 
 /// Longest preview side in pixels.
-const PREVIEW_MAX: u32 = 1400;
+const PREVIEW_MAX: u32 = 2048;
 /// Label column of the panel's rows.
 const LABEL: f32 = 92.0;
 
@@ -129,6 +129,12 @@ pub(crate) struct SelectMaskState {
     pub(crate) last_ms: f32,
     /// Document position of the last dab while the brush is down.
     last_dab: Option<(f32, f32)>,
+    /// Preview zoom over "fit" (1 fits the window) and pan in points.
+    pub(crate) zoom: f32,
+    pan: egui::Vec2,
+    /// A pending "show document point (x, y) at this many screen points
+    /// per pixel" (debug token).
+    focus: Option<(f32, f32, f32)>,
 }
 
 /// `src` box-filtered down by a whole `f`.
@@ -393,6 +399,9 @@ impl App {
             tex_key: None,
             last_ms: 0.0,
             last_dab: None,
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
+            focus: None,
         }));
     }
 
@@ -483,7 +492,7 @@ impl App {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             RichText::new(
-                                "Paint to refine the edge · Alt restores · [ ] size · J edge · F view",
+                                "Paint to refine the edge · Alt restores · [ ] size · J edge · F view · wheel zooms",
                             )
                             .color(MUTED),
                         );
@@ -532,10 +541,51 @@ impl App {
                 let resp = ui.allocate_rect(avail, Sense::click_and_drag());
                 a11y_name(&resp, "Select and Mask preview");
                 let (cw, ch) = (st.canvas.w as f32, st.canvas.h as f32);
-                let disp = ((avail.width() - 48.0) / cw)
+                let fit = ((avail.width() - 48.0) / cw)
                     .min((avail.height() - 48.0) / ch)
                     .max(0.01);
-                let img = egui::Rect::from_center_size(avail.center(), egui::vec2(cw * disp, ch * disp));
+                // Wheel zooms at the pointer; Space-drag or the middle
+                // button pans; 0 fits, 1 shows actual pixels.
+                let (scroll, space, middle, keys) = ctx.input(|i| {
+                    (
+                        i.raw_scroll_delta.y + i.zoom_delta().ln() * 300.0,
+                        i.key_down(Key::Space),
+                        i.pointer.middle_down(),
+                        (i.key_pressed(Key::Num0), i.key_pressed(Key::Num1)),
+                    )
+                });
+                if !ctx.wants_keyboard_input() {
+                    if keys.0 {
+                        st.zoom = 1.0;
+                        st.pan = egui::Vec2::ZERO;
+                    }
+                    if keys.1 {
+                        st.zoom = 1.0 / fit;
+                        st.pan = egui::Vec2::ZERO;
+                    }
+                }
+                if let Some(pos) = resp.hover_pos().filter(|_| scroll != 0.0) {
+                    let old = fit * st.zoom;
+                    st.zoom = (st.zoom * (scroll / 400.0).exp()).clamp(0.5, 64.0 / fit);
+                    let new = fit * st.zoom;
+                    // Keep the point under the pointer still.
+                    let c = avail.center() + st.pan;
+                    st.pan += (pos - c) * (1.0 - new / old);
+                }
+                if let Some((z, x, y)) = st.focus.take() {
+                    st.zoom = z / fit;
+                    st.pan = -egui::vec2(
+                        (x - st.canvas.x as f32 - cw / 2.0) * z,
+                        (y - st.canvas.y as f32 - ch / 2.0) * z,
+                    );
+                }
+                let panning = space || middle;
+                if panning && resp.dragged() {
+                    st.pan += resp.drag_delta();
+                }
+                let disp = fit * st.zoom;
+                let img =
+                    egui::Rect::from_center_size(avail.center() + st.pan, egui::vec2(cw * disp, ch * disp));
                 let key = (st.view, st.opacity.to_bits(), st.show_edge, st.generation);
                 if st.tex_key != Some(key) || st.tex.is_none() {
                     let image = st.image();
@@ -563,7 +613,7 @@ impl App {
                     p.image(t.id(), img, uv, Color32::WHITE);
                 }
                 p.rect_stroke(img, 0.0, Stroke::new(1.0, LINE));
-                let down = resp.is_pointer_button_down_on();
+                let down = resp.is_pointer_button_down_on() && !panning;
                 if let Some(pos) = resp.hover_pos().or(resp.interact_pointer_pos()) {
                     let c = (
                         st.canvas.x as f32 + (pos.x - img.min.x) / disp,
@@ -572,10 +622,15 @@ impl App {
                     let r = st.brush_size / 2.0 * disp;
                     p.circle_stroke(pos, r, Stroke::new(2.5, Color32::from_black_alpha(140)));
                     p.circle_stroke(pos, r, Stroke::new(1.0, Color32::WHITE));
-                    ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+                    ctx.set_cursor_icon(if panning {
+                        egui::CursorIcon::Grabbing
+                    } else {
+                        egui::CursorIcon::Crosshair
+                    });
                     if down {
                         let erase = ctx.input(|i| i.modifiers.alt);
                         st.brush_to(c, erase);
+                        ctx.request_repaint();
                     }
                 }
                 if !down {
@@ -718,6 +773,7 @@ impl App {
     /// (overlay, black, white, bw, ants), `refine:radius=N`,
     /// `refine:smart`, `refine:smooth=N`, `refine:feather=N`,
     /// `refine:contrast=N`, `refine:shift=N`, `refine:opacity=N` (%),
+    /// `refine:zoom=Z:X:Y` (Z screen points per pixel around X, Y),
     /// `refine:edge`, `refine:decontam`, `refine:output=selection|mask|
     /// layer|layer-mask`, `refine:brush=X:Y:R` (a dab, document pixels),
     /// `refine:ok` applies (timed in the status bar).
@@ -768,6 +824,12 @@ impl App {
             ("shift", Some(v)) => st.params.shift_edge = v,
             ("opacity", Some(v)) => st.opacity = v / 100.0,
             ("edge", _) => st.show_edge = true,
+            ("zoom", _) => {
+                let v: Vec<f32> = arg.split(':').filter_map(|s| s.parse().ok()).collect();
+                if let [z, x, y] = v[..] {
+                    st.focus = Some((z, x, y));
+                }
+            }
             ("decontam", _) => {
                 st.params.decontaminate = true;
                 st.output = RefineOutput::NewLayerWithMask;
