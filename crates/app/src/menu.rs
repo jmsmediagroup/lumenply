@@ -273,13 +273,17 @@ impl App {
                             ui.close_menu();
                         }
                         if ui.button("Open demo document").clicked() {
-                            match lumenply_core::demo::build(1200, 800) {
-                                Ok(ed) => self.open_in_new_tab(ed, None),
-                                Err(e) => self.status = e.to_string(),
-                            }
+                            self.open_demo();
                             ui.close_menu();
                         }
                         ui.separator();
+                        if self.no_doc {
+                            ui.disable(); // the rest of this menu needs a document
+                        }
+                        if ui.button("Close   Ctrl+W").clicked() {
+                            self.close_tab(self.cur_tab);
+                            ui.close_menu();
+                        }
                         if ui.button("Save   Ctrl+S").clicked() {
                             match self.path.clone() {
                                 Some(p) => self.save_path(&p.to_string_lossy()),
@@ -320,6 +324,9 @@ impl App {
                             ui.close_menu();
                         }
                     });
+                    if self.no_doc {
+                        ui.disable(); // welcome screen: every other menu needs a document
+                    }
                     ui.menu_button("Edit", |ui| {
                         if ui
                             .add_enabled(self.editor.can_undo(), egui::Button::new("Undo   Ctrl+Z"))
@@ -686,7 +693,6 @@ impl App {
     /// and a + for a new blank document.
     fn document_tab(&mut self, ui: &mut egui::Ui) {
         let infos = self.tab_infos();
-        let several = infos.len() > 1;
         let mut switch = None;
         let mut close = None;
         for (i, (name, unsaved)) in infos.into_iter().enumerate() {
@@ -724,10 +730,10 @@ impl App {
             if resp.clicked() && !live {
                 switch = Some(i);
             }
-            if resp.middle_clicked() && (several || unsaved) {
+            if resp.middle_clicked() {
                 close = Some(i);
             }
-            if live && several {
+            if live {
                 // A visible close affordance on the active tab only, to
                 // keep the strip quiet.
                 let x = ui.add(

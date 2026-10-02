@@ -28,6 +28,7 @@ pub(crate) const SHORTCUTS: &[(&str, &str, bool, bool, &str)] = &[
     ("deselect", "Deselect", true, false, "D"),
     ("save", "Save", true, false, "S"),
     ("open", "Open", true, false, "O"),
+    ("close", "Close document", true, false, "W"),
     ("xform", "Free transform", true, false, "T"),
     ("group", "Group layers", true, false, "G"),
     ("layer-via-copy", "Layer via copy", true, false, "J"),
@@ -156,6 +157,11 @@ impl Prefs {
 }
 
 pub(crate) fn data_dir() -> Option<PathBuf> {
+    // Unit tests drive the real open/save paths; they must never read or
+    // write the user's recent list, prefs or autosave backup.
+    if cfg!(test) {
+        return Some(std::env::temp_dir().join("lumenply-unit-test-data"));
+    }
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(|h| {
@@ -229,6 +235,32 @@ pub(crate) fn push_recent(path: &str) -> Vec<String> {
     }
 }
 
+/// Drop one entry (a file that was moved, or one the user removed).
+pub(crate) fn remove_recent(path: &str) -> Vec<String> {
+    match data_dir() {
+        Some(d) => remove_recent_in(&d, path),
+        None => Vec::new(),
+    }
+}
+
+/// Forget every recent file.
+pub(crate) fn clear_recent() -> Vec<String> {
+    if let Some(d) = data_dir() {
+        let _ = std::fs::remove_file(d.join("recent.txt"));
+    }
+    Vec::new()
+}
+
+fn remove_recent_in(dir: &Path, path: &str) -> Vec<String> {
+    let mut list = load_recent_in(dir);
+    let before = list.len();
+    list.retain(|p| p != path);
+    if list.len() != before {
+        let _ = std::fs::write(dir.join("recent.txt"), list.join("\n"));
+    }
+    list
+}
+
 fn load_recent_in(dir: &Path) -> Vec<String> {
     std::fs::read_to_string(dir.join("recent.txt"))
         .map(|s| {
@@ -283,6 +315,24 @@ mod tests {
 
         // The list survives a reload.
         assert_eq!(load_recent_in(&dir), list);
+    }
+
+    #[test]
+    fn recent_entries_can_be_removed() {
+        let dir = temp_dir("recent-remove");
+        for i in 0..4 {
+            push_recent_in(&dir, &format!("/tmp/r{i}.lumen"));
+        }
+        let list = remove_recent_in(&dir, "/tmp/r2.lumen");
+        assert_eq!(list, ["/tmp/r3.lumen", "/tmp/r1.lumen", "/tmp/r0.lumen"]);
+        assert_eq!(load_recent_in(&dir), list, "the removal is persisted");
+        // Removing something that is not listed changes nothing.
+        assert_eq!(remove_recent_in(&dir, "/tmp/nope.lumen").len(), 3);
+        // Removing the last entry leaves an empty (still loadable) list.
+        for p in list {
+            remove_recent_in(&dir, &p);
+        }
+        assert!(load_recent_in(&dir).is_empty());
     }
 
     #[test]

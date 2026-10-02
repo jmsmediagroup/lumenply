@@ -25,6 +25,7 @@ use lumenply_tiles::{Affine, Raster, Rect};
 mod brand;
 mod canvas;
 mod debug;
+mod demo;
 mod dialogs;
 mod histogram;
 mod history;
@@ -34,6 +35,7 @@ mod options_bar;
 mod palette;
 mod properties;
 mod session;
+mod start;
 mod status;
 mod theme;
 mod tools;
@@ -67,7 +69,8 @@ fn main() -> Result<(), eframe::Error> {
 
 impl App {
     /// Files dragged onto the window: projects open, images land as layers
-    /// in the current document (undoable), with a hint while hovering.
+    /// in the current document (undoable), with a hint while hovering. With
+    /// no document open (the welcome screen) every file opens in a tab.
     fn handle_file_drop(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
             let screen = ctx.screen_rect();
@@ -79,15 +82,26 @@ impl App {
             p.text(
                 screen.center(),
                 Align2::CENTER_CENTER,
-                "Drop to open — images are placed as a new layer",
+                if self.no_doc {
+                    "Drop to open"
+                } else {
+                    "Drop to open — images are placed as a new layer"
+                },
                 FontId::proportional(18.0),
                 TEXT,
             );
         }
-        let dropped = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()));
-        if let Some(path) = dropped {
+        let dropped: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .collect()
+        });
+        let place = !self.no_doc && self.editor.doc().layer_count() > 0;
+        for path in dropped {
             let p = path.to_string_lossy().into_owned();
-            if is_image_path(&p) && self.editor.doc().layer_count() > 0 {
+            if place && is_image_path(&p) {
                 self.place_image(&p);
             } else {
                 self.open_path(&p);
@@ -313,6 +327,11 @@ struct App {
     /// Tab label while the live document has no file path.
     untitled: String,
     untitled_seq: usize,
+    /// No document is open: the welcome screen replaces the editor and
+    /// `editor` is an empty placeholder that nothing may edit (see start.rs).
+    no_doc: bool,
+    /// The welcome screen's demo thumbnail, decoded on first show.
+    start_thumb: Option<TextureHandle>,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -342,56 +361,23 @@ impl DocTab {
 }
 
 impl App {
-    /// `lumenply-app [--demo | file.nge | image.png] [--place image.png]...`
+    /// `lumenply-app [--demo] [file.lumen | image.png | poster.psd ...] [--place image.png]...`
+    /// With nothing to open, the app starts on the welcome screen.
     fn new(cc: &eframe::CreationContext<'_>, args: &[String]) -> Self {
         theme::install(&cc.egui_ctx);
+        Self::launch(args)
+    }
 
-        let mut status = String::from("Ready");
-        let first = args.first().filter(|a| *a != "--place").map(String::as_str);
-        let (editor, path) = match first {
-            Some("--demo") => (
-                lumenply_core::demo::build(1200, 800).expect("demo document"),
-                None,
-            ),
-            Some(p) if is_image_path(p) => match lumenply_io::load(p) {
-                Ok(raster) => {
-                    let mut ed = Editor::new(Document::new(raster.width, raster.height));
-                    let _ = ed.execute(&AddPixelLayer::from_raster("Background", raster, 0, 0));
-                    (ed, None)
-                }
-                Err(e) => {
-                    status = format!("Could not open {p}: {e}");
-                    (blank(1200, 800), None)
-                }
-            },
-            Some(p) if is_psd_path(p) => match lumenply_io::psd::load(p) {
-                Ok(rep) => {
-                    if !rep.warnings.is_empty() {
-                        status = format!("Imported with notes: {}", rep.warnings.join("; "));
-                    }
-                    (Editor::new(rep.value), None)
-                }
-                Err(e) => {
-                    status = format!("Could not import {p}: {e}");
-                    (blank(1200, 800), None)
-                }
-            },
-            Some(p) => match project::load(p) {
-                Ok(doc) => (Editor::new(doc), Some(PathBuf::from(p))),
-                Err(e) => {
-                    status = format!("Could not open {p}: {e}");
-                    (blank(1200, 800), None)
-                }
-            },
-            None => (blank(1200, 800), None),
-        };
+    /// The app state for a command line, without a window (tests use it).
+    fn launch(args: &[String]) -> Self {
+        let launch = start::parse_launch_args(args);
         let mut app = App {
-            editor,
+            editor: Editor::new(Document::new(1, 1)),
             tool: Tool::Brush,
             active: None,
             selected: Vec::new(),
             editing_mask: false,
-            path,
+            path: None,
             brush: Brush {
                 radius: 14.0,
                 hardness: 0.7,
@@ -485,29 +471,27 @@ impl App {
                 .map(|s| s.split(',').map(str::to_string).collect())
                 .unwrap_or_default(),
             filter_previewed: false,
-            status,
+            status: String::from("Ready"),
             tabs: Vec::new(),
             cur_tab: 0,
-            untitled: "Untitled-1".into(),
-            untitled_seq: 1,
+            untitled: String::new(),
+            untitled_seq: 0,
+            no_doc: true,
+            start_thumb: None,
         };
-        app.prefs.apply(&mut app.editor);
-        // Whatever was just opened or built is the saved baseline; only
-        // edits from here on count as unsaved changes.
-        app.saved_rev = app.editor.history().len();
-        app.select_top();
+        // Everything opens through the same paths as File → Open, so a
+        // file that fails to load leaves its error on the welcome screen.
+        if launch.demo {
+            app.open_demo();
+        }
+        for f in &launch.files {
+            app.open_path(f);
+        }
+        for p in &launch.places {
+            app.place_image(p);
+        }
         if session::autosave_file().is_some_and(|p| p.exists()) {
             app.dialog = Some(Dialog::Recover);
-        }
-        let mut i = 0;
-        while i < args.len() {
-            if args[i] == "--place" {
-                if let Some(p) = args.get(i + 1) {
-                    app.place_image(p);
-                }
-                i += 1;
-            }
-            i += 1;
         }
         app
     }
@@ -573,6 +557,9 @@ impl App {
     }
 
     fn run(&mut self, cmd: &dyn Command) {
+        if self.no_doc {
+            return; // the welcome screen's placeholder is never edited
+        }
         match self.editor.execute(cmd) {
             Ok(()) => {
                 let r = self.editor.last_affected();
@@ -586,6 +573,9 @@ impl App {
     }
 
     fn run_coalescing(&mut self, cmd: &dyn Command, key: &str) {
+        if self.no_doc {
+            return;
+        }
         match self.editor.execute_coalescing(cmd, key) {
             Ok(()) => {
                 let r = self.editor.last_affected();
@@ -599,6 +589,7 @@ impl App {
 
     /// Replace the live tab's document (startup, crash recovery).
     fn set_doc(&mut self, editor: Editor, path: Option<PathBuf>) {
+        self.no_doc = false;
         self.editor = editor;
         self.prefs.apply(&mut self.editor);
         self.path = path;
@@ -645,6 +636,9 @@ impl App {
 
     /// Display-order titles with their unsaved flags, live tab included.
     pub(crate) fn tab_infos(&self) -> Vec<(String, bool)> {
+        if self.no_doc {
+            return Vec::new();
+        }
         let live_title = self
             .path
             .as_ref()
@@ -677,8 +671,11 @@ impl App {
 
     /// Open a document in a new tab at the end of the strip.
     pub(crate) fn open_in_new_tab(&mut self, editor: Editor, path: Option<PathBuf>) {
-        let parked = self.park_live();
-        self.tabs.insert(self.cur_tab, parked);
+        // From the welcome screen there is no live document to park.
+        if !self.no_doc {
+            let parked = self.park_live();
+            self.tabs.insert(self.cur_tab, parked);
+        }
         self.cur_tab = self.tabs.len();
         self.untitled_seq += 1;
         self.untitled = format!("Untitled-{}", self.untitled_seq);
@@ -723,10 +720,8 @@ impl App {
     pub(crate) fn force_close_tab(&mut self, i: usize) {
         if i == self.cur_tab {
             if self.tabs.is_empty() {
-                // The last tab closes into a fresh blank document.
-                self.untitled_seq += 1;
-                self.untitled = format!("Untitled-{}", self.untitled_seq);
-                self.set_doc(blank(1200, 800), None);
+                // The last tab closes onto the welcome screen.
+                self.show_welcome();
                 return;
             }
             // Load a neighbour; the parked list already excludes the
@@ -963,7 +958,7 @@ impl App {
     fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::Modifiers as M;
         // The palette toggle works even while a text field has focus.
-        if ctx.input_mut(|i| i.consume_key(M::COMMAND, Key::K)) {
+        if ctx.input_mut(|i| i.consume_key(M::COMMAND, Key::K)) && !self.no_doc {
             self.toggle_palette();
         }
         if self.palette.is_some() || ctx.wants_keyboard_input() {
@@ -1008,6 +1003,13 @@ impl App {
                 fired.push("redo");
             }
         });
+        if self.no_doc {
+            // The welcome screen: only opening a document makes sense.
+            if fired.contains(&"open") {
+                self.pick_open();
+            }
+            return;
+        }
         for id in fired {
             match id {
                 "undo" => self.undo(),
@@ -1022,6 +1024,7 @@ impl App {
                     None => self.pick_save(),
                 },
                 "open" => self.pick_open(),
+                "close" => self.close_tab(self.cur_tab),
                 "xform" => self.begin_free_transform(),
                 "group" => self.group_selected(),
                 "layer-via-copy" => self.run_menu_action("layer-via-copy"),
@@ -1160,12 +1163,16 @@ impl eframe::App for App {
         }
         self.shortcuts(ctx);
         self.menu_bar(ctx);
-        self.options_bar(ctx);
-        self.status_bar(ctx);
-        self.history_strip(ctx);
-        self.tool_palette(ctx);
-        self.side_panel(ctx);
-        self.canvas(ctx);
+        if self.no_doc {
+            self.welcome(ctx);
+        } else {
+            self.options_bar(ctx);
+            self.status_bar(ctx);
+            self.history_strip(ctx);
+            self.tool_palette(ctx);
+            self.side_panel(ctx);
+            self.canvas(ctx);
+        }
         self.dialogs(ctx);
         self.palette_ui(ctx);
         let unsaved = self.editor.history().len() != self.saved_rev;
@@ -1174,7 +1181,7 @@ impl eframe::App for App {
             session::autosave(self.editor.doc().clone(), self.path.clone());
             self.status = "Autosaved a backup".into();
         }
-        if self.dirty {
+        if self.dirty && !self.no_doc {
             self.refresh(ctx);
             ctx.request_repaint();
         }
@@ -1182,13 +1189,17 @@ impl eframe::App for App {
             .path
             .as_ref()
             .map(|p| file_name(&p.to_string_lossy()))
-            .unwrap_or_else(|| "Untitled".into());
+            .unwrap_or_else(|| self.untitled.clone());
         let unsaved = if self.editor.history().len() != self.saved_rev {
             " •"
         } else {
             ""
         };
-        let title = format!("{name}{unsaved} — Lumenply");
+        let title = if self.no_doc {
+            "Lumenply".to_string()
+        } else {
+            format!("{name}{unsaved} — Lumenply")
+        };
         if self.last_title != title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.last_title = title;
