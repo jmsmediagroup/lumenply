@@ -14,6 +14,7 @@ mod content_aware;
 pub mod crop;
 pub mod demo;
 pub mod fill_cmds;
+pub mod fill_opacity;
 pub mod gradient_tool;
 pub mod guides;
 pub mod layer_ops;

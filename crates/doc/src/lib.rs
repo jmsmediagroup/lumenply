@@ -280,6 +280,10 @@ pub struct BevelFx {
     pub highlight: [f32; 3],
     pub shadow: [f32; 3],
     pub opacity: f32,
+    /// The shaded flank's opacity when it differs from the lit one's
+    /// (Photoshop keeps the two apart); `None` means `opacity`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow_opacity: Option<f32>,
 }
 
 impl Default for BevelFx {
@@ -291,6 +295,7 @@ impl Default for BevelFx {
             highlight: [1.0, 1.0, 1.0],
             shadow: [0.0, 0.0, 0.0],
             opacity: 0.75,
+            shadow_opacity: None,
         }
     }
 }
@@ -300,6 +305,9 @@ pub struct ColorOverlayFx {
     /// Straight linear RGB.
     pub color: [f32; 3],
     pub opacity: f32,
+    /// How the overlay blends onto the layer.
+    #[serde(default)]
+    pub blend: BlendMode,
 }
 
 impl Default for ColorOverlayFx {
@@ -307,11 +315,12 @@ impl Default for ColorOverlayFx {
         ColorOverlayFx {
             color: [1.0, 0.45, 0.1],
             opacity: 1.0,
+            blend: BlendMode::Normal,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GradientOverlayFx {
     /// Straight linear RGB at the gradient's start and end.
     pub start: [f32; 3],
@@ -319,6 +328,13 @@ pub struct GradientOverlayFx {
     /// Direction in degrees: 0 runs left → right, 90 bottom → top.
     pub angle: f32,
     pub opacity: f32,
+    #[serde(default)]
+    pub blend: BlendMode,
+    /// A full gradient (a [`Fill::Gradient`]: stops, style, angle, scale,
+    /// reverse, offset) laid over the layer's content bounds. When set it
+    /// replaces `start`, `end` and `angle` (PSD imports use it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<Fill>,
 }
 
 impl Default for GradientOverlayFx {
@@ -328,6 +344,8 @@ impl Default for GradientOverlayFx {
             end: [0.9, 0.2, 0.5],
             angle: 90.0,
             opacity: 1.0,
+            blend: BlendMode::Normal,
+            fill: None,
         }
     }
 }
@@ -340,6 +358,18 @@ pub struct ShadowFx {
     /// Straight linear RGB.
     pub color: [f32; 3],
     pub opacity: f32,
+    /// Pixels the coverage grows by before the blur (Photoshop's spread
+    /// for a drop shadow, choke for an inner shadow).
+    #[serde(default)]
+    pub spread: f32,
+    #[serde(default)]
+    pub blend: BlendMode,
+    /// Drop shadow only: hidden under the layer's own coverage
+    /// (Photoshop's "Layer knocks out drop shadow"), which shows once the
+    /// layer's fill opacity is below 100%. Files from before this field
+    /// load without it.
+    #[serde(default)]
+    pub knockout: bool,
 }
 
 impl Default for ShadowFx {
@@ -350,6 +380,9 @@ impl Default for ShadowFx {
             blur: 6.0,
             color: [0.0, 0.0, 0.0],
             opacity: 0.6,
+            spread: 0.0,
+            blend: BlendMode::Normal,
+            knockout: true,
         }
     }
 }
@@ -359,6 +392,11 @@ pub struct GlowFx {
     pub blur: f32,
     pub color: [f32; 3],
     pub opacity: f32,
+    /// Pixels the coverage grows by before the blur (spread / choke).
+    #[serde(default)]
+    pub spread: f32,
+    #[serde(default)]
+    pub blend: BlendMode,
 }
 
 impl Default for GlowFx {
@@ -367,16 +405,28 @@ impl Default for GlowFx {
             blur: 8.0,
             color: [1.0, 0.9, 0.4],
             opacity: 0.8,
+            spread: 0.0,
+            blend: BlendMode::Normal,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StrokeFx {
-    /// Outline width in pixels, grown outward from the coverage edge.
+    /// Outline width in pixels, from the coverage edge.
     pub size: f32,
     pub color: [f32; 3],
     pub opacity: f32,
+    /// Outside the coverage edge (the default, and every file from before
+    /// this field), inside it, or centred on it.
+    #[serde(default = "stroke_fx_outside")]
+    pub position: StrokeAlign,
+    #[serde(default)]
+    pub blend: BlendMode,
+}
+
+fn stroke_fx_outside() -> StrokeAlign {
+    StrokeAlign::Outside
 }
 
 impl Default for StrokeFx {
@@ -385,6 +435,8 @@ impl Default for StrokeFx {
             size: 3.0,
             color: [1.0, 1.0, 1.0],
             opacity: 1.0,
+            position: StrokeAlign::Outside,
+            blend: BlendMode::Normal,
         }
     }
 }
@@ -407,10 +459,10 @@ impl LayerEffects {
     pub fn pad(&self) -> i32 {
         let mut p = 0.0f32;
         for s in [&self.drop_shadow, &self.inner_shadow].into_iter().flatten() {
-            p = p.max(sane_radius(s.blur) * 2.0 + s.dx.abs().max(s.dy.abs()));
+            p = p.max(sane_radius(s.blur) * 2.0 + sane_radius(s.spread) + s.dx.abs().max(s.dy.abs()));
         }
         for g in [&self.outer_glow, &self.inner_glow].into_iter().flatten() {
-            p = p.max(sane_radius(g.blur) * 2.0);
+            p = p.max(sane_radius(g.blur) * 2.0 + sane_radius(g.spread));
         }
         if let Some(st) = &self.stroke {
             p = p.max(sane_radius(st.size) + 2.0);
@@ -593,6 +645,9 @@ pub struct Layer {
     pub blend: BlendMode,
     /// Non-destructive effects rendered from this layer's coverage.
     pub effects: LayerEffects,
+    /// Photoshop's "Fill": scales the layer's own content (0..1) but not
+    /// its effects, which still come from the full coverage. 1.0 = 100%.
+    pub fill_opacity: f32,
     /// Clip to the layer below: this layer shows only where the base of
     /// its clip chain has coverage, and the chain composites as one unit
     /// with the base's blend and opacity. Ignored on the bottom sibling.
@@ -725,6 +780,7 @@ impl Layer {
             opacity: 1.0,
             blend: BlendMode::Normal,
             effects: LayerEffects::default(),
+            fill_opacity: 1.0,
             clip: false,
             pass_through: false,
             mask: None,

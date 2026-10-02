@@ -92,6 +92,9 @@ struct LayerRecord {
     clip: bool,
     #[serde(default, skip_serializing_if = "lumenply_doc::LayerEffects::is_empty")]
     effects: lumenply_doc::LayerEffects,
+    /// Photoshop's Fill; missing in older files: 100%.
+    #[serde(default = "full_fill", skip_serializing_if = "is_full_fill")]
+    fill_opacity: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mask: Option<MaskRecord>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -101,6 +104,14 @@ struct LayerRecord {
     locks: lumenply_doc::LayerLocks,
     #[serde(flatten)]
     content: ContentRecord,
+}
+
+fn full_fill() -> f32 {
+    1.0
+}
+
+fn is_full_fill(v: &f32) -> bool {
+    *v >= 1.0
 }
 
 #[derive(Serialize, Deserialize)]
@@ -284,6 +295,7 @@ fn write_layer<W: Write + std::io::Seek>(
         pass_through: layer.pass_through,
         clip: layer.clip,
         effects: layer.effects.clone(),
+        fill_opacity: layer.fill_opacity,
         mask,
         collapsed: layer.collapsed,
         locks: layer.locks,
@@ -486,6 +498,11 @@ fn read_layer<R: Read + std::io::Seek>(
     layer.pass_through = r.pass_through;
     layer.clip = r.clip;
     layer.effects = r.effects.clone();
+    layer.fill_opacity = if r.fill_opacity.is_finite() {
+        r.fill_opacity.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
     layer.mask = mask;
     layer.collapsed = r.collapsed;
     layer.locks = r.locks;
@@ -799,6 +816,50 @@ mod tests {
             .unwrap();
         zip.finish().unwrap();
         assert!(matches!(load(&path), Err(ProjectError::TooNew(99))));
+    }
+
+    #[test]
+    fn fill_opacity_and_layer_style_details_survive() {
+        use lumenply_doc::{BlendMode, LayerEffects, ShadowFx, StrokeAlign, StrokeFx};
+        let mut doc = Document::new(16, 16);
+        let a = doc.add_pixel_layer("Styled");
+        let b = doc.add_pixel_layer("Plain");
+        {
+            let l = doc.layer_mut(a).unwrap();
+            l.fill_opacity = 0.3;
+            l.effects = LayerEffects {
+                drop_shadow: Some(ShadowFx {
+                    spread: 2.5,
+                    blend: BlendMode::Multiply,
+                    knockout: true,
+                    ..ShadowFx::default()
+                }),
+                stroke: Some(StrokeFx {
+                    position: StrokeAlign::Inside,
+                    blend: BlendMode::Screen,
+                    ..StrokeFx::default()
+                }),
+                ..LayerEffects::default()
+            };
+        }
+        let path = temp("fill-opacity.lumen");
+        save(&path, &doc).unwrap();
+        let back = load(&path).unwrap();
+        assert_eq!(back.layer(a).unwrap().fill_opacity, 0.3);
+        assert_eq!(back.layer(a).unwrap().effects, doc.layer(a).unwrap().effects);
+        assert_eq!(back.layer(b).unwrap().fill_opacity, 1.0);
+        let _ = std::fs::remove_file(&path);
+        // Effects written before these fields existed: an outside stroke,
+        // normal blending, no spread and no knockout; 100% fill.
+        let old: lumenply_doc::StrokeFx =
+            serde_json::from_str(r#"{"size":3.0,"color":[1.0,1.0,1.0],"opacity":1.0}"#).unwrap();
+        assert_eq!(old.position, StrokeAlign::Outside);
+        assert_eq!(old.blend, BlendMode::Normal);
+        let old: lumenply_doc::ShadowFx =
+            serde_json::from_str(r#"{"dx":1.0,"dy":2.0,"blur":3.0,"color":[0.0,0.0,0.0],"opacity":0.5}"#)
+                .unwrap();
+        assert_eq!((old.spread, old.knockout), (0.0, false));
+        assert_eq!(full_fill(), 1.0);
     }
 
     #[test]

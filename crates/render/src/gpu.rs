@@ -342,6 +342,8 @@ impl GpuCompositor {
                 // Clip chains and layer effects stay on the CPU for now.
                 !l.clip
                     && l.effects.is_empty()
+                    // Fill opacity below 100% renders on the CPU reference path.
+                    && l.fill_opacity >= 1.0
                     && match &l.content {
                         LayerContent::Pixel(_)
                         | LayerContent::Text(_)

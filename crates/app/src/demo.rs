@@ -110,6 +110,7 @@ pub(crate) fn build() -> Result<Editor, String> {
                     blur: 14.0,
                     color: [0.02, 0.01, 0.03],
                     opacity: 0.45,
+                    ..ShadowFx::default()
                 }),
                 ..LayerEffects::default()
             },

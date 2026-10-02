@@ -475,6 +475,25 @@ fn read_val(d: &mut Rd, ty: &[u8; 4], depth: usize) -> Option<Val> {
             }
             Val::List(v)
         }
+        // Large integer, unit-float list and class references (layer
+        // effects use them): kept in the nearest value we model.
+        b"comp" => Val::Doub(d.u64().ok()? as i64 as f64),
+        b"UnFl" => {
+            let u: [u8; 4] = d.bytes(4).ok()?.try_into().ok()?;
+            let n = d.u32().ok()? as usize;
+            let mut v = Vec::with_capacity(n.min(256));
+            for _ in 0..n.min(4096) {
+                v.push(Val::Unit(
+                    u,
+                    f64::from_be_bytes(d.bytes(8).ok()?.try_into().ok()?),
+                ));
+            }
+            Val::List(v)
+        }
+        b"type" | b"GlbC" => {
+            read_unicode(d)?;
+            Val::Text(String::from_utf8_lossy(&read_key(d)?).into_owned())
+        }
         // Raw data: skipped, kept as an empty text.
         b"tdta" => {
             let n = d.u32().ok()? as usize;
@@ -710,7 +729,7 @@ pub(super) fn parse_fill(key: &[u8], data: &[u8]) -> Option<Fill> {
 }
 
 /// CIE L*a*b* (D50, Photoshop's Lab) to straight linear sRGB, clipped.
-fn lab_to_linear_srgb(l: f32, a: f32, b: f32) -> [f32; 3] {
+pub(super) fn lab_to_linear_srgb(l: f32, a: f32, b: f32) -> [f32; 3] {
     let fy = (l + 16.0) / 116.0;
     let fx = fy + a / 500.0;
     let fz = fy - b / 200.0;
