@@ -80,6 +80,34 @@ pub(crate) struct Prefs {
     pub autosave_secs: u64,
     /// User key bindings by action id; missing ids use the defaults.
     pub shortcuts: std::collections::BTreeMap<String, Chord>,
+    /// Saved brush configurations, selectable from the brush options bar.
+    pub brush_presets: Vec<BrushPreset>,
+}
+
+/// One saved brush setup (the shape parameters; colour stays with the
+/// colour well, mode with the options bar).
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct BrushPreset {
+    pub name: String,
+    pub radius: f32,
+    pub hardness: f32,
+    pub spacing: f32,
+    pub jitter: f32,
+    pub opacity: f32,
+}
+
+impl Default for BrushPreset {
+    fn default() -> Self {
+        BrushPreset {
+            name: "Preset".into(),
+            radius: 8.0,
+            hardness: 0.8,
+            spacing: 0.2,
+            jitter: 0.0,
+            opacity: 1.0,
+        }
+    }
 }
 
 impl Default for Prefs {
@@ -90,6 +118,7 @@ impl Default for Prefs {
             undo_memory_mb: 1024,
             autosave_secs: 120,
             shortcuts: std::collections::BTreeMap::new(),
+            brush_presets: Vec::new(),
         }
     }
 }
@@ -254,5 +283,25 @@ mod tests {
 
         // The list survives a reload.
         assert_eq!(load_recent_in(&dir), list);
+    }
+
+    #[test]
+    fn prefs_round_trip_keeps_brush_presets() {
+        let mut p = Prefs::default();
+        p.brush_presets.push(BrushPreset {
+            name: "Soft 60".into(),
+            radius: 30.0,
+            hardness: 0.2,
+            spacing: 0.15,
+            jitter: 0.4,
+            opacity: 0.7,
+        });
+        let json = serde_json::to_string(&p).unwrap();
+        let back: Prefs = serde_json::from_str(&json).unwrap();
+        assert!(back == p, "presets survive the JSON round trip");
+        // Old prefs files without the field still load.
+        let legacy: Prefs = serde_json::from_str("{\"undo_steps\": 42}").unwrap();
+        assert_eq!(legacy.undo_steps, 42);
+        assert!(legacy.brush_presets.is_empty());
     }
 }

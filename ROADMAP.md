@@ -154,8 +154,10 @@ None of these could be tested in the container.
       Perspective toggle in free transform (corners drag freely, edges
       carry both corners). Warp (mesh) still open
 - [~] Brush engine: spacing jitter, dodge/burn, smudge (drags pixels along
-      the stroke from a per-dab snapshot) and sponge (Sat+/Sat− scale chroma
-      around gamma luminance) are in. Still to do: presets, textures
+      the stroke from a per-dab snapshot), sponge (Sat+/Sat− scale chroma
+      around gamma luminance) and presets (shape parameters saved in
+      prefs.json; Save preset + dropdown in the brush bar). Still to do:
+      textures
 - [x] Layer styles: drop shadow, outer glow and stroke as non-destructive
       per-layer effects (EFFECTS section in Properties, tile-seam-safe,
       saved in .nge; PSD/ORA warn instead of silently dropping)

@@ -186,6 +186,8 @@ impl App {
                                     }
                                 }
                                 ui.separator();
+                                self.brush_presets_ui(ui);
+                                ui.separator();
                             }
                             if self.tool == Tool::Heal {
                                 ui.checkbox(&mut self.heal_spot, "Spot").on_hover_text(
@@ -382,5 +384,67 @@ impl App {
                     }
                 });
             });
+    }
+
+    /// Preset dropdown + save button for the brush's shape parameters.
+    fn brush_presets_ui(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .button("Save preset")
+            .on_hover_text("Remember the current size, hardness, opacity, spacing and scatter")
+            .clicked()
+        {
+            let name = format!(
+                "{} {:.0}",
+                if self.brush.hardness >= 0.5 {
+                    "Hard"
+                } else {
+                    "Soft"
+                },
+                self.brush.radius * 2.0
+            );
+            self.prefs.brush_presets.push(session::BrushPreset {
+                name,
+                radius: self.brush.radius,
+                hardness: self.brush.hardness,
+                spacing: self.brush.spacing,
+                jitter: self.brush.jitter,
+                opacity: self.brush.color[3],
+            });
+            self.prefs.save();
+            self.status = "Brush preset saved".into();
+        }
+        if self.prefs.brush_presets.is_empty() {
+            return;
+        }
+        let mut apply = None;
+        let mut delete = None;
+        egui::ComboBox::from_id_salt("brush-presets")
+            .selected_text(format!("Presets ({})", self.prefs.brush_presets.len()))
+            .width(120.0)
+            .show_ui(ui, |ui| {
+                for (i, p) in self.prefs.brush_presets.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(false, &p.name).clicked() {
+                            apply = Some(i);
+                        }
+                        if ui.small_button("✕").on_hover_text("Delete this preset").clicked() {
+                            delete = Some(i);
+                        }
+                    });
+                }
+            });
+        if let Some(i) = apply {
+            let p = self.prefs.brush_presets[i].clone();
+            self.brush.radius = p.radius.clamp(0.5, 500.0);
+            self.brush.hardness = p.hardness.clamp(0.0, 1.0);
+            self.brush.spacing = p.spacing.clamp(0.02, 2.0);
+            self.brush.jitter = p.jitter.clamp(0.0, 1.0);
+            self.brush.color[3] = p.opacity.clamp(0.0, 1.0);
+            self.status = format!("Brush preset \"{}\" applied", p.name);
+        }
+        if let Some(i) = delete {
+            self.prefs.brush_presets.remove(i);
+            self.prefs.save();
+        }
     }
 }
