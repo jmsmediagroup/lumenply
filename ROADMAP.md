@@ -151,7 +151,10 @@ None of these could be tested in the container.
 - [x] Pass-through groups (compositor, Blend dropdown, .nge/.psd/.ora round trip)
 - [x] Histogram panel (composite luminance, in Properties); auto contrast as a
       Levels adjustment layer
-- [ ] Per-channel auto levels/colour (needs per-channel Levels first)
+- [x] Per-channel Levels (Master/R/G/B selector; LutRgb compilation, CPU
+      path; PSD levl records 1-3 round-trip, psd-tools-verified) and
+      Auto color (Image menu + palette: per-channel 0.1% percentile
+      stretch as a Levels adjustment layer)
 - [x] More filters: noise (position-seeded), motion blur, median, high pass —
       destructive or live, with dialog previews and palette entries
 - [~] Text: font picker (system fonts via fontdb, .ttc face index honoured),

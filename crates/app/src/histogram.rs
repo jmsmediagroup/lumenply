@@ -22,6 +22,23 @@ pub(crate) fn luminance_histogram(flat: &Raster) -> [u32; BINS] {
     hist
 }
 
+/// Per-channel histograms of the composite, binned like the luminance one.
+pub(crate) fn channel_histograms(flat: &Raster) -> [[u32; BINS]; 3] {
+    let mut hist = [[0u32; BINS]; 3];
+    for p in &flat.pixels {
+        if p.a <= 0.0 {
+            continue;
+        }
+        let s = p.to_straight();
+        for ch in 0..3 {
+            let v = lumenply_doc::adjust::srgb_encode(s[ch]);
+            let bin = ((v * (BINS - 1) as f32).round() as usize).min(BINS - 1);
+            hist[ch][bin] += 1;
+        }
+    }
+    hist
+}
+
 /// Black and white points that clip `clip` (a fraction, e.g. 0.001) of the
 /// pixels at each end. `None` when the image has no tonal range to stretch.
 pub(crate) fn auto_contrast_levels(hist: &[u32; BINS], clip: f32) -> Option<(f32, f32)> {
@@ -109,6 +126,37 @@ impl App {
             None => self.status = "Auto contrast: the image has no tonal range to stretch".into(),
         }
     }
+
+    /// Add a Levels adjustment that stretches each channel separately
+    /// (Photoshop's "auto color" per-channel contrast), neutralising casts.
+    pub(crate) fn auto_color(&mut self) {
+        let Some(flat) = &self.last_flat else {
+            self.status = "Auto color: nothing composited yet".into();
+            return;
+        };
+        let hists = channel_histograms(flat);
+        let mut channels = [lumenply_doc::LevelsChannel::default(); 3];
+        let mut stretched = false;
+        for (ch, hist) in channels.iter_mut().zip(&hists) {
+            if let Some((lo, hi)) = auto_contrast_levels(hist, 0.001) {
+                if lo > 0.0 || hi < 1.0 {
+                    ch.in_black = lo;
+                    ch.in_white = hi;
+                    stretched = true;
+                }
+            }
+        }
+        if !stretched {
+            self.status = "Auto color: the channels already span the full range".into();
+            return;
+        }
+        let mut adj = Adjustment::levels_default();
+        if let Adjustment::Levels { channels: c, .. } = &mut adj {
+            *c = channels;
+        }
+        self.add_adjustment(adj);
+        self.status = "Auto color: per-channel levels (as an adjustment layer)".into();
+    }
 }
 
 #[cfg(test)]
@@ -149,5 +197,23 @@ mod tests {
         // Bins are gamma-domain: linear 0.5 sits at sRGB ~0.735.
         let expect = (lumenply_doc::adjust::srgb_encode(0.5) * (BINS - 1) as f32).round() as usize;
         assert_eq!(h[expect], 1);
+    }
+
+    #[test]
+    fn channel_histograms_find_a_colour_cast() {
+        // Green and blue span the full range; red is compressed into the
+        // upper half (a warm cast). Auto colour should stretch only red.
+        let dec = lumenply_doc::adjust::srgb_decode;
+        let mut r = Raster::new(64, 1);
+        for i in 0..64 {
+            let t = i as f32 / 63.0;
+            r.set(i, 0, Rgba::from_straight(dec(0.5 + t * 0.5), dec(t), dec(t), 1.0));
+        }
+        let h = channel_histograms(&r);
+        let red = auto_contrast_levels(&h[0], 0.001).unwrap();
+        let green = auto_contrast_levels(&h[1], 0.001).unwrap();
+        assert!((red.0 - 0.5).abs() < 0.03, "red floor ~0.5: {red:?}");
+        assert!(red.1 > 0.97, "red ceiling ~1: {red:?}");
+        assert!(green.0 < 0.03 && green.1 > 0.97, "green full range: {green:?}");
     }
 }

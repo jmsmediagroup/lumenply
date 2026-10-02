@@ -84,6 +84,7 @@ impl App {
             m("Flip image vertical", "", "img-flip-v"),
             m("Crop to selection", "", "crop"),
             m("Auto contrast", "", "auto-contrast"),
+            m("Auto color", "", "auto-color"),
             m("Preferences...", "", "prefs"),
             m("Fit on screen", "0", "fit"),
             m("Actual pixels", "1", "actual"),
@@ -326,6 +327,7 @@ impl App {
                 }
             }
             "auto-contrast" => self.auto_contrast(),
+            "auto-color" => self.auto_color(),
             "prefs" => self.dialog = Some(Dialog::Preferences(self.prefs.clone(), None)),
             "fit" => self.view_cmd = Some(ViewCmd::Fit),
             "actual" => self.view_cmd = Some(ViewCmd::Actual),
