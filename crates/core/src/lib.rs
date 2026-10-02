@@ -18,6 +18,7 @@ pub mod liquify;
 pub mod locks;
 pub mod quick_select;
 mod select_ops;
+pub mod smart_contents;
 pub mod snap;
 
 use lumenply_doc::{Document, LayerId};

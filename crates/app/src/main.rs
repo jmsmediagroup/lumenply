@@ -47,6 +47,7 @@ mod quick_select_tool;
 #[cfg(test)]
 mod select_fill_tests;
 mod session;
+mod smart_contents;
 mod start;
 mod status;
 mod text_ui;
@@ -267,6 +268,12 @@ struct App {
     text_new_armed: bool,
     /// Quick Selection (the Wand tool's sibling mode) and its stroke.
     quick: quick_select_tool::QuickSelectState,
+    /// Identifies the live document across tab switches (contents tabs
+    /// save back to their parent by key).
+    doc_key: u64,
+    next_doc_key: u64,
+    /// Set in a smart object's contents tab: Save writes back there.
+    smart_link: Option<smart_contents::SmartLink>,
     /// File ▸ Export ▸ Export As…, while open (it replaces the editor UI).
     export_as: Option<Box<export_as::ExportAsState>>,
     /// Filter > Liquify's workspace, while open (it replaces the editor UI).
@@ -378,6 +385,8 @@ struct App {
 /// A document parked in an inactive tab: its editor plus the per-document
 /// state that would otherwise live in the `App` fields.
 struct DocTab {
+    doc_key: u64,
+    smart_link: Option<smart_contents::SmartLink>,
     editor: Editor,
     path: Option<PathBuf>,
     saved_rev: usize,
@@ -444,6 +453,9 @@ impl App {
             text_align: TextAlign::Left,
             text_new_armed: false,
             liquify: None,
+            doc_key: 0,
+            next_doc_key: 0,
+            smart_link: None,
             export_as: None,
             quick: Default::default(),
             camera_raw: None,
@@ -641,6 +653,8 @@ impl App {
     /// Replace the live tab's document (startup, crash recovery).
     fn set_doc(&mut self, editor: Editor, path: Option<PathBuf>) {
         self.no_doc = false;
+        self.doc_key = self.alloc_doc_key();
+        self.smart_link = None;
         self.editor = editor;
         self.prefs.apply(&mut self.editor);
         self.path = path;
@@ -658,6 +672,8 @@ impl App {
     /// Move the live document's state out into a parked tab.
     fn park_live(&mut self) -> DocTab {
         DocTab {
+            doc_key: self.doc_key,
+            smart_link: self.smart_link.take(),
             editor: std::mem::replace(&mut self.editor, Editor::new(Document::new(1, 1))),
             path: self.path.take(),
             saved_rev: self.saved_rev,
@@ -671,6 +687,8 @@ impl App {
 
     /// Make a parked tab the live document, restoring its view.
     fn load_tab(&mut self, t: DocTab) {
+        self.doc_key = t.doc_key;
+        self.smart_link = t.smart_link;
         self.editor = t.editor;
         self.path = t.path;
         self.saved_rev = t.saved_rev;

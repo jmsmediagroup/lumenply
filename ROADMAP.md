@@ -205,7 +205,11 @@ None of these could be tested in the container.
       repeated transforms never degrade. Convert/Rasterize in the layer
       context menu + palette, "Smart" chip, saved in .lumen (cache
       rebuilds on load), PSD/ORA export as pixels with a warning.
-      Still open: embedded multi-layer documents ("edit contents")
+      Edit contents opens the source in its own tab and Save there writes it
+      back (one "Update smart object" step in the original, transform kept);
+      Replace contents loads an image file in place (Layer menu, palette,
+      Properties). Still open: keeping the contents' layers (a nested
+      multi-layer document) instead of flattening on save
 - [x] Clipping masks (clip chains composite as a unit gated by the base's alpha
       and carrying its blend/opacity; context menu + palette; PSD clipping byte
       round-trips; GPU path falls back to CPU for clipped documents)

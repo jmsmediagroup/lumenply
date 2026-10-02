@@ -321,6 +321,7 @@ impl App {
             );
         } else if self.active_is_pixel() || is_smart {
             let mut rasterize = false;
+            let mut contents: Option<&'static str> = None;
             if is_smart {
                 ui.horizontal(|ui| {
                     section_title(ui, "SMART OBJECT");
@@ -341,6 +342,22 @@ impl App {
                     .small()
                     .color(MUTED),
                 );
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Edit contents")
+                        .on_hover_text("Open the original pixels in a tab; Save there updates this layer")
+                        .clicked()
+                    {
+                        contents = Some("smart-edit");
+                    }
+                    if ui
+                        .button("Replace contents…")
+                        .on_hover_text("Put another image in, keeping the transform")
+                        .clicked()
+                    {
+                        contents = Some("smart-replace");
+                    }
+                });
             } else {
                 section_title(ui, "TRANSFORM");
             }
@@ -409,6 +426,10 @@ impl App {
             }
             if rasterize {
                 self.run(&RasterizeLayer { layer: id });
+            }
+            if let Some(action) = contents {
+                self.run_menu_action(action);
+                return;
             }
             if free {
                 self.begin_free_transform();

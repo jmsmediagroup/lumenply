@@ -529,6 +529,8 @@ impl App {
         }
         layer_actions::column_separator(ui);
         self.act(ui, "Convert to smart object", "smart-object");
+        self.act(ui, "Edit smart object contents", "smart-edit");
+        self.act(ui, "Replace smart object contents...", "smart-replace");
         self.act(ui, "Rasterize", "rasterize");
     }
 

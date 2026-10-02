@@ -82,7 +82,7 @@ pub(crate) fn enforce_extension(p: PathBuf, allowed: &[&str]) -> PathBuf {
 }
 
 impl App {
-    fn file_dialog(&self) -> rfd::FileDialog {
+    pub(crate) fn file_dialog(&self) -> rfd::FileDialog {
         let mut d = rfd::FileDialog::new();
         if let Some(dir) = dialog_start_dir(self.path.as_deref(), &self.recent) {
             d = d.set_directory(dir);
@@ -803,10 +803,7 @@ impl App {
                             note(ui, "The document has unsaved changes.");
                             footer(ui, |ui| {
                                 if ui.add(primary_button("Save and quit")).clicked() || enter {
-                                    match self.path.clone() {
-                                        Some(p) => self.save_path(&p.to_string_lossy()),
-                                        None => self.pick_save(),
-                                    }
+                                    self.save_live();
                                     if self.editor.history().len() == self.saved_rev {
                                         self.allow_close = true;
                                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -833,10 +830,7 @@ impl App {
                             note(ui, "This document has unsaved changes.");
                             footer(ui, |ui| {
                                 if ui.add(primary_button("Save and close")).clicked() || enter {
-                                    match self.path.clone() {
-                                        Some(p) => self.save_path(&p.to_string_lossy()),
-                                        None => self.pick_save(),
-                                    }
+                                    self.save_live();
                                     if self.editor.history().len() == self.saved_rev {
                                         self.force_close_tab(i);
                                     }

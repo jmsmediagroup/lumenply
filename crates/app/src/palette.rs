@@ -118,6 +118,8 @@ const ACTIONS: &[(&str, &str)] = &[
     ("About Lumenply", "about"),
     ("Liquify...", "liquify"),
     ("Export As...", "export-as"),
+    ("Edit smart object contents", "smart-edit"),
+    ("Replace smart object contents...", "smart-replace"),
     ("Duplicate layer", "duplicate-layer"),
     ("Merge down (group, clipping mask)", "merge-down"),
     ("Merge visible", "merge-visible"),
@@ -448,6 +450,7 @@ impl App {
                 Some("Rasterize the layer first")
             }
             "liquify" if !pixel => need_pixel,
+            "smart-edit" | "smart-replace" if !smart => Some("Select a smart object first"),
             id if id.starts_with("filter-") && !pixel => Some("Filters apply to a pixel layer"),
             "deselect" | "feather" if !selection => need_selection,
             "crop" => {
@@ -552,10 +555,7 @@ impl App {
             "open" => self.pick_open(),
             "demo" => self.open_demo(),
             "place" => self.pick_place(),
-            "save" => match self.path.clone() {
-                Some(p) => self.save_path(&p.to_string_lossy()),
-                None => self.pick_save(),
-            },
+            "save" => self.save_live(),
             "saveas" => self.pick_save(),
             "export-png" => self.pick_export_png(),
             "export-jpeg" => self.pick_export_jpeg(),
@@ -682,6 +682,8 @@ impl App {
             "about" => self.dialog = Some(Dialog::About),
             "liquify" => self.open_liquify(),
             "export-as" => self.open_export_as(),
+            "smart-edit" => self.edit_smart_contents(),
+            "smart-replace" => self.pick_replace_smart_contents(),
             "zoom-in" => self.view_cmd = Some(ViewCmd::ZoomIn),
             "zoom-out" => self.view_cmd = Some(ViewCmd::ZoomOut),
             "toggle-history" => {
@@ -740,7 +742,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 104); // + export as
+        assert_eq!(n, 106); // + smart object contents
     }
 
     #[test]
