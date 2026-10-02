@@ -494,6 +494,104 @@ impl Command for SpotHealAware {
     }
 }
 
+/// Heal ▸ Spot and Heal ▸ Healing, applied to a whole stroke at once (on
+/// release; the per-dab `HealStroke` previews it while dragging). The
+/// stroke's coverage — each pixel's strongest dab coverage times the
+/// strength — is one region, healed the way Patch heals a selection: with
+/// `texture`, the detail found `offset` away plus the membrane of the
+/// colour difference along the region's rim (the healing brush); without,
+/// the membrane of the rim itself (spot healing by diffusion). One solve
+/// over the whole region converges where overlapping per-dab solves
+/// smear. One undo step.
+pub struct HealRegion {
+    pub layer: LayerId,
+    pub brush: Brush,
+    pub points: Vec<StrokePoint>,
+    /// Source position = destination + offset (texture only).
+    pub offset: (i32, i32),
+    pub texture: bool,
+    pub sample: RetouchSample,
+}
+
+impl Command for HealRegion {
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn label(&self) -> String {
+        if self.texture {
+            "Healing brush".into()
+        } else {
+            "Spot heal".into()
+        }
+    }
+
+    fn affected(&self, doc: &Document) -> Option<Rect> {
+        Some(stroke_bounds(&self.brush, &self.points, doc.canvas()))
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        if self.points.is_empty() {
+            return Err(EditError::Invalid("stroke has no points".into()));
+        }
+        let canvas = doc.canvas();
+        let bounds = stroke_bounds(&self.brush, &self.points, canvas);
+        if bounds.is_empty() {
+            return Err(EditError::Invalid("the stroke is off the canvas".into()));
+        }
+        doc.layer(self.layer)
+            .ok_or(EditError::NoLayer(self.layer))?
+            .pixels()
+            .ok_or(EditError::NotPixel(self.layer))?;
+        let area = Rect::new(bounds.x - 1, bounds.y - 1, bounds.w + 2, bounds.h + 2).intersect(&canvas);
+        let w = area.w as usize;
+        let strength = self.brush.color[3].clamp(0.0, 1.0);
+        let mut cov = vec![0f32; w * area.h as usize];
+        let sel = doc.selection.clone();
+        for d in interpolate_dabs(&self.brush, &self.points) {
+            dab_coverage(&self.brush, d, canvas, sel.as_ref(), |x, y, c| {
+                if area.contains(x, y) {
+                    let i = (y - area.y) as usize * w + (x - area.x) as usize;
+                    cov[i] = cov[i].max(c * strength);
+                }
+            });
+        }
+        if !cov.iter().any(|&c| c > 0.0) {
+            return Ok(());
+        }
+        let dst = read(doc, self.layer, self.sample, area)?;
+        let src = if self.texture {
+            let (ox, oy) = self.offset;
+            let shifted = Rect::new(area.x + ox, area.y + oy, area.w, area.h);
+            let inside = shifted.intersect(&canvas);
+            if inside.is_empty() {
+                return Err(EditError::Invalid("the healing source is off the canvas".into()));
+            }
+            let part = read(doc, self.layer, self.sample, inside)?;
+            let mut r = Raster::new(area.w, area.h);
+            for y in 0..area.h as i32 {
+                for x in 0..area.w as i32 {
+                    let sx = (shifted.x + x).clamp(inside.x, inside.right() - 1) - inside.x;
+                    let sy = (shifted.y + y).clamp(inside.y, inside.bottom() - 1) - inside.y;
+                    r.set(x as u32, y as u32, part.get(sx as u32, sy as u32));
+                }
+            }
+            r
+        } else {
+            // No texture: healing a blank source leaves the membrane of
+            // the rim alone.
+            Raster::new(area.w, area.h)
+        };
+        let healed = heal_patch(&dst, &src, &cov)?;
+        let store = doc
+            .layer_mut(self.layer)
+            .and_then(|l| l.pixels_mut())
+            .expect("checked above");
+        lay_down(store, area, &healed, &cov);
+        Ok(())
+    }
+}
+
 /// Heal ▸ Red Eye: find the red pupil in `area` (the reddest connected
 /// patch nearest the box centre) and turn it a dark neutral.
 ///
@@ -989,6 +1087,90 @@ mod tests {
         // Current: the empty layer has nothing to heal from.
         ed.undo();
         assert!(ed.execute(&patch(RetouchSample::Current)).is_err());
+    }
+
+    fn heal_brush() -> Brush {
+        Brush {
+            radius: 7.0,
+            hardness: 1.0,
+            color: [0.0, 0.0, 0.0, 1.0],
+            spacing: 0.2,
+            jitter: 0.0,
+            mode: crate::commands::BrushMode::Paint,
+        }
+    }
+
+    #[test]
+    fn a_whole_stroke_heals_texture_and_tone_exactly() {
+        let (mut ed, id) = patch_doc();
+        let stroke = HealRegion {
+            layer: id,
+            brush: heal_brush(),
+            points: vec![
+                StrokePoint::new(20.0, 18.0, 1.0),
+                StrokePoint::new(28.0, 18.0, 1.0),
+            ],
+            offset: (0, 36),
+            texture: true,
+            sample: RetouchSample::Current,
+        };
+        ed.execute(&stroke).unwrap();
+        assert_eq!(ed.history().last().copied(), Some("Healing brush"));
+        // The source is 0.25 brighter; the rim pulls it back onto the
+        // stripes, over the whole blemish.
+        let px = ed.doc().layer(id).unwrap().pixels().unwrap();
+        let mut worst = 0f32;
+        for y in 14..22 {
+            for x in 20..28 {
+                worst = worst.max((enc(px.get_pixel(x, y))[0] - stripes(x as u32, y as u32)).abs());
+            }
+        }
+        assert!(worst < 2e-3, "worst {worst}");
+    }
+
+    #[test]
+    fn a_whole_stroke_spot_heal_continues_a_smooth_ramp() {
+        // A gamma ramp 0.2 + 0.01·x with a white blemish: diffusion alone
+        // restores the ramp, since a linear ramp is harmonic.
+        let mut r = Raster::new(64, 40);
+        for y in 0..40 {
+            for x in 0..64 {
+                let v = if (24..34).contains(&x) && (15..25).contains(&y) {
+                    1.0
+                } else {
+                    0.2 + 0.01 * x as f32
+                };
+                r.set(x, y, g(v, v, v));
+            }
+        }
+        let mut ed = Editor::new(Document::new(64, 40));
+        ed.execute(&AddPixelLayer::from_raster("ramp", r, 0, 0)).unwrap();
+        let id = ed.doc().layers()[0].id;
+        let mut brush = heal_brush();
+        brush.radius = 9.0;
+        ed.execute(&HealRegion {
+            layer: id,
+            brush,
+            points: vec![
+                StrokePoint::new(27.0, 20.0, 1.0),
+                StrokePoint::new(31.0, 20.0, 1.0),
+            ],
+            offset: (0, 0),
+            texture: false,
+            sample: RetouchSample::Current,
+        })
+        .unwrap();
+        assert_eq!(ed.history().last().copied(), Some("Spot heal"));
+        let px = ed.doc().layer(id).unwrap().pixels().unwrap();
+        let mut worst = 0f32;
+        for y in 15..25 {
+            for x in 24..34 {
+                worst = worst.max((enc(px.get_pixel(x, y))[0] - (0.2 + 0.01 * x as f32)).abs());
+            }
+        }
+        assert!(worst < 2e-3, "worst {worst}");
+        // (30, 20): 0.2 + 0.3 = 0.5.
+        assert!((enc(px.get_pixel(30, 20))[1] - 0.5).abs() < 2e-3);
     }
 
     #[test]

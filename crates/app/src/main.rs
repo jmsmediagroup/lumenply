@@ -924,6 +924,11 @@ impl App {
             }
             let texture =
                 self.retouch.heal_mode == retouch_ui::HealMode::Healing && self.clone_source.is_some();
+            // On release the whole stroke heals as one region; while
+            // dragging, per-dab healing previews it.
+            if self.drag != Some(DragKind::Stroke) {
+                return Box::new(self.heal_region(layer, brush, points, texture));
+            }
             let sample = if self.sample_merged {
                 SampleSource::Merged
             } else {

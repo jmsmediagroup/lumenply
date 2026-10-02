@@ -458,6 +458,30 @@ impl App {
         true
     }
 
+    /// A Spot (diffusion) or Healing stroke, healed as one region. Spot
+    /// reads what the Sample menu says; Healing follows its All layers box.
+    pub(crate) fn heal_region(
+        &self,
+        layer: LayerId,
+        brush: Brush,
+        points: Vec<StrokePoint>,
+        texture: bool,
+    ) -> HealRegion {
+        let sample = match (self.retouch.heal_mode, self.sample_merged) {
+            (HealMode::Healing, true) => RetouchSample::All,
+            (HealMode::Healing, false) => RetouchSample::Current,
+            _ => self.retouch.sample,
+        };
+        HealRegion {
+            layer,
+            brush,
+            points,
+            offset: if texture { self.clone_offset } else { (0, 0) },
+            texture,
+            sample,
+        }
+    }
+
     /// A Background-eraser stroke with the bar's options.
     pub(crate) fn background_erase(
         &self,
@@ -812,7 +836,9 @@ impl App {
     /// history brush's source step; `retouch:stroke=X0:Y0:X1:Y1` runs the
     /// current tool's stroke along that line; `retouch:magic=X:Y` runs the
     /// magic eraser there; `retouch:sample=current|below|all` picks what
-    /// Patch and Spot healing read, `retouch:dest=1` Patch's Destination.
+    /// Patch and Spot healing read, `retouch:dest=1` Patch's Destination,
+    /// `retouch:aware=0` turns content-aware spot healing off,
+    /// `retouch:offset=DX:DY` sets the healing (clone) source offset.
     pub(crate) fn debug_retouch(&mut self, ctx: &egui::Context, tok: &str) -> bool {
         let Some(rest) = tok.strip_prefix("retouch:") else {
             return false;
@@ -855,6 +881,12 @@ impl App {
                 }
             }
             ("dest", &[v]) => self.retouch.patch_destination = v != 0.0,
+            ("aware", &[v]) => self.retouch.spot_aware = v != 0.0,
+            ("offset", &[dx, dy]) => {
+                self.clone_source = Some((0.0, 0.0));
+                self.clone_picking = false;
+                self.clone_offset = (dx as i32, dy as i32);
+            }
             ("magic", &[x, y]) => {
                 if let Some(layer) = layer {
                     let cmd = self.magic_erase_command(layer, x as i32, y as i32);
