@@ -626,7 +626,7 @@ impl Command for TransformLayer {
             _ => return Err(EditError::NotPixel(self.layer)),
         }
         if let Some(m) = l.mask.as_mut() {
-            m.tiles = nge_render::transform_store(&m.tiles, &self.transform);
+            *m = nge_render::transform_mask(m, &self.transform);
         }
         Ok(())
     }
@@ -952,7 +952,7 @@ impl Command for ResizeImage {
                 *store = nge_render::transform_store(store, &t);
             }
             if let Some(m) = l.mask.as_mut() {
-                m.tiles = nge_render::transform_store(&m.tiles, &t);
+                *m = nge_render::transform_mask(m, &t);
             }
         });
         doc.width = self.width;
@@ -971,7 +971,7 @@ fn shift_all(doc: &mut Document, dx: i32, dy: i32) {
             *store = store.translated(dx, dy);
         }
         if let Some(m) = l.mask.as_mut() {
-            m.tiles = m.tiles.translated(dx, dy);
+            *m = nge_render::transform_mask(m, &Affine::translate(dx as f32, dy as f32));
         }
     });
 }
@@ -1222,7 +1222,7 @@ impl Command for RotateImage {
                 _ => {}
             }
             if let Some(m) = l.mask.as_mut() {
-                m.tiles = nge_render::transform_store(&m.tiles, &t);
+                *m = nge_render::transform_mask(m, &t);
             }
         });
         if q % 2 == 1 {
@@ -1267,7 +1267,7 @@ impl Command for FlipImage {
                 _ => {}
             }
             if let Some(m) = l.mask.as_mut() {
-                m.tiles = nge_render::transform_store(&m.tiles, &t);
+                *m = nge_render::transform_mask(m, &t);
             }
         });
         doc.selection = None;
@@ -1827,6 +1827,42 @@ mod tests {
         let px = doc.layer(id).unwrap().pixels().unwrap();
         assert_eq!(px.get_pixel(25, 25), Rgba::TRANSPARENT);
         assert!(px.get_pixel(5, 5).a > 0.99);
+    }
+
+    #[test]
+    fn moving_a_layer_keeps_hidden_mask_regions_hidden() {
+        // A reveal-all mask with a painted-hidden block. Moving or rotating
+        // the layer must keep that block hidden and the rest revealed; the
+        // old code pushed the mask through the pixel transform, which pruned
+        // all-zero tiles and reset everything outside them to 0.
+        let mut doc = Document::new(600, 600);
+        let id = doc.add_pixel_layer("a");
+        doc.layer_mut(id)
+            .unwrap()
+            .pixels_mut()
+            .unwrap()
+            .set_pixel(300, 300, Rgba::WHITE);
+        let mut mask = Mask::reveal_all();
+        mask.fill_rect(Rect::new(0, 0, 256, 256), 0.0); // exactly one all-zero tile
+        doc.layer_mut(id).unwrap().mask = Some(mask);
+
+        MoveLayer {
+            layer: id,
+            dx: 30,
+            dy: 7,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let m = doc.layer(id).unwrap().mask.as_ref().unwrap();
+        assert_eq!(m.default, 1.0);
+        assert_eq!(m.value(130, 130), 0.0, "hidden block moved, still hidden");
+        assert_eq!(m.value(10, 2), 1.0, "uncovered strip reverts to default");
+        assert_eq!(m.value(500, 500), 1.0, "far away stays revealed");
+
+        RotateImage { quarter_turns: 1 }.apply(&mut doc).unwrap();
+        let m = doc.layer(id).unwrap().mask.as_ref().unwrap();
+        assert_eq!(m.value(450, 130), 0.0, "hidden block rotated with the image");
+        assert_eq!(m.value(100, 500), 1.0, "rest of the canvas stays revealed");
     }
 
     #[test]

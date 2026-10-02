@@ -48,6 +48,46 @@ pub fn transform_store(src: &TileStore, t: &Affine) -> TileStore {
     out
 }
 
+/// Transform a mask's coverage, honouring its `default`.
+///
+/// [`transform_store`] assumes "no tile" and "alpha 0" both mean empty, which
+/// holds for layer pixels but not for masks: with a non-zero default, an
+/// all-zero tile is painted-hidden content (it would be pruned) and the area
+/// outside the tiles means `default` (it would come back 0). Transforming the
+/// complement instead makes 0 mean "default" again, so the plain store
+/// transform applies. Masks have a default of exactly 0 or 1.
+pub fn transform_mask(mask: &nge_doc::Mask, t: &Affine) -> nge_doc::Mask {
+    let tiles = if mask.default == 0.0 {
+        transform_store(&mask.tiles, t)
+    } else {
+        complement(&transform_store(&complement(&mask.tiles), t))
+    };
+    let mut out = nge_doc::Mask {
+        tiles,
+        default: mask.default,
+        enabled: mask.enabled,
+    };
+    out.prune_uniform();
+    out
+}
+
+/// Pixelwise 1 − v over the tiles of a coverage store (missing tiles stay
+/// missing).
+fn complement(src: &TileStore) -> TileStore {
+    let mut out = TileStore::new();
+    for c in src.coords() {
+        let Some(tile) = src.tile(c) else { continue };
+        let px = tile.pixels();
+        let mut nt = Tile::new();
+        for (p, s) in nt.pixels_mut().iter_mut().zip(px.iter()) {
+            let v = 1.0 - s.a;
+            *p = Rgba::new(v, v, v, v);
+        }
+        out.insert(c, Arc::new(nt));
+    }
+    out
+}
+
 /// Exact pixel shuffle for 90° rotations and mirrors: every destination
 /// pixel centre maps onto exactly one source pixel centre.
 fn remap_exact(src: &TileStore, t: &Affine, inv: &Affine, src_bounds: Rect) -> TileStore {
@@ -139,7 +179,46 @@ pub fn sample_bilinear(src: &TileStore, x: f32, y: f32) -> Rgba {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nge_doc::Mask;
     use nge_tiles::Raster;
+
+    /// A reveal-all mask with a painted-hidden rect must keep hiding that
+    /// rect after any transform, and keep revealing everywhere else. The
+    /// plain store transform would prune the zero tiles (hidden = a 0) and
+    /// treat everything outside them as 0 too.
+    #[test]
+    fn mask_transform_respects_the_default() {
+        let mut m = Mask::reveal_all();
+        m.fill_rect(Rect::new(10, 10, 40, 40), 0.0);
+
+        // Unaligned integer translation (the `translated` + prune path).
+        let t = transform_mask(&m, &Affine::translate(30.0, 7.0));
+        assert_eq!(t.default, 1.0);
+        assert_eq!(t.value(60, 30), 0.0, "hidden rect moved");
+        assert_eq!(t.value(20, 20), 1.0, "old spot revealed again");
+        assert_eq!(t.value(5000, 5000), 1.0, "far away stays default");
+
+        // Pixel-exact quarter turn about the canvas-ish centre.
+        let rot = Affine::rotate(std::f32::consts::FRAC_PI_2).then(&Affine::translate(100.0, 0.0));
+        assert!(rot.is_pixel_exact());
+        let r = transform_mask(&m, &rot);
+        // (x, y) → (99 - y, x) for pixel centres: (30, 30) → (69, 30).
+        assert_eq!(r.value(69, 30), 0.0, "hidden rect rotated");
+        assert_eq!(r.value(30, 30), 1.0);
+        assert_eq!(r.value(-5000, 5000), 1.0, "far away stays default");
+
+        // Bilinear resample path.
+        let s = transform_mask(&m, &Affine::around(30.0, 30.0, 1.0, 1.0, 0.3));
+        assert!(s.value(30, 30) < 0.05, "hidden centre stays hidden");
+        assert_eq!(s.value(5000, 5000), 1.0, "far away stays default");
+
+        // A hide-all mask with a revealed rect (default 0) still works.
+        let mut h = Mask::hide_all();
+        h.fill_rect(Rect::new(10, 10, 40, 40), 1.0);
+        let th = transform_mask(&h, &Affine::translate(30.0, 7.0));
+        assert_eq!(th.value(60, 30), 1.0);
+        assert_eq!(th.value(5000, 5000), 0.0);
+    }
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4

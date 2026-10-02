@@ -18,7 +18,7 @@ pub mod text;
 pub mod transform;
 
 pub use filters::{apply_filter, filter_raster, Filter};
-pub use transform::{sample_bilinear, transform_store};
+pub use transform::{sample_bilinear, transform_mask, transform_store};
 
 use nge_doc::{Adjustment, BlendMode, Document, Layer, LayerContent, Mask};
 use nge_tiles::{Raster, Rect, Rgba, Tile, TileCoord, TileStore, TILE_PIXELS, TILE_SIZE};
