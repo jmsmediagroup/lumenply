@@ -24,6 +24,7 @@ use lumenply_tiles::{Affine, Raster, Rect};
 
 mod brand;
 mod canvas;
+mod debug;
 mod dialogs;
 mod histogram;
 mod history;
@@ -52,7 +53,7 @@ fn main() -> Result<(), eframe::Error> {
                 width: 256,
                 height: 256,
             }))
-            .with_inner_size([1600.0, 1000.0])
+            .with_inner_size(window_size(&args))
             .with_min_inner_size([900.0, 600.0])
             .with_title("Lumenply"),
         ..Default::default()
@@ -126,7 +127,11 @@ impl App {
                             self.xform = Some(x);
                         }
                     }
-                    other => self.run_menu_action(other),
+                    other => {
+                        if !self.debug_token(ctx, other) {
+                            self.run_menu_action(other);
+                        }
+                    }
                 }
             }
         }
@@ -157,6 +162,20 @@ impl App {
         }
         ctx.request_repaint();
     }
+}
+
+/// `--window-size WxH` (debug: check narrow layouts headlessly), else the
+/// default 1600×1000.
+fn window_size(args: &[String]) -> [f32; 2] {
+    args.iter()
+        .position(|a| a == "--window-size")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| {
+            let (w, h) = s.split_once('x')?;
+            Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?])
+        })
+        .filter(|[w, h]| *w >= 200.0 && *h >= 200.0)
+        .unwrap_or([1600.0, 1000.0])
 }
 
 fn is_image_path(p: &str) -> bool {
