@@ -105,11 +105,8 @@ impl App {
                     let cy = rect.center().y;
 
                     // visibility checkbox
-                    let vis_rect = egui::Rect::from_center_size(egui::pos2(x + 8.0, cy), Vec2::splat(14.0));
-                    p.rect_stroke(vis_rect, 2.0, Stroke::new(1.0, MUTED));
-                    if row.visible {
-                        p.circle_filled(vis_rect.center(), 4.0, Color32::WHITE);
-                    }
+                    let vis_rect = egui::Rect::from_center_size(egui::pos2(x + 8.0, cy), Vec2::splat(16.0));
+                    paint_eye(p, vis_rect, row.visible);
                     if resp.clicked()
                         && resp
                             .interact_pointer_pos()
@@ -226,13 +223,6 @@ impl App {
                             continue;
                         }
                     }
-                    p.text(
-                        egui::pos2(x, cy),
-                        Align2::LEFT_CENTER,
-                        &row.name,
-                        FontId::proportional(14.0),
-                        TEXT,
-                    );
                     let mut right = rect.max.x - 8.0;
                     if let Some(label) = row.chip {
                         let ink = if row.kind == Kind::Filter {
@@ -243,14 +233,29 @@ impl App {
                         right -= kind_chip(p, egui::pos2(right, cy), label, ink) + 6.0;
                     }
                     if row.opacity < 0.999 {
-                        p.text(
-                            egui::pos2(right, cy),
-                            Align2::RIGHT_CENTER,
-                            format!("{:.0}%", row.opacity * 100.0),
-                            FontId::monospace(10.5),
-                            MUTED,
-                        );
+                        right -= p
+                            .text(
+                                egui::pos2(right, cy),
+                                Align2::RIGHT_CENTER,
+                                format!("{:.0}%", row.opacity * 100.0),
+                                FontId::monospace(10.5),
+                                MUTED,
+                            )
+                            .width()
+                            + 6.0;
                     }
+                    // Name last, clipped so it never runs under the chips.
+                    let name_clip = egui::Rect::from_min_max(
+                        egui::pos2(x, rect.min.y),
+                        egui::pos2(right - 2.0, rect.max.y),
+                    );
+                    p.with_clip_rect(name_clip).text(
+                        egui::pos2(x, cy),
+                        Align2::LEFT_CENTER,
+                        &row.name,
+                        FontId::proportional(14.0),
+                        TEXT,
+                    );
                     resp.context_menu(|ui| {
                         if ui.button("Rename").clicked() {
                             rename_start = Some((row.id, row.name.clone()));
@@ -570,6 +575,36 @@ impl egui::Widget for IconButton {
 }
 
 // Original icons on a nominal 20 px grid, 1.6 px stroke. `r` is the box.
+/// A small eye: open when the layer is visible, a slashed outline when not.
+pub(crate) fn paint_eye(p: &egui::Painter, r: egui::Rect, open: bool) {
+    let c = if open { TEXT } else { MUTED };
+    let s = Stroke::new(1.4, c);
+    let (cx, cy) = (r.center().x, r.center().y);
+    let w = r.width() * 0.46;
+    // Two arcs approximated with short polylines.
+    let n = 8;
+    for dir in [-1.0f32, 1.0] {
+        let pts: Vec<egui::Pos2> = (0..=n)
+            .map(|i| {
+                let t = i as f32 / n as f32 * 2.0 - 1.0; // -1..1
+                egui::pos2(cx + t * w, cy + dir * (1.0 - t * t) * r.height() * 0.28)
+            })
+            .collect();
+        p.add(Shape::line(pts, s));
+    }
+    if open {
+        p.circle_filled(egui::pos2(cx, cy), r.width() * 0.14, c);
+    } else {
+        p.line_segment(
+            [
+                egui::pos2(r.min.x + 1.0, r.max.y - 1.0),
+                egui::pos2(r.max.x - 1.0, r.min.y + 1.0),
+            ],
+            s,
+        );
+    }
+}
+
 fn icon_plus(p: &egui::Painter, r: egui::Rect, c: Color32) {
     let s = Stroke::new(1.6, c);
     p.line_segment([r.center_top(), r.center_bottom()], s);

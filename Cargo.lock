@@ -1905,6 +1905,7 @@ name = "nge-app"
 version = "0.0.1"
 dependencies = [
  "eframe",
+ "image 0.24.9",
  "nge-core",
  "nge-doc",
  "nge-io",

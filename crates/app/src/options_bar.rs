@@ -6,11 +6,6 @@ impl App {
     pub(crate) fn options_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("options").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(self.tool.name())
-                        .family(egui::FontFamily::Name("semibold".into()))
-                        .color(TEXT),
-                );
                 if self.editing_mask {
                     let chip = RichText::new("ON MASK").small().color(ACCENT);
                     ui.add(

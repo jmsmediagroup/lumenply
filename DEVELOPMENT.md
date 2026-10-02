@@ -57,6 +57,12 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
 
 ## Gotchas learned the hard way
 
+- **Verify UI changes by looking at them**: `cargo run --release -p nge-app -- --demo
+  --screenshot /tmp/ui.png` renders a few frames, saves the window and exits —
+  no macOS screen-recording permission needed. The dark theme is forced via
+  `ctx.set_theme(ThemePreference::Dark)`; without it eframe follows the OS and
+  repaints everything in egui's stock light palette on a light-mode system.
+
 - egui is 0.29: `drag_stopped()`, `id_salt()`, `ComboBox::from_label`. Record a drag's start
   position yourself on `drag_started` — `press_origin()` is already cleared on release.
 - Shortcuts must be ignored while a text field has focus (`ctx.wants_keyboard_input()`).

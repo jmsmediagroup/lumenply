@@ -62,14 +62,21 @@ impl App {
         // Groups offer Pass Through above the regular modes: the children
         // then composite straight onto the backdrop.
         let mut sel = if is_group && pass { None } else { Some(blend) };
+        let title = |m: BlendMode| {
+            let n = m.name();
+            let mut c = n.chars();
+            c.next().map_or(String::new(), |f| {
+                f.to_uppercase().collect::<String>() + c.as_str()
+            })
+        };
         egui::ComboBox::from_label("Blend mode")
-            .selected_text(sel.map_or("Pass Through", |m| m.name()))
+            .selected_text(sel.map_or("Pass Through".into(), title))
             .show_ui(ui, |ui| {
                 if is_group {
                     ui.selectable_value(&mut sel, None, "Pass Through");
                 }
                 for m in BlendMode::ALL {
-                    ui.selectable_value(&mut sel, Some(m), m.name());
+                    ui.selectable_value(&mut sel, Some(m), title(m));
                 }
             });
         match sel {

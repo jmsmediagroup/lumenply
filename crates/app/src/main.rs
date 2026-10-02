@@ -57,6 +57,40 @@ fn main() -> Result<(), eframe::Error> {
     )
 }
 
+impl App {
+    /// `--screenshot`: wait a few frames for everything to upload, ask the
+    /// backend for a frame grab, save it, quit. Lets the UI be inspected
+    /// without macOS screen-recording permission.
+    fn debug_screenshot(&mut self, ctx: &egui::Context) {
+        let Some((path, frames_left)) = &mut self.shot else {
+            return;
+        };
+        let got = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        if let Some(img) = got {
+            let [w, h] = img.size;
+            let mut buf = Vec::with_capacity(w * h * 4);
+            for p in &img.pixels {
+                buf.extend_from_slice(&p.to_array());
+            }
+            let out = image::RgbaImage::from_raw(w as u32, h as u32, buf).expect("buffer matches dimensions");
+            let r = out.save_with_format(&*path, image::ImageFormat::Png);
+            eprintln!("screenshot {:?}: {:?}", path, r.err());
+            std::process::exit(0);
+        }
+        if *frames_left == 0 {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
+        } else {
+            *frames_left -= 1;
+        }
+        ctx.request_repaint();
+    }
+}
+
 fn is_image_path(p: &str) -> bool {
     let lower = p.to_ascii_lowercase();
     [".png", ".jpg", ".jpeg", ".tif", ".tiff"]
@@ -153,6 +187,9 @@ struct App {
     histogram: [u32; histogram::BINS],
     /// User preferences (undo caps, canvas colour, autosave interval).
     prefs: session::Prefs,
+    /// Debug: save a screenshot of the window here after a few frames,
+    /// then exit (`--screenshot path.png`). Used to verify the UI headlessly.
+    shot: Option<(PathBuf, u32)>,
 }
 
 impl App {
@@ -257,10 +294,18 @@ impl App {
             recent: session::load_recent(),
             histogram: [0; histogram::BINS],
             prefs: session::Prefs::load(),
+            shot: args
+                .iter()
+                .position(|a| a == "--screenshot")
+                .and_then(|i| args.get(i + 1))
+                .map(|p| (PathBuf::from(p), 6)),
             filter_previewed: false,
             status,
         };
         app.prefs.apply(&mut app.editor);
+        // Whatever was just opened or built is the saved baseline; only
+        // edits from here on count as unsaved changes.
+        app.saved_rev = app.editor.history().len();
         app.select_top();
         if session::autosave_file().is_some_and(|p| p.exists()) {
             app.dialog = Some(Dialog::Recover);
@@ -718,9 +763,13 @@ impl eframe::App for App {
             self.refresh(ctx);
             ctx.request_repaint();
         }
+        self.debug_screenshot(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.shot.is_some() {
+            return; // a screenshot run never counts as a user exit
+        }
         // An intentional exit needs no crash recovery; a stale backup would
         // only raise a misleading prompt next launch.
         session::remove_autosave();

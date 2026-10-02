@@ -564,7 +564,19 @@ impl App {
             .unwrap_or_else(|| "untitled".into());
         let unsaved = self.editor.history().len() != self.saved_rev;
         let text = RichText::new(name).color(TEXT);
-        let resp = ui.add(egui::Button::new(text).fill(RAISED).rounding(6.0));
+        let resp = ui.add(
+            egui::Button::new(text)
+                .fill(RAISED)
+                .stroke(Stroke::new(1.0, LINE))
+                .rounding(6.0),
+        );
+        ui.painter().line_segment(
+            [
+                resp.rect.left_bottom() + egui::vec2(4.0, 0.0),
+                resp.rect.right_bottom() + egui::vec2(-4.0, 0.0),
+            ],
+            Stroke::new(2.0, ACCENT),
+        );
         if unsaved {
             let c = resp.rect.right_center() + egui::vec2(-7.0, 0.0);
             ui.painter().circle_filled(c, 3.0, ACCENT);

@@ -28,6 +28,11 @@ pub(crate) const THUMB: (usize, usize) = (44, 30);
 pub(crate) fn install(ctx: &egui::Context) {
     use egui::{FontData, FontDefinitions, FontFamily};
 
+    // Graphite & Signal has one look. Without this, eframe follows the
+    // system theme every frame and replaces our visuals with egui's stock
+    // light palette on a light-mode OS.
+    ctx.set_theme(egui::ThemePreference::Dark);
+
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert(
         "plex-sans".into(),
