@@ -722,7 +722,13 @@ impl App {
                     .desired_width(f32::INFINITY),
             )
         } else {
-            ui.add(egui::TextEdit::singleline(&mut t.text).desired_width(260.0))
+            // The fixed id lets a canvas click on existing text focus this
+            // field directly (see Tool::Text in canvas.rs).
+            ui.add(
+                egui::TextEdit::singleline(&mut t.text)
+                    .id(egui::Id::new("text-edit-field"))
+                    .desired_width(260.0),
+            )
         };
         finished |= r.lost_focus();
         let rs = ui.add(

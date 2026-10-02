@@ -1023,6 +1023,15 @@ impl App {
                 if resp.clicked_by(primary) {
                     if let Some(p) = resp.interact_pointer_pos() {
                         let (x, y) = to_doc(p);
+                        // A click on existing text edits it instead of
+                        // stacking a new layer on top.
+                        if let Some(id) = text_layer_at(self.editor.doc().layers(), x, y) {
+                            self.set_active(Some(id));
+                            self.fix_active();
+                            ctx.memory_mut(|m| m.request_focus(egui::Id::new("text-edit-field")));
+                            self.status = "Editing the text layer under the cursor".into();
+                            return;
+                        }
                         let mut t =
                             TextLayer::new("Text", x, y, self.text_size, linear_rgba(self.brush_rgb, 1.0));
                         t.bold = self.text_bold;
@@ -1470,6 +1479,33 @@ impl App {
             Tool::Hand | Tool::Move | Tool::Eyedropper | Tool::Bucket | Tool::Wand | Tool::Text => {}
         }
     }
+}
+
+/// Topmost visible text layer whose rendered glyphs sit under (x, y),
+/// searched through groups; the bounds get a small grab margin.
+fn text_layer_at(layers: &[Layer], x: f32, y: f32) -> Option<LayerId> {
+    for l in layers.iter().rev() {
+        if !l.visible {
+            continue;
+        }
+        if let Some(children) = l.children() {
+            if let Some(id) = text_layer_at(children, x, y) {
+                return Some(id);
+            }
+            continue;
+        }
+        if l.text_layer().is_none() {
+            continue;
+        }
+        if let Some(b) = l.raster_store().and_then(|s| s.content_bounds()) {
+            let pad = 4;
+            let grab = Rect::new(b.x - pad, b.y - pad, b.w + 2 * pad as u32, b.h + 2 * pad as u32);
+            if grab.contains(x.floor() as i32, y.floor() as i32) {
+                return Some(l.id);
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn nearest_when_zoomed() -> egui::TextureOptions {
