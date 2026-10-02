@@ -53,7 +53,8 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
 - `Command::affected()` should return the changed canvas area when cheap to compute;
   the app uses it to redraw only that region.
 - Text layers keep a raster cache (`TextLayer::cache`) that is derived state: never
-  saved, rebuilt on load and on every edit.
+  saved, rebuilt on load and on every edit. A PSD import seeds it with Photoshop's
+  own pixels (exact even with missing fonts) until the first edit re-renders it.
 - PSD writer changes must be validated with the independent reader:
   `pip install psd-tools` and open the written file (see ADR 0003).
 - Every behaviour change gets a numeric test with explicit expected values.

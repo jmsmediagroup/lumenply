@@ -1980,6 +1980,16 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                             rl.name
                         ));
                     } else {
+                        // Photoshop's own rendering stands in until the
+                        // text is edited (as Photoshop shows it): exact
+                        // even when a font is missing here. Our engine
+                        // renders it on the first edit.
+                        let mut t = t;
+                        let b = rl.bounds;
+                        if b.w > 0 && b.h > 0 && rl.channels.iter().any(|(id, _)| *id >= 0) {
+                            let raster = cm.layer_raster(&rl.channels, &rl.float_channels, b.w, b.h);
+                            t.cache = Some(TileStore::from_raster(&raster, b.x, b.y));
+                        }
                         let id = doc.alloc_id();
                         let mut l = Layer::text(id, t);
                         l.name = rl.name.clone();
@@ -2277,6 +2287,34 @@ mod tests {
             doc.warnings
         );
         assert!(doc.value.layers()[0].pixels().is_some());
+    }
+
+    #[test]
+    fn imported_text_shows_photoshops_pixels_until_edited() {
+        // A black "I" whose stored pixels (Photoshop's rendering) are the
+        // record's 2×2 opaque red: the cache shows those, not our render.
+        let t = lumenply_doc::TextLayer::new("I", 0.0, 2.0, 3.0, [0.0, 0.0, 0.0, 1.0]);
+        let (rec, chans) = record_with_blocks(&[(b"TySh", text::tysh_block(&t, 0))]);
+        let doc = load_bytes("text-pixels.psd", &craft_psd(3, 4, 4, &rec, &chans)).unwrap();
+        let l = &doc.value.layers()[0];
+        let LayerContent::Text(back) = &l.content else {
+            panic!("an editable text layer: {:?}", doc.warnings);
+        };
+        assert_eq!(back.text, "I");
+        let shown = back.cache.as_ref().expect("a cache");
+        for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let p = shown.get_pixel(x, y);
+            assert!(p.r > 0.99 && p.g < 0.01 && p.a == 1.0, "({x}, {y}): {p:?}");
+        }
+        // An edit renders it with our engine: black, not red.
+        let mut edited = back.clone();
+        lumenply_render::text::refresh_cache(&mut edited);
+        let ours = edited.cache.unwrap();
+        let reds = (0..4)
+            .flat_map(|y| (0..4).map(move |x| (x, y)))
+            .filter(|&(x, y)| ours.get_pixel(x, y).r > 0.5)
+            .count();
+        assert_eq!(reds, 0);
     }
 
     #[test]
