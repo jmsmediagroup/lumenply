@@ -15,6 +15,8 @@ pub(crate) struct LayerRow {
     visible: bool,
     opacity: f32,
     kind: Kind,
+    /// Kind label shown at the right edge: "Text", "Curves", "Live blur"...
+    chip: Option<&'static str>,
     masked: bool,
     mask_enabled: bool,
     depth: usize,
@@ -25,12 +27,18 @@ impl App {
     pub(crate) fn layer_rows(&self) -> Vec<LayerRow> {
         fn walk(layers: &[Layer], depth: usize, out: &mut Vec<LayerRow>) {
             for l in layers.iter().rev() {
-                let kind = match l.content {
-                    LayerContent::Pixel(_) => Kind::Pixel,
-                    LayerContent::Group(_) => Kind::Group,
-                    LayerContent::Adjustment(_) => Kind::Adjustment,
-                    LayerContent::Filter(_) => Kind::Filter,
-                    LayerContent::Text(_) => Kind::Text,
+                let (kind, chip) = match &l.content {
+                    LayerContent::Pixel(_) => (Kind::Pixel, None),
+                    LayerContent::Group(_) => (Kind::Group, None),
+                    LayerContent::Adjustment(a) => (Kind::Adjustment, Some(a.name())),
+                    LayerContent::Filter(f) => (
+                        Kind::Filter,
+                        Some(match f {
+                            Filter::GaussianBlur { .. } | Filter::BoxBlur { .. } => "Live blur",
+                            Filter::Sharpen { .. } => "Live sharpen",
+                        }),
+                    ),
+                    LayerContent::Text(_) => (Kind::Text, Some("Text")),
                 };
                 out.push(LayerRow {
                     id: l.id,
@@ -38,6 +46,7 @@ impl App {
                     visible: l.visible,
                     opacity: l.opacity,
                     kind,
+                    chip,
                     masked: l.mask.is_some(),
                     mask_enabled: l.mask.as_ref().is_some_and(|m| m.enabled),
                     depth,
@@ -79,11 +88,13 @@ impl App {
                     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 38.0), Sense::click());
                     let p = ui.painter();
                     if is_active {
-                        p.rect_filled(rect, 4.0, ACCENT);
+                        p.rect_filled(rect, 6.0, RAISED);
+                        p.rect_stroke(rect.shrink(1.0), 6.0, Stroke::new(1.5, ACCENT));
                     } else if selected {
-                        p.rect_filled(rect, 4.0, Color32::from_rgb(45, 70, 115));
+                        p.rect_filled(rect, 6.0, RAISED);
+                        p.rect_stroke(rect.shrink(1.0), 6.0, Stroke::new(1.0, MUTED));
                     } else if resp.hovered() {
-                        p.rect_filled(rect, 4.0, RAISED);
+                        p.rect_filled(rect, 6.0, RAISED);
                     }
                     let mut x = rect.min.x + 6.0 + row.depth as f32 * 16.0;
                     let cy = rect.center().y;
@@ -167,7 +178,7 @@ impl App {
                         }
                         let editing = is_active && self.editing_mask;
                         let col = if editing {
-                            Color32::from_rgb(230, 200, 90)
+                            ACCENT
                         } else if row.mask_enabled {
                             LINE
                         } else {
@@ -210,34 +221,29 @@ impl App {
                             continue;
                         }
                     }
-                    let text_col = if is_active { Color32::WHITE } else { TEXT };
                     p.text(
                         egui::pos2(x, cy),
                         Align2::LEFT_CENTER,
                         &row.name,
                         FontId::proportional(14.0),
-                        text_col,
+                        TEXT,
                     );
-                    let mut extra = String::new();
-                    if row.kind == Kind::Adjustment {
-                        extra.push_str("adj  ");
-                    }
-                    if row.kind == Kind::Filter {
-                        extra.push_str("live filter  ");
-                    }
-                    if row.kind == Kind::Text {
-                        extra.push_str("text  ");
+                    let mut right = rect.max.x - 8.0;
+                    if let Some(label) = row.chip {
+                        let ink = if row.kind == Kind::Filter {
+                            LIVE_FILTER
+                        } else {
+                            MUTED
+                        };
+                        right -= kind_chip(p, egui::pos2(right, cy), label, ink) + 6.0;
                     }
                     if row.opacity < 0.999 {
-                        extra.push_str(&format!("{:.0}%", row.opacity * 100.0));
-                    }
-                    if !extra.is_empty() {
                         p.text(
-                            rect.right_center() - egui::vec2(8.0, 0.0),
+                            egui::pos2(right, cy),
                             Align2::RIGHT_CENTER,
-                            extra.trim_end(),
-                            FontId::proportional(11.5),
-                            if is_active { TEXT } else { MUTED },
+                            format!("{:.0}%", row.opacity * 100.0),
+                            FontId::monospace(10.5),
+                            MUTED,
                         );
                     }
                     if resp.double_clicked() {
@@ -301,73 +307,84 @@ impl App {
         let mut action: Option<&str> = None;
         let mut add_adj = None;
         let mut add_filter = None;
+        let has_mask = self.active_has_mask();
+        let mask_enabled = self
+            .active_layer()
+            .and_then(|l| l.mask.as_ref())
+            .is_some_and(|m| m.enabled);
+        ui.add_space(2.0);
         ui.horizontal(|ui| {
-            if ui.button("+ Layer").clicked() {
+            if ui.add(IconButton::new(icon_plus, "New layer")).clicked() {
                 action = Some("add");
             }
-            ui.menu_button("+ Adjustment", |ui| {
-                for (name, adj) in adjustment_presets() {
-                    if ui.button(name).clicked() {
-                        add_adj = Some(adj);
-                        ui.close_menu();
-                    }
-                }
-            });
-            ui.menu_button("+ Filter", |ui| {
-                for (name, f) in filter_presets() {
-                    if ui.button(name).clicked() {
-                        add_filter = Some(f);
-                        ui.close_menu();
-                    }
-                }
-            });
             if ui
-                .button("Group")
-                .on_hover_text("Group selected layers (Ctrl+click to multi-select)")
+                .add(IconButton::new(
+                    icon_folder,
+                    "Group selected layers (Ctrl+click to multi-select)",
+                ))
                 .clicked()
             {
                 action = Some("group");
             }
+            icon_menu(ui, "add-adj", icon_adjustment, "New adjustment layer", |ui| {
+                for (name, adj) in adjustment_presets() {
+                    if ui.button(name).clicked() {
+                        add_adj = Some(adj);
+                    }
+                }
+            });
+            icon_menu(ui, "add-filter", icon_filter, "New live filter layer", |ui| {
+                for (name, f) in filter_presets() {
+                    if ui.button(name).clicked() {
+                        add_filter = Some(f);
+                    }
+                }
+            });
             if ui
-                .add_enabled(self.active_is_group(), egui::Button::new("Ungroup"))
-                .clicked()
-            {
-                action = Some("ungroup");
-            }
-            if ui.button("Delete").clicked() {
-                action = Some("delete");
-            }
-        });
-        ui.horizontal(|ui| {
-            if ui.button("Up").clicked() {
-                action = Some("up");
-            }
-            if ui.button("Down").clicked() {
-                action = Some("down");
-            }
-            let has_mask = self.active_has_mask();
-            if ui
-                .add_enabled(self.active.is_some() && !has_mask, egui::Button::new("Add mask"))
+                .add_enabled(
+                    self.active.is_some() && !has_mask,
+                    IconButton::new(icon_mask, "Add mask (from the selection if there is one)"),
+                )
                 .clicked()
             {
                 action = Some("addmask");
             }
-            if ui
-                .add_enabled(has_mask, egui::Button::new("Remove mask"))
-                .clicked()
-            {
-                action = Some("rmmask");
+            if ui.add(IconButton::new(icon_up, "Move layer up")).clicked() {
+                action = Some("up");
             }
-            if has_mask {
-                let enabled = self
-                    .active_layer()
-                    .and_then(|l| l.mask.as_ref())
-                    .is_some_and(|m| m.enabled);
-                let mut e = enabled;
-                if ui.checkbox(&mut e, "On").changed() {
-                    action = Some(if e { "maskon" } else { "maskoff" });
+            if ui.add(IconButton::new(icon_down, "Move layer down")).clicked() {
+                action = Some("down");
+            }
+            let is_group = self.active_is_group();
+            icon_menu(ui, "layer-more", icon_more, "More", |ui| {
+                if ui.add_enabled(is_group, egui::Button::new("Ungroup")).clicked() {
+                    action = Some("ungroup");
                 }
-            }
+                if ui
+                    .add_enabled(has_mask, egui::Button::new("Remove mask"))
+                    .clicked()
+                {
+                    action = Some("rmmask");
+                }
+                if has_mask {
+                    let label = if mask_enabled {
+                        "Disable mask"
+                    } else {
+                        "Enable mask"
+                    };
+                    if ui.button(label).clicked() {
+                        action = Some(if mask_enabled { "maskoff" } else { "maskon" });
+                    }
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(self.active.is_some(), IconButton::new(icon_trash, "Delete layer"))
+                    .clicked()
+                {
+                    action = Some("delete");
+                }
+            });
         });
         match action {
             Some("add") => self.add_pixel_layer(),
@@ -423,4 +440,163 @@ pub(crate) fn badge(p: &egui::Painter, rect: egui::Rect, kind: Kind) {
         FontId::proportional(13.0),
         ink,
     );
+}
+
+/// Paint a small kind chip whose right edge sits at `right`; returns its width.
+fn kind_chip(p: &egui::Painter, right: egui::Pos2, label: &str, ink: Color32) -> f32 {
+    let galley = p.layout_no_wrap(label.into(), FontId::proportional(10.5), ink);
+    let size = galley.size() + egui::vec2(12.0, 6.0);
+    let rect = egui::Rect::from_min_size(right - egui::vec2(size.x, size.y / 2.0), size);
+    p.rect_filled(rect, 4.0, GROUND);
+    p.galley(rect.min + egui::vec2(6.0, 3.0), galley, ink);
+    size.x
+}
+
+/// An [`IconButton`] that opens a popup of actions below itself.
+fn icon_menu(
+    ui: &mut egui::Ui,
+    id: &str,
+    draw: fn(&egui::Painter, egui::Rect, Color32),
+    tip: &'static str,
+    content: impl FnOnce(&mut egui::Ui),
+) {
+    let resp = ui.add(IconButton::new(draw, tip));
+    let popup = ui.make_persistent_id(id);
+    if resp.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(popup));
+    }
+    egui::popup::popup_below_widget(ui, popup, &resp, egui::PopupCloseBehavior::CloseOnClick, content);
+}
+
+/// A square button drawn with one of the original line icons below.
+pub(crate) struct IconButton {
+    draw: fn(&egui::Painter, egui::Rect, Color32),
+    tip: &'static str,
+}
+
+impl IconButton {
+    pub(crate) fn new(draw: fn(&egui::Painter, egui::Rect, Color32), tip: &'static str) -> Self {
+        IconButton { draw, tip }
+    }
+}
+
+impl egui::Widget for IconButton {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let (rect, resp) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
+        let enabled = ui.is_enabled();
+        if resp.hovered() && enabled {
+            ui.painter().rect_filled(rect, 5.0, RAISED);
+        }
+        let ink = if enabled { TEXT } else { LINE };
+        (self.draw)(ui.painter(), rect.shrink(5.0), ink);
+        resp.on_hover_text(self.tip)
+    }
+}
+
+// Original icons on a nominal 20 px grid, 1.6 px stroke. `r` is the box.
+fn icon_plus(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    let s = Stroke::new(1.6, c);
+    p.line_segment([r.center_top(), r.center_bottom()], s);
+    p.line_segment([r.left_center(), r.right_center()], s);
+}
+
+fn icon_folder(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    let s = Stroke::new(1.6, c);
+    let top = r.min.y + r.height() * 0.25;
+    let pts = vec![
+        egui::pos2(r.min.x, r.max.y),
+        egui::pos2(r.min.x, top),
+        egui::pos2(r.min.x + r.width() * 0.4, top),
+        egui::pos2(r.min.x + r.width() * 0.55, r.min.y + r.height() * 0.42),
+        egui::pos2(r.max.x, r.min.y + r.height() * 0.42),
+        egui::pos2(r.max.x, r.max.y),
+        egui::pos2(r.min.x, r.max.y),
+    ];
+    p.add(Shape::line(pts, s));
+}
+
+fn icon_adjustment(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    let radius = r.width() * 0.46;
+    p.circle_stroke(r.center(), radius, Stroke::new(1.6, c));
+    // Filled right half: a contrast dial.
+    let n = 9;
+    let pts: Vec<egui::Pos2> = (0..=n)
+        .map(|i| {
+            let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * i as f32 / n as f32;
+            r.center() + egui::vec2(a.cos(), a.sin()) * radius
+        })
+        .collect();
+    p.add(Shape::convex_polygon(pts, c, Stroke::NONE));
+}
+
+fn icon_filter(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    let s = Stroke::new(1.6, c);
+    let w = r.width();
+    let y = |f: f32| r.min.y + r.height() * f;
+    p.line_segment([egui::pos2(r.min.x, y(0.25)), egui::pos2(r.max.x, y(0.25))], s);
+    p.line_segment(
+        [
+            egui::pos2(r.min.x + w * 0.15, y(0.55)),
+            egui::pos2(r.max.x - w * 0.15, y(0.55)),
+        ],
+        s,
+    );
+    p.line_segment(
+        [
+            egui::pos2(r.min.x + w * 0.3, y(0.85)),
+            egui::pos2(r.max.x - w * 0.3, y(0.85)),
+        ],
+        s,
+    );
+}
+
+fn icon_mask(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    p.rect_stroke(r, 2.0, Stroke::new(1.6, c));
+    p.circle_filled(r.center(), r.width() * 0.26, c);
+}
+
+fn icon_up(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    let s = Stroke::new(1.6, c);
+    let m = r.center_top() + egui::vec2(0.0, r.height() * 0.2);
+    p.line_segment([m, egui::pos2(r.min.x + r.width() * 0.2, r.center().y)], s);
+    p.line_segment([m, egui::pos2(r.max.x - r.width() * 0.2, r.center().y)], s);
+    p.line_segment(
+        [
+            r.center_top() + egui::vec2(0.0, r.height() * 0.2),
+            r.center_bottom(),
+        ],
+        s,
+    );
+}
+
+fn icon_down(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    let s = Stroke::new(1.6, c);
+    let m = r.center_bottom() - egui::vec2(0.0, r.height() * 0.2);
+    p.line_segment([m, egui::pos2(r.min.x + r.width() * 0.2, r.center().y)], s);
+    p.line_segment([m, egui::pos2(r.max.x - r.width() * 0.2, r.center().y)], s);
+    p.line_segment([r.center_top(), m], s);
+}
+
+fn icon_more(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    for i in -1..=1 {
+        p.circle_filled(r.center() + egui::vec2(i as f32 * r.width() * 0.33, 0.0), 1.4, c);
+    }
+}
+
+fn icon_trash(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    let s = Stroke::new(1.6, c);
+    let top = r.min.y + r.height() * 0.2;
+    p.line_segment([egui::pos2(r.min.x, top), egui::pos2(r.max.x, top)], s);
+    p.line_segment(
+        [
+            egui::pos2(r.center().x - 3.0, r.min.y),
+            egui::pos2(r.center().x + 3.0, r.min.y),
+        ],
+        s,
+    );
+    let body = egui::Rect::from_min_max(
+        egui::pos2(r.min.x + r.width() * 0.12, top + 2.0),
+        egui::pos2(r.max.x - r.width() * 0.12, r.max.y),
+    );
+    p.rect_stroke(body, 1.5, s);
 }

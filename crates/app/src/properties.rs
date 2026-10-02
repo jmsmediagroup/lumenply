@@ -2,8 +2,8 @@ use super::*;
 
 impl App {
     pub(crate) fn properties_ui(&mut self, ui: &mut egui::Ui) {
-        section_title(ui, "PROPERTIES");
         let Some(id) = self.active else {
+            section_title(ui, "PROPERTIES");
             ui.label(RichText::new("No layer selected").weak());
             return;
         };
@@ -11,6 +11,21 @@ impl App {
             return;
         };
         let name = layer.name.clone();
+        // Header: PROPERTIES on the left, a breadcrumb to the edit target
+        // ("Hiker › Mask") on the right.
+        let on_mask = self.editing_mask && layer.mask.is_some();
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("PROPERTIES").small().strong().color(MUTED));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if on_mask {
+                    ui.label(RichText::new("Mask").color(ACCENT));
+                    ui.label(RichText::new("›").color(MUTED));
+                }
+                ui.label(RichText::new(&name).color(TEXT));
+            });
+        });
         let blend = layer.blend;
         let adj = match &layer.content {
             LayerContent::Adjustment(a) => Some(a.clone()),
