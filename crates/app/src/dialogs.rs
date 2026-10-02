@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use super::*;
 
 pub(crate) enum Dialog {
@@ -18,24 +20,78 @@ pub(crate) enum Dialog {
     About,
 }
 
+/// Extensions the open dialogs offer, by kind. The first of each list is
+/// the one a save dialog appends when the typed name lacks it.
+pub(crate) const PROJECT_EXT: &[&str] = &["lumen", "nge"];
+pub(crate) const PSD_EXT: &[&str] = &["psd", "psb"];
+pub(crate) const ORA_EXT: &[&str] = &["ora"];
+pub(crate) const IMAGE_EXT: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "webp", "exr"];
+
+/// Where a file dialog starts: the live document's folder, else the folder
+/// of the most recently used file that still exists (None = the OS default).
+pub(crate) fn dialog_start_dir(doc_path: Option<&Path>, recent: &[String]) -> Option<PathBuf> {
+    let usable = |d: &Path| !d.as_os_str().is_empty() && d.is_dir();
+    if let Some(dir) = doc_path.and_then(Path::parent).filter(|d| usable(d)) {
+        return Some(dir.to_path_buf());
+    }
+    recent
+        .iter()
+        .filter_map(|r| Path::new(r).parent())
+        .find(|d| usable(d))
+        .map(Path::to_path_buf)
+}
+
+/// The suggested file name (without extension) for a save or export: the
+/// document's own name, else its tab label (an imported "photo.jpg" offers
+/// "photo"), else "Untitled".
+pub(crate) fn default_stem(doc_path: Option<&Path>, label: &str) -> String {
+    let from = |p: &Path| {
+        p.file_stem()
+            .map(|s| s.to_string_lossy().trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    doc_path
+        .and_then(from)
+        .or_else(|| from(Path::new(label)))
+        .unwrap_or_else(|| "Untitled".into())
+}
+
+/// Make sure a chosen save path carries one of `allowed` (case-insensitive);
+/// otherwise append the first. "shot.v2" becomes "shot.v2.png", never
+/// "shot.png", so a dotted name is not silently truncated.
+pub(crate) fn enforce_extension(p: PathBuf, allowed: &[&str]) -> PathBuf {
+    let ok = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| allowed.iter().any(|a| a.eq_ignore_ascii_case(e)));
+    if ok || allowed.is_empty() {
+        return p;
+    }
+    let mut s = p.into_os_string();
+    s.push(".");
+    s.push(allowed[0]);
+    PathBuf::from(s)
+}
+
 impl App {
     fn file_dialog(&self) -> rfd::FileDialog {
         let mut d = rfd::FileDialog::new();
-        if let Some(dir) = self.path.as_ref().and_then(|p| p.parent()) {
+        if let Some(dir) = dialog_start_dir(self.path.as_deref(), &self.recent) {
             d = d.set_directory(dir);
         }
         d
     }
 
     pub(crate) fn pick_open(&mut self) {
+        let all: Vec<&str> = [PROJECT_EXT, PSD_EXT, ORA_EXT, IMAGE_EXT].concat();
         if let Some(p) = self
             .file_dialog()
-            .add_filter(
-                "Projects & images",
-                &[
-                    "lumen", "nge", "psd", "psb", "ora", "png", "jpg", "jpeg", "tif", "tiff", "webp", "exr",
-                ],
-            )
+            .set_title("Open")
+            .add_filter("All supported files", &all)
+            .add_filter("Lumenply projects", PROJECT_EXT)
+            .add_filter("Photoshop documents", PSD_EXT)
+            .add_filter("OpenRaster", ORA_EXT)
+            .add_filter("Images", IMAGE_EXT)
             .pick_file()
         {
             self.open_path(&p.to_string_lossy());
@@ -45,7 +101,8 @@ impl App {
     pub(crate) fn pick_open_image(&mut self) {
         if let Some(p) = self
             .file_dialog()
-            .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "webp", "exr"])
+            .set_title("Open image")
+            .add_filter("Images", IMAGE_EXT)
             .pick_file()
         {
             self.open_image(&p.to_string_lossy());
@@ -55,54 +112,57 @@ impl App {
     pub(crate) fn pick_place(&mut self) {
         if let Some(p) = self
             .file_dialog()
-            .add_filter("Images", &["png", "jpg", "jpeg"])
+            .set_title(if self.no_doc {
+                "Open image"
+            } else {
+                "Place image as layer"
+            })
+            .add_filter("Images", IMAGE_EXT)
             .pick_file()
         {
             self.place_image(&p.to_string_lossy());
         }
     }
 
-    /// Native save panel; returns the chosen path with `ext` enforced.
-    fn pick_save_path(&self, what: &str, ext: &str) -> Option<String> {
-        let name = self
-            .path
-            .as_ref()
-            .and_then(|p| p.file_stem())
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "untitled".into());
+    /// Native save panel for one format; returns the chosen path with its
+    /// extension enforced. `exts[0]` is the default.
+    fn pick_save_path(&self, title: &str, what: &str, exts: &[&str]) -> Option<String> {
+        if self.no_doc {
+            return None; // nothing to save
+        }
+        let stem = default_stem(self.path.as_deref(), &self.untitled);
         self.file_dialog()
-            .add_filter(what, &[ext])
-            .set_file_name(format!("{name}.{ext}"))
+            .set_title(title)
+            .add_filter(what, exts)
+            .set_file_name(format!("{stem}.{}", exts[0]))
             .save_file()
-            .map(|p| {
-                if p.extension().is_some() {
-                    p.to_string_lossy().into_owned()
-                } else {
-                    p.with_extension(ext).to_string_lossy().into_owned()
-                }
-            })
+            .map(|p| enforce_extension(p, exts).to_string_lossy().into_owned())
     }
 
     pub(crate) fn pick_save(&mut self) {
-        if let Some(p) = self.pick_save_path("Lumenply project", "lumen") {
+        if let Some(p) = self.pick_save_path("Save project", "Lumenply project", PROJECT_EXT) {
             self.save_path(&p);
         }
     }
 
     pub(crate) fn pick_export_png(&mut self) {
-        if let Some(p) = self.pick_save_path("PNG image", "png") {
+        if let Some(p) = self.pick_save_path("Export PNG", "PNG image", &["png"]) {
             self.export_png(&p);
         }
     }
 
     pub(crate) fn pick_export_psd(&mut self) {
-        if let Some(p) = self.pick_save_path("Photoshop PSD", "psd") {
+        if let Some(p) = self.pick_save_path("Export Photoshop PSD", "Photoshop document", &["psd"]) {
             self.export_psd(&p);
         }
     }
 
     pub(crate) fn pick_export_psd16(&mut self) {
-        if let Some(p) = self.pick_save_path("Photoshop PSD (16-bit)", "psd") {
+        if let Some(p) = self.pick_save_path(
+            "Export Photoshop PSD (16-bit)",
+            "Photoshop document (16-bit)",
+            &["psd"],
+        ) {
             match lumenply_io::psd::save_16(&p, self.editor.doc()) {
                 Ok(rep) => {
                     self.status = if rep.warnings.is_empty() {
@@ -120,7 +180,7 @@ impl App {
     }
 
     pub(crate) fn pick_export_exr(&mut self) {
-        if let Some(p) = self.pick_save_path("OpenEXR (linear float)", "exr") {
+        if let Some(p) = self.pick_save_path("Export OpenEXR", "OpenEXR (linear float)", &["exr"]) {
             let flat = lumenply_render::composite_raster(self.editor.doc());
             match lumenply_io::save_exr(&p, &flat) {
                 Ok(()) => self.status = format!("Exported {p}"),
@@ -130,25 +190,20 @@ impl App {
     }
 
     pub(crate) fn pick_export_16bit(&mut self) {
+        if self.no_doc {
+            return;
+        }
+        let stem = default_stem(self.path.as_deref(), &self.untitled);
         let picked = self
             .file_dialog()
+            .set_title("Export 16-bit PNG or TIFF")
             .add_filter("16-bit PNG", &["png"])
             .add_filter("16-bit TIFF", &["tif", "tiff"])
-            .set_file_name(format!(
-                "{}.png",
-                self.path
-                    .as_ref()
-                    .and_then(|p| p.file_stem())
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "untitled".into())
-            ))
+            .set_file_name(format!("{stem}.png"))
             .save_file();
         if let Some(p) = picked {
-            let p = if p.extension().is_some() {
-                p
-            } else {
-                p.with_extension("png")
-            };
+            // Either container is fine; anything else gets ".png".
+            let p = enforce_extension(p, &["png", "tif", "tiff"]);
             let flat = lumenply_render::composite_raster(self.editor.doc());
             match lumenply_io::save_16bit(&p, &flat) {
                 Ok(()) => self.status = format!("Exported {}", p.display()),
@@ -158,7 +213,7 @@ impl App {
     }
 
     pub(crate) fn pick_export_ora(&mut self) {
-        if let Some(p) = self.pick_save_path("OpenRaster", "ora") {
+        if let Some(p) = self.pick_save_path("Export OpenRaster", "OpenRaster", ORA_EXT) {
             self.export_ora(&p);
         }
     }
@@ -177,7 +232,7 @@ impl App {
     }
 
     pub(crate) fn pick_export_jpeg(&mut self) {
-        if let Some(p) = self.pick_save_path("JPEG image", "jpg") {
+        if let Some(p) = self.pick_save_path("Export JPEG", "JPEG image", &["jpg", "jpeg"]) {
             self.dialog = Some(Dialog::ExportJpeg(p, 90));
         }
     }
@@ -197,6 +252,9 @@ impl App {
                 Ok(rep) => {
                     let n = rep.warnings.len();
                     self.open_in_new_tab(Editor::new(rep.value), None);
+                    // Imports keep their file name on the tab until saved
+                    // as a project.
+                    self.untitled = file_name(path);
                     self.recent = session::push_recent(path);
                     self.status = if n == 0 {
                         format!("Imported {path}")
@@ -213,6 +271,7 @@ impl App {
                 Ok(rep) => {
                     let n = rep.warnings.len();
                     self.open_in_new_tab(Editor::new(rep.value), None);
+                    self.untitled = file_name(path);
                     self.recent = session::push_recent(path);
                     self.status = if n == 0 {
                         format!("Imported {path}")
@@ -261,8 +320,11 @@ impl App {
                 // survive the import (and every edit after it).
                 doc.float_mode = path.to_ascii_lowercase().ends_with(".exr");
                 let mut ed = Editor::new(doc);
-                let _ = ed.execute(&AddPixelLayer::from_raster(file_name(path), raster, 0, 0));
-                self.open_in_new_tab(ed, None);
+                let _ = ed.execute(&AddPixelLayer::from_raster("Background", raster, 0, 0));
+                // A fresh editor: the opened image is the starting point,
+                // not an undoable "Add layer" step.
+                self.open_in_new_tab(Editor::new(ed.doc().clone()), None);
+                self.untitled = file_name(path);
                 self.recent = session::push_recent(path);
                 self.status = format!("Opened {path} ({w}×{h})");
             }
@@ -271,6 +333,11 @@ impl App {
     }
 
     pub(crate) fn place_image(&mut self, path: &str) {
+        if self.no_doc {
+            // Nothing to place into: open the image as its own document.
+            self.open_image(path);
+            return;
+        }
         match lumenply_io::load(path) {
             Ok(raster) => {
                 let doc = self.editor.doc();
@@ -502,18 +569,7 @@ impl App {
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             if ui.button("Recover").clicked() {
-                                if let Some(file) = session::autosave_file() {
-                                    let source = session::autosave_source();
-                                    match project::load(&file) {
-                                        Ok(doc) => {
-                                            self.set_doc(Editor::new(doc), source);
-                                            // Recovered work is unsaved by definition.
-                                            self.saved_rev = usize::MAX;
-                                            self.status = "Recovered the autosaved document".into();
-                                        }
-                                        Err(e) => self.status = format!("Could not recover: {e}"),
-                                    }
-                                }
+                                self.recover_autosave();
                                 keep = false;
                             }
                             if ui.button("Discard backup").clicked() {
@@ -775,5 +831,65 @@ impl App {
             }
             self.filter_previewed = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_paths_get_the_right_extension() {
+        let e = |p: &str, allowed: &[&str]| enforce_extension(PathBuf::from(p), allowed);
+        assert_eq!(e("/x/photo", &["png"]), PathBuf::from("/x/photo.png"));
+        assert_eq!(e("/x/photo.png", &["png"]), PathBuf::from("/x/photo.png"));
+        assert_eq!(e("/x/photo.PNG", &["png"]), PathBuf::from("/x/photo.PNG"));
+        // A dotted name keeps its dots instead of losing "v2".
+        assert_eq!(e("/x/shot.v2", &["png"]), PathBuf::from("/x/shot.v2.png"));
+        // Either accepted spelling stays; the first is the default.
+        assert_eq!(e("/x/a.jpeg", &["jpg", "jpeg"]), PathBuf::from("/x/a.jpeg"));
+        assert_eq!(e("/x/a", &["jpg", "jpeg"]), PathBuf::from("/x/a.jpg"));
+        assert_eq!(e("/x/a.tif", &["png", "tif", "tiff"]), PathBuf::from("/x/a.tif"));
+        assert_eq!(e("/x/old.nge", PROJECT_EXT), PathBuf::from("/x/old.nge"));
+        assert_eq!(e("/x/new", PROJECT_EXT), PathBuf::from("/x/new.lumen"));
+    }
+
+    #[test]
+    fn suggested_names_follow_the_document() {
+        let p = PathBuf::from("/a/b/summit.lumen");
+        assert_eq!(default_stem(Some(&p), "ignored"), "summit");
+        // Imports carry their file name on the tab.
+        assert_eq!(default_stem(None, "photo.jpg"), "photo");
+        assert_eq!(default_stem(None, "Untitled-3"), "Untitled-3");
+        assert_eq!(default_stem(None, "Aoraki demo"), "Aoraki demo");
+        assert_eq!(default_stem(None, ""), "Untitled");
+    }
+
+    #[test]
+    fn dialogs_start_in_a_folder_that_exists() {
+        let base = std::env::temp_dir().join("lumenply-dialog-dir-test");
+        let (a, b) = (base.join("a"), base.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let doc = a.join("doc.lumen");
+        let gone = base.join("deleted").join("x.png").to_string_lossy().into_owned();
+        let recent = vec![gone, b.join("pic.png").to_string_lossy().into_owned()];
+        assert_eq!(dialog_start_dir(Some(&doc), &recent), Some(a.clone()));
+        // No document path: the newest recent file whose folder still exists.
+        assert_eq!(dialog_start_dir(None, &recent), Some(b.clone()));
+        assert_eq!(dialog_start_dir(None, &[]), None);
+        // A bare file name has no usable folder.
+        assert_eq!(dialog_start_dir(Some(Path::new("loose.lumen")), &[]), None);
+    }
+
+    #[test]
+    fn every_dialog_image_type_is_treated_as_an_image() {
+        for ext in IMAGE_EXT {
+            assert!(is_image_path(&format!("x.{ext}")), "{ext}");
+        }
+        for ext in PSD_EXT {
+            assert!(is_psd_path(&format!("x.{ext}")), "{ext}");
+        }
+        assert!(is_ora_path("x.ora"));
     }
 }
