@@ -26,6 +26,16 @@ pub(crate) enum Dialog {
     Fill(bool, f32, u8),
     /// View ▸ New guide: (vertical, position in pixels).
     NewGuide(bool, f32),
+    /// Help ▸ Keyboard shortcuts.
+    Shortcuts,
+    /// Image ▸ Trim: cut transparent borders (else top-left-colour ones).
+    Trim(bool),
+    /// Image ▸ Rotate by angle: degrees, clockwise when true.
+    RotateBy(f32, bool),
+    /// Select ▸ Save Selection: the name to keep it under.
+    SaveSelection(String),
+    /// Select ▸ Load Selection: (saved selection, how it combines, invert).
+    LoadSelection(usize, CombineOp, bool),
 }
 
 /// Extensions the open dialogs offer, by kind. The first of each list is
@@ -82,7 +92,7 @@ pub(crate) fn enforce_extension(p: PathBuf, allowed: &[&str]) -> PathBuf {
 }
 
 impl App {
-    fn file_dialog(&self) -> rfd::FileDialog {
+    pub(crate) fn file_dialog(&self) -> rfd::FileDialog {
         let mut d = rfd::FileDialog::new();
         if let Some(dir) = dialog_start_dir(self.path.as_deref(), &self.recent) {
             d = d.set_directory(dir);
@@ -132,7 +142,7 @@ impl App {
 
     /// Native save panel for one format; returns the chosen path with its
     /// extension enforced. `exts[0]` is the default.
-    fn pick_save_path(&self, title: &str, what: &str, exts: &[&str]) -> Option<String> {
+    pub(crate) fn pick_save_path(&self, title: &str, what: &str, exts: &[&str]) -> Option<String> {
         if self.no_doc {
             return None; // nothing to save
         }
@@ -424,6 +434,11 @@ impl App {
             Dialog::Preferences(..) => "Preferences",
             Dialog::ColorRange(..) => "Colour range",
             Dialog::NewGuide(..) => "New guide",
+            Dialog::Trim(..) => "Trim",
+            Dialog::RotateBy(..) => "Rotate canvas",
+            Dialog::Shortcuts => "Keyboard shortcuts",
+            Dialog::SaveSelection(..) => "Save selection",
+            Dialog::LoadSelection(..) => "Load selection",
             Dialog::About => "About",
             Dialog::Filter(f) => f.name(),
             Dialog::CanvasSize(..) => "Canvas size",
@@ -439,6 +454,11 @@ impl App {
             Dialog::Preferences(..) => "Save",
             Dialog::ColorRange(..) => "Select",
             Dialog::NewGuide(..) => "Add",
+            Dialog::SaveSelection(..) => "Save",
+            Dialog::LoadSelection(..) => "Load",
+            Dialog::Trim(..) => "Trim",
+            Dialog::RotateBy(..) => "Rotate",
+            Dialog::Shortcuts => "Close",
             Dialog::Filter(_) | Dialog::CanvasSize(..) | Dialog::ImageSize(..) => "Apply",
             Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) | Dialog::Recover | Dialog::About => "",
         };
@@ -583,6 +603,77 @@ impl App {
                                     keep = false;
                                 }
                             });
+                        }
+                        Dialog::Shortcuts => self.shortcuts_reference(ui),
+                        Dialog::Trim(transparent) => {
+                            ui.horizontal(|ui| {
+                                row_label(ui, "Based on", LABEL_W);
+                                segmented(
+                                    ui,
+                                    transparent,
+                                    &[(true, "Transparent pixels"), (false, "Top-left colour")],
+                                );
+                            });
+                            note(ui, "Crops away the borders; nothing is deleted, Reveal all brings them back.");
+                        }
+                        Dialog::RotateBy(degrees, clockwise) => {
+                            let r = field_row(
+                                ui,
+                                "Angle",
+                                egui::DragValue::new(degrees).range(-359.9..=359.9).max_decimals(2).suffix("°"),
+                            );
+                            a11y_name(&r, "Rotation angle");
+                            ui.horizontal(|ui| {
+                                row_label(ui, "Direction", LABEL_W);
+                                segmented(ui, clockwise, &[(true, "Clockwise"), (false, "Counter-clockwise")]);
+                            });
+                            note(ui, "The canvas grows to fit; the new corners are transparent.");
+                        }
+                        Dialog::SaveSelection(name) => {
+                            ui.horizontal(|ui| {
+                                row_label(ui, "Name", LABEL_W);
+                                let r = ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY));
+                                a11y_name(&r, "Selection name");
+                            });
+                            note(ui, "Kept with the document; Select > Load selection brings it back.");
+                        }
+                        Dialog::LoadSelection(index, op, invert) => {
+                            let names: Vec<String> =
+                                self.editor.doc().saved_selections.iter().map(|s| s.name.clone()).collect();
+                            *index = (*index).min(names.len().saturating_sub(1));
+                            let mut delete = false;
+                            ui.horizontal(|ui| {
+                                row_label(ui, "Selection", LABEL_W);
+                                let current = names.get(*index).cloned().unwrap_or_default();
+                                let r = egui::ComboBox::from_id_salt("load-selection")
+                                    .selected_text(current)
+                                    .width(150.0)
+                                    .show_ui(ui, |ui| {
+                                        popup_style(ui);
+                                        for (i, n) in names.iter().enumerate() {
+                                            ui.selectable_value(index, i, n);
+                                        }
+                                    });
+                                a11y_name(&r.response, "Saved selection");
+                                if ui
+                                    .add(egui::Button::new(RichText::new("Delete").small().color(MUTED)).frame(false))
+                                    .on_hover_text("Forget this saved selection")
+                                    .clicked()
+                                {
+                                    delete = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                row_label(ui, "Operation", LABEL_W);
+                                crate::options_bar::select_ops(ui, op);
+                            });
+                            check(ui, invert, "Invert");
+                            if delete && !names.is_empty() {
+                                self.run(&lumenply_core::channels::DeleteSavedSelection { index: *index });
+                                if self.editor.doc().saved_selections.is_empty() {
+                                    keep = false;
+                                }
+                            }
                         }
                         Dialog::NewGuide(vertical, pos) => {
                             ui.horizontal(|ui| {
@@ -735,7 +826,7 @@ impl App {
                             }
                             // The shortcut list scrolls so the footer stays on screen in
                             // short windows (the dialog is anchored to the centre).
-                            let list_h = (ui.ctx().screen_rect().height() - 430.0).clamp(110.0, 560.0);
+                            let list_h = (ui.ctx().screen_rect().height() - 530.0).clamp(110.0, 560.0);
                             let scroll_out = egui::ScrollArea::vertical()
                                 .id_salt("prefs-shortcuts")
                                 .max_height(list_h)
@@ -803,10 +894,7 @@ impl App {
                             note(ui, "The document has unsaved changes.");
                             footer(ui, |ui| {
                                 if ui.add(primary_button("Save and quit")).clicked() || enter {
-                                    match self.path.clone() {
-                                        Some(p) => self.save_path(&p.to_string_lossy()),
-                                        None => self.pick_save(),
-                                    }
+                                    self.save_live();
                                     if self.editor.history().len() == self.saved_rev {
                                         self.allow_close = true;
                                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -833,10 +921,7 @@ impl App {
                             note(ui, "This document has unsaved changes.");
                             footer(ui, |ui| {
                                 if ui.add(primary_button("Save and close")).clicked() || enter {
-                                    match self.path.clone() {
-                                        Some(p) => self.save_path(&p.to_string_lossy()),
-                                        None => self.pick_save(),
-                                    }
+                                    self.save_live();
                                     if self.editor.history().len() == self.saved_rev {
                                         self.force_close_tab(i);
                                     }
@@ -999,11 +1084,13 @@ impl App {
                         }
                     }
                     if !primary.is_empty() {
+                        // A reference page has nothing to cancel.
+                        let info_only = primary == "Close";
                         footer(ui, |ui| {
                             if ui.add(primary_button(primary)).clicked() || enter {
                                 confirmed = true;
                             }
-                            if ui.add(footer_button("Cancel")).clicked() || esc {
+                            if esc || (!info_only && ui.add(footer_button("Cancel")).clicked()) {
                                 keep = false;
                             }
                         });
@@ -1053,6 +1140,31 @@ impl App {
                 Dialog::SelectEdge(..) => {}
                 Dialog::Fill(..) => self.fill_active(),
                 Dialog::ColorRange(..) => {}
+                Dialog::Shortcuts => {}
+                Dialog::Trim(transparent) => {
+                    let basis = if *transparent {
+                        lumenply_core::canvas_ops::TrimBasis::Transparent
+                    } else {
+                        lumenply_core::canvas_ops::TrimBasis::TopLeftColor
+                    };
+                    self.run(&lumenply_core::canvas_ops::Trim { basis });
+                    self.view_cmd = Some(ViewCmd::Fit);
+                }
+                Dialog::RotateBy(degrees, clockwise) => {
+                    let degrees = if *clockwise { *degrees } else { -*degrees };
+                    self.run(&lumenply_core::canvas_ops::RotateCanvas { degrees });
+                    self.view_cmd = Some(ViewCmd::Fit);
+                }
+                Dialog::SaveSelection(name) => {
+                    self.run(&lumenply_core::channels::SaveSelection { name: name.clone() })
+                }
+                Dialog::LoadSelection(index, op, invert) => {
+                    self.run(&lumenply_core::channels::LoadSelection {
+                        index: *index,
+                        op: *op,
+                        invert: *invert,
+                    })
+                }
                 Dialog::NewGuide(vertical, pos) => {
                     let guide = if *vertical {
                         lumenply_doc::Guide::vertical(*pos)
@@ -1209,7 +1321,7 @@ fn titled<R>(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui) ->
 }
 
 /// A muted explanatory line, wrapped to the dialog width.
-fn note(ui: &mut egui::Ui, text: &str) {
+pub(crate) fn note(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(RichText::new(text).color(MUTED)).wrap());
 }
 

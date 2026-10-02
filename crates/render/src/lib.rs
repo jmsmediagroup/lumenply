@@ -19,8 +19,11 @@ pub mod fill;
 pub mod filters;
 mod filters_more;
 pub mod gpu;
+pub mod gradient_draw;
 pub mod inpaint;
 pub mod liquify;
+pub mod resample;
+pub mod shape;
 pub mod text;
 pub mod text_layout;
 pub mod transform;
@@ -271,6 +274,7 @@ pub fn render_tile_over(
                     | LayerContent::Text(_)
                     | LayerContent::Smart(_)
                     | LayerContent::Fill(_)
+                    | LayerContent::Shape(_)
                     | LayerContent::Group(_)
             );
         if chain_end > idx + 1 && baseable {
@@ -366,7 +370,8 @@ pub fn render_tile_over(
             LayerContent::Pixel(_)
             | LayerContent::Text(_)
             | LayerContent::Smart(_)
-            | LayerContent::Fill(_) => {
+            | LayerContent::Fill(_)
+            | LayerContent::Shape(_) => {
                 let Some(store) = layer.raster_store() else {
                     continue;
                 };
@@ -457,7 +462,11 @@ fn coverage_raster(layer: &Layer, area: Rect, canvas: Rect) -> Vec<f32> {
     let mut out = vec![0f32; w * h];
     let mask = layer.mask.as_ref().filter(|m| m.enabled);
     match &layer.content {
-        LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) | LayerContent::Fill(_) => {
+        LayerContent::Pixel(_)
+        | LayerContent::Text(_)
+        | LayerContent::Smart(_)
+        | LayerContent::Fill(_)
+        | LayerContent::Shape(_) => {
             if let Some(store) = layer.raster_store() {
                 for gy in 0..h {
                     for gx in 0..w {
@@ -860,9 +869,11 @@ fn render_stroke_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: R
 /// isolated render of a group — before masks and blending.
 fn source_tile(layer: &Layer, coord: TileCoord, canvas: Rect) -> Option<Tile> {
     match &layer.content {
-        LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) | LayerContent::Fill(_) => {
-            layer.raster_store()?.tile(coord).cloned()
-        }
+        LayerContent::Pixel(_)
+        | LayerContent::Text(_)
+        | LayerContent::Smart(_)
+        | LayerContent::Fill(_)
+        | LayerContent::Shape(_) => layer.raster_store()?.tile(coord).cloned(),
         LayerContent::Group(children) => render_tile(children, coord, canvas),
         _ => None,
     }

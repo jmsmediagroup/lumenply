@@ -92,6 +92,7 @@ impl Command for CropCanvas {
                     sm.transform = sm.transform.then(&t);
                     sm.cache = Some(lumenply_render::transform_store(&sm.source, &sm.transform));
                 }
+                LayerContent::Shape(sh) => sh.transform_by(&t),
                 LayerContent::Text(text) => {
                     // Whole-pixel crops keep the anchor exact.
                     match exact {

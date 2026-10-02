@@ -90,6 +90,7 @@ impl App {
                     LayerContent::Text(_) => (Kind::Text, Some("Text")),
                     LayerContent::Smart(_) => (Kind::Pixel, Some("Smart")),
                     LayerContent::Fill(f) => (Kind::Pixel, Some(f.fill.name())),
+                    LayerContent::Shape(_) => (Kind::Pixel, Some("Shape")),
                 };
                 out.push(LayerRow {
                     id: l.id,

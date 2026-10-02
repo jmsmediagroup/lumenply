@@ -15,9 +15,12 @@ impl App {
             || self.debug_start(ctx, tok)
             || self.debug_liquify(ctx, tok)
             || self.debug_camera_raw(ctx, tok)
+            || self.debug_export_as(ctx, tok)
             || self.debug_select(tok)
             || self.debug_crop_guides(ctx, tok)
             || self.debug_adjust(ctx, tok)
+            || self.debug_shape(ctx, tok)
+            || self.debug_gradient(ctx, tok)
     }
 
     /// Selections and what acts on them (`select:...`):
@@ -88,6 +91,10 @@ impl App {
             "click" => [glide(&t), vec![("press-l", t.clone()), ("release-l", t)]].concat(),
             "rclick" => [glide(&t), vec![("press-r", t.clone()), ("release-r", t)]].concat(),
             "hover" => [glide(&t), vec![("wait", String::new())]].concat(),
+            // A drag in parts: press=T, move=T (repeat), release=T.
+            "press" => [glide(&t), vec![("press-l", t)]].concat(),
+            "move" => vec![("move", t)],
+            "release" => vec![("release-l", t)],
             "wait" => vec![("wait", String::new())],
             "esc" => vec![("key", "Escape".into())],
             "key" => vec![("key", t)],

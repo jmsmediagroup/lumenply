@@ -86,6 +86,18 @@ pub(crate) fn paint_gradient(p: &egui::Painter, rect: egui::Rect, g: &Gradient, 
 /// to remove it, click a stop to edit its colour. Below: the selected
 /// stop's colour, location (and opacity when `alpha`), and presets.
 pub(crate) fn gradient_editor(ui: &mut egui::Ui, salt: u64, g: &mut Gradient, alpha: bool) -> Edit {
+    gradient_editor_opts(ui, salt, g, alpha, true)
+}
+
+/// [`gradient_editor`], with the preset row only when `presets` (the
+/// Gradient tool's popover shows its own preset grid).
+pub(crate) fn gradient_editor_opts(
+    ui: &mut egui::Ui,
+    salt: u64,
+    g: &mut Gradient,
+    alpha: bool,
+    presets: bool,
+) -> Edit {
     let id = egui::Id::new(("gradient-editor", salt));
     let mut st: GradState = ui.data(|d| d.get_temp(id)).unwrap_or_default();
     let mut out = Edit::default();
@@ -279,6 +291,10 @@ pub(crate) fn gradient_editor(ui: &mut egui::Ui, salt: u64, g: &mut Gradient, al
         out.finished |= slider_row_scaled(ui, "Stop opacity", &mut g.stops[sel].alpha, 0.0..=1.0, 100.0, "%");
     }
 
+    if !presets {
+        ui.data_mut(|d| d.insert_temp(id, st));
+        return out;
+    }
     // Presets: a small strip per ramp.
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);

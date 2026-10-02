@@ -19,6 +19,7 @@ pub use crate::crop::CropCanvas;
 pub use crate::guides::{AddGuide, ClearGuides, MoveGuide, RemoveGuide};
 
 pub use crate::fill_cmds::{AddFillLayer, SetFill};
+pub use crate::shape_cmds::{AddShapeLayer, SetShape, ShapeFromWorkPath, ShapeToWorkPath};
 
 /// Add an empty pixel layer (or one filled from a raster) on top of the stack.
 pub struct AddPixelLayer {
@@ -99,7 +100,7 @@ impl Command for AddAdjustmentLayer {
 }
 
 /// Insert `layer` directly above `above` (same sibling list), or on top.
-fn insert_above(doc: &mut Document, layer: Layer, above: Option<LayerId>) -> EditResult {
+pub(crate) fn insert_above(doc: &mut Document, layer: Layer, above: Option<LayerId>) -> EditResult {
     match above.and_then(|a| doc.siblings_mut(a).map(|list| (a, list))) {
         Some((a, list)) => {
             let i = list.iter().position(|l| l.id == a).expect("in siblings");
@@ -279,6 +280,10 @@ impl Command for RasterizeLayer {
             LayerContent::Fill(f) => match f.cache.take() {
                 Some(c) => c,
                 None => lumenply_render::fill::render_fill(&f.fill, Rect::new(0, 0, w, h), false),
+            },
+            LayerContent::Shape(sh) => match sh.cache.take() {
+                Some(c) => c,
+                None => lumenply_render::shape::render_shape(sh, Rect::new(0, 0, w, h), false),
             },
             _ => {
                 return Err(EditError::Invalid(format!(
@@ -855,6 +860,11 @@ impl Command for TransformLayer {
                 }
             },
             LayerContent::Smart(sm) => smart_compose(sm, &self.transform),
+            // Shapes stay vector: the outline transforms and re-renders.
+            LayerContent::Shape(sh) => {
+                sh.transform_by(&self.transform);
+                lumenply_render::shape::refresh_cache(sh, w, h, float);
+            }
             LayerContent::Text(t) => match self.transform.integer_translation() {
                 Some((dx, dy)) => {
                     t.x += dx as f32;
@@ -1044,13 +1054,20 @@ impl Command for FlipLayer {
 
     fn apply(&self, doc: &mut Document) -> EditResult {
         let l = doc.layer(self.layer).ok_or(EditError::NoLayer(self.layer))?;
-        let store = l.pixels().ok_or(EditError::NotPixel(self.layer))?;
-        let Some(b) = store.content_bounds() else {
+        // A shape mirrors about its exact outline box, staying vector.
+        let centre = match (l.pixels(), l.shape_layer()) {
+            (Some(store), _) => store
+                .content_bounds()
+                .map(|b| (b.x as f32 + b.w as f32 / 2.0, b.y as f32 + b.h as f32 / 2.0)),
+            (None, Some(sh)) => sh
+                .bounds()
+                .map(|[x0, y0, x1, y1]| ((x0 + x1) / 2.0, (y0 + y1) / 2.0)),
+            _ => return Err(EditError::NotPixel(self.layer)),
+        };
+        let Some((cx, cy)) = centre else {
             return Ok(());
         };
         let (sx, sy) = if self.horizontal { (-1.0, 1.0) } else { (1.0, -1.0) };
-        let cx = b.x as f32 + b.w as f32 / 2.0;
-        let cy = b.y as f32 + b.h as f32 / 2.0;
         TransformLayer {
             layer: self.layer,
             transform: Affine::around(cx, cy, sx, sy, 0.0),
@@ -1446,6 +1463,7 @@ impl Command for ResizeImage {
             match &mut l.content {
                 LayerContent::Pixel(store) => *store = lumenply_render::transform_store(store, &t),
                 LayerContent::Smart(sm) => smart_compose(sm, &t),
+                LayerContent::Shape(sh) => sh.transform_by(&t),
                 _ => {}
             }
             if let Some(m) = l.mask.as_mut() {
@@ -1467,6 +1485,7 @@ fn shift_all(doc: &mut Document, dx: i32, dy: i32) {
         match &mut l.content {
             LayerContent::Pixel(store) => *store = store.translated(dx, dy),
             LayerContent::Smart(sm) => smart_compose(sm, &Affine::translate(dx as f32, dy as f32)),
+            LayerContent::Shape(sh) => sh.transform_by(&Affine::translate(dx as f32, dy as f32)),
             _ => {}
         }
         if let Some(m) = l.mask.as_mut() {
@@ -2342,6 +2361,7 @@ impl Command for RotateImage {
             match &mut l.content {
                 LayerContent::Pixel(store) => *store = lumenply_render::transform_store(store, &t),
                 LayerContent::Smart(sm) => smart_compose(sm, &t),
+                LayerContent::Shape(sh) => sh.transform_by(&t),
                 LayerContent::Text(tl) => {
                     tl.map_position(|x, y| t.apply(x, y));
                     lumenply_render::text::refresh_cache(tl);
@@ -2386,6 +2406,7 @@ impl Command for FlipImage {
             match &mut l.content {
                 LayerContent::Pixel(store) => *store = lumenply_render::transform_store(store, &t),
                 LayerContent::Smart(sm) => smart_compose(sm, &t),
+                LayerContent::Shape(sh) => sh.transform_by(&t),
                 LayerContent::Text(tl) => {
                     tl.map_position(|x, y| t.apply(x, y));
                     lumenply_render::text::refresh_cache(tl);

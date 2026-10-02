@@ -1,4 +1,4 @@
-# ADR 0010: Text layout, on-canvas editing, paragraph boxes and style runs
+# ADR 0011: Text layout, on-canvas editing, paragraph boxes and style runs
 
 Date: 2026-10-03. Status: accepted.
 

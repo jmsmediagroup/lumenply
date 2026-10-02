@@ -16,6 +16,7 @@ cargo run --release -p lumenply-app -- --demo  # desktop app with the demo docum
 cargo run --release -p lumenply-app -- file.psd  # open .lumen / .psd / .ora / images
 cargo run --release -p lumenply -- --help      # headless CLI (render, info, export-psd, bench)
 cargo test --workspace                       # must stay green
+scripts/bundle-macos.sh [outdir]             # Lumenply.app (unsigned) with icon + file types
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all                              # rustfmt.toml: max_width 110
 ```
@@ -67,7 +68,9 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
   `text:click:X:Y`, `color:fg`, `start:fake-recent`, `layout:tool=…`,
   `layout:layer=background`, `select:rect=X:Y:W:H`, `select:caf`,
   `crop:frame=X0:Y0:X1:Y1`, `guides:add=v:X`, `adj:add=gradient-map`,
-  `adj:fill=gradient`, `liquify:demo`, `raw:open=PATH`; tokens that toggle
+  `adj:fill=gradient`, `liquify:demo`, `raw:open=PATH`, `layout:tool=shape`,
+  `shape:kind=star`, `shape:draw=X0:Y0:X1:Y1`, drags as
+  `popups:press=X:Y,popups:move=X:Y,popups:release=X:Y`; tokens that toggle
   view prefs such as `rulers`/`grid` save prefs — another reason for a scratch
   `HOME`), and
   `--window-size 960x640` for narrow layouts. Run screenshots with `HOME`

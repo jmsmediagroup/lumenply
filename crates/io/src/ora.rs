@@ -172,7 +172,18 @@ fn write_layer<W: Write + std::io::Seek>(
                 layer.name
             ));
         }
-        LayerContent::Pixel(_) | LayerContent::Text(_) | LayerContent::Smart(_) | LayerContent::Fill(_) => {
+        LayerContent::Pixel(_)
+        | LayerContent::Text(_)
+        | LayerContent::Smart(_)
+        | LayerContent::Fill(_)
+        | LayerContent::Shape(_) => {
+            if let LayerContent::Shape(sh) = &layer.content {
+                warnings.push(format!(
+                    "shape layer '{}' ({}) was exported as pixels",
+                    layer.name,
+                    sh.geometry.name()
+                ));
+            }
             if matches!(layer.content, LayerContent::Text(_)) {
                 warnings.push(format!("text layer '{}' was exported as pixels", layer.name));
             }

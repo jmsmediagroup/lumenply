@@ -81,6 +81,10 @@ fn content_changed(old: &Layer, new: &Layer) -> bool {
             *a != moved_back
         }
         (LayerContent::Smart(a), LayerContent::Smart(b)) => !same_store(&a.source, &b.source),
+        // A shape's placement is its transform; the rest is its picture.
+        (LayerContent::Shape(a), LayerContent::Shape(b)) => {
+            a.geometry != b.geometry || a.fill != b.fill || a.stroke != b.stroke
+        }
         (LayerContent::Adjustment(a), LayerContent::Adjustment(b)) => a != b,
         (LayerContent::Filter(a), LayerContent::Filter(b)) => a != b,
         (LayerContent::Group(_), LayerContent::Group(_)) => false,
@@ -111,6 +115,7 @@ fn placement_changed(old: &Layer, new: &Layer) -> bool {
     match (&old.content, &new.content) {
         (LayerContent::Text(a), LayerContent::Text(b)) => a.x != b.x || a.y != b.y,
         (LayerContent::Smart(a), LayerContent::Smart(b)) => a.transform != b.transform,
+        (LayerContent::Shape(a), LayerContent::Shape(b)) => a.transform != b.transform,
         _ => false,
     }
 }

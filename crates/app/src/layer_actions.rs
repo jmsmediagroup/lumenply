@@ -182,12 +182,43 @@ impl App {
     /// The Merge Down menu label for the active layer: "Merge down",
     /// "Merge group" or "Merge clipping mask", as in Photoshop.
     pub(crate) fn merge_label(&self) -> &'static str {
+        if self.multi_selected().is_some() {
+            return "Merge layers";
+        }
         self.merge_kind().map_or("Merge down", MergeKind::label)
+    }
+
+    /// The layers picked in the Layers panel, when there are several:
+    /// Cmd+E then merges them (Photoshop's Merge Layers).
+    pub(crate) fn multi_selected(&self) -> Option<Vec<LayerId>> {
+        let mut ids = self.selected.clone();
+        ids.sort_unstable();
+        ids.dedup();
+        (ids.len() >= 2).then_some(ids)
     }
 
     /// Ctrl/Cmd+E: merge the active layer down (or its group, or the
     /// layers clipped to it) and keep the result active.
     pub(crate) fn merge_down_active(&mut self) {
+        if let Some(ids) = self.multi_selected() {
+            let doc = self.editor.doc();
+            // The result keeps the topmost visible selected layer's id.
+            let list = match doc.parent_of(ids[0]) {
+                None => doc.layers(),
+                Some(p) => doc.layer(p).and_then(|g| g.children()).unwrap_or(&[]),
+            };
+            let top = list
+                .iter()
+                .rev()
+                .find(|l| l.visible && ids.contains(&l.id))
+                .map(|l| l.id);
+            self.run(&ops::MergeSelected { layers: ids });
+            if let Some(t) = top.filter(|&t| self.editor.doc().layer(t).is_some()) {
+                self.selected.clear();
+                self.set_active(Some(t));
+            }
+            return;
+        }
         let Some(layer) = self.active else { return };
         let Ok(kind) = self.merge_kind() else { return };
         let result = match kind {
@@ -271,7 +302,10 @@ impl App {
         }
         Some(match id {
             "duplicate-layer" => self.active_layer().is_none().then_some("Select a layer first"),
-            "merge-down" => self.merge_kind().err(),
+            "merge-down" => match self.multi_selected() {
+                Some(ids) => ops::merge_selected_block(doc, &ids),
+                None => self.merge_kind().err(),
+            },
             "merge-visible" => ops::merge_visible_block(doc),
             "flatten" => doc
                 .layers()
@@ -677,6 +711,39 @@ mod tests {
         let mut app = launch(&[]);
         app.open_in_new_tab(blank(64, 64), None);
         app
+    }
+
+    #[test]
+    fn cmd_e_with_several_layers_selected_merges_them() {
+        let mut doc = Document::new(16, 16);
+        let a = doc.add_pixel_layer("a");
+        let b = doc.add_pixel_layer("b");
+        let c = doc.add_pixel_layer("c");
+        for id in [a, b, c] {
+            doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                id as i32,
+                0,
+                lumenply_tiles::Rgba::new(1.0, 0.0, 0.0, 1.0),
+            );
+        }
+        let mut app = App::launch(&[]);
+        app.open_in_new_tab(Editor::new(doc), None);
+        app.dialog = None;
+        app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
+        app.set_active(Some(c));
+        app.selected = vec![a, c];
+        assert_eq!(app.merge_label(), "Merge layers");
+        assert_eq!(app.action_block("merge-down"), None);
+        app.run_menu_action("merge-down");
+        let ids: Vec<_> = app.editor.doc().layers().iter().map(|l| l.id).collect();
+        assert_eq!(ids, vec![b, c], "a merged into c's slot");
+        assert_eq!(app.active, Some(c));
+        let px = app.editor.doc().layer(c).unwrap().pixels().unwrap();
+        assert_eq!(
+            px.get_pixel(a as i32, 0).a,
+            1.0,
+            "a's pixel is in the merged layer"
+        );
     }
 
     #[test]

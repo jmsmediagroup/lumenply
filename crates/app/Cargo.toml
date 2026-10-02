@@ -19,6 +19,7 @@ lumenply-render.workspace = true
 lumenply-io.workspace = true
 lumenply-core.workspace = true
 rayon.workspace = true
+arboard = { version = "3", default-features = false, features = ["image-data"] }
 eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts", "x11", "accesskit"] }
 # Native file dialogs. Default features on purpose: on Linux/BSD that is the
 # XDG desktop portal over D-Bus (no GTK needed to build), falling back to
@@ -33,3 +34,7 @@ image.workspace = true
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "block2"] }
 block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSURL", "NSString"] }
+
+[dev-dependencies]
+image-webp = "0.2"

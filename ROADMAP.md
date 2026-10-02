@@ -143,6 +143,11 @@ None of these could be tested in the container.
       (render::develop, hue-preserving tone on perceptual luminance, local
       highlights/shadows from a blurred log-luminance base). Still open:
       re-opening the develop later (a smart "Camera Raw filter" layer)
+- [x] Export As (File ▸ Export, palette): PNG / JPEG / lossless WebP, quality,
+      transparency (or onto white), output size in px or % with Lanczos-3
+      resampling in linear light (render::resample), a preview of the encoded
+      result (JPEG decoded back, so artefacts show) and its real file size,
+      encoded on a worker thread
 - [ ] AVIF/HEIF
 - [~] PSD: 16-bit import (raw, RLE and ZIP ± prediction channels) and
       export (raw channels; Export menu), full precision both ways and
@@ -200,7 +205,11 @@ None of these could be tested in the container.
       repeated transforms never degrade. Convert/Rasterize in the layer
       context menu + palette, "Smart" chip, saved in .lumen (cache
       rebuilds on load), PSD/ORA export as pixels with a warning.
-      Still open: embedded multi-layer documents ("edit contents")
+      Edit contents opens the source in its own tab and Save there writes it
+      back (one "Update smart object" step in the original, transform kept);
+      Replace contents loads an image file in place (Layer menu, palette,
+      Properties). Still open: keeping the contents' layers (a nested
+      multi-layer document) instead of flattening on save
 - [x] Clipping masks (clip chains composite as a unit gated by the base's alpha
       and carrying its blend/opacity; context menu + palette; PSD clipping byte
       round-trips; GPU path falls back to CPU for clipped documents)
@@ -225,9 +234,11 @@ None of these could be tested in the container.
 - [x] Liquify (Filter menu, Shift+Cmd+X): modal workspace with Forward warp,
       Reconstruct, Smooth, Twirl, Pucker, Bloat; advected displacement field,
       per-stroke undo, mesh view; bakes 12 MP in ~20 ms as one undo step
-- [~] Quick Selection: engine done (core::quick_select — geodesic segmentation
-      with a stroke colour model, colour-line edge refinement, ~0.2 s per stroke);
-      the tool in the rail is still to wire up
+- [x] Quick Selection (the Wand's sibling: Shift+W or the Wand bar's switch):
+      paint and the selection grows to edges — geodesic segmentation with a
+      stroke colour model and colour-line edge refinement (core::quick_select,
+      ~0.2 s per stroke); New turns into Add after the first stroke, Alt
+      subtracts, [ ] resize, one undo step per stroke
 - [x] Crop tool (C): whole-canvas frame (or the selection), 8 handles, move,
       straighten by dragging outside (fits inside the canvas), ratio presets +
       custom W:H + swap, Delete cropped pixels (off by default), checkerboard
@@ -260,9 +271,35 @@ None of these could be tested in the container.
 - [x] Gradient stop editor (click to add, drag to move, drag off to remove,
       per-stop colour picker and opacity, presets), shared by Gradient Map and
       gradient fills
-- [ ] Merge selected layers (Cmd+E with a multi-selection)
-- [ ] Lock-aware Properties transform controls
-- [ ] Shape layers (vector shape + fill), pattern fills (PSD imports them as pixels)
+- [x] Saved selections (Photoshop's alpha channels): Select ▸ Save selection /
+      Load selection (New/Add/Subtract/Intersect, Invert, Delete), undoable,
+      saved in .lumen (channels/ tiles) and PSD (named alpha channels after
+      RGB + transparency, resources 1006/1045; psd-tools-verified both
+      depths). Still open: a Channels panel
+- [x] Edit ▸ Cut / Copy / Copy merged / Paste / Paste in place (Cmd+X/C/
+      Shift+Cmd+C/V/Shift+Cmd+V): the selection's pixels (soft edges kept) or
+      the layer, pasted as a new layer above the active one in place; copies
+      also go to the system clipboard as an image and images from other apps
+      paste centred (arboard). macOS catches Cmd+V with an image-only
+      clipboard via a key monitor; elsewhere use Edit ▸ Paste for that.
+      Not exercised live tonight (would overwrite the user's clipboard)
+- [x] Image ▸ Trim (transparent or top-left-colour borders), Reveal all (grow
+      the canvas to every layer's pixels, e.g. after a non-destructive crop),
+      Rotate by angle (canvas grows to fit, transparent corners) — all through
+      CropCanvas, so masks, guides, paths and smart objects follow. Text
+      layers stay upright when the canvas turns (as in a straightened crop)
+- [x] Merge selected layers (Cmd+E with several layers selected, "Merge
+      layers"): the selected visible siblings composite into the topmost
+      one's slot and name; hidden ones stay; picture unchanged (tested)
+- [x] Lock-aware Properties transform controls (dimmed with the reason)
+- [x] Shape layers + Shape tool (U): rectangle, rounded rectangle, ellipse,
+      polygon, line with arrowheads, star/arrow/heart/speech bubble; fill
+      none/solid/gradient, stroke colour/width/inside-centre-outside/dashes;
+      live drag preview, Shift/Alt, snapping; Properties edits; transforms stay
+      vector; Rasterize, Make work path, New shape from path; .lumen; PSD as
+      Photoshop shape layers (SoCo/GdFl + vstk + vmsk) both ways,
+      psd-tools-verified; ORA bakes (ADR 0010)
+- [ ] Pattern fills (PSD imports them as pixels)
 - [~] Text: searchable font picker (system fonts via fontdb, .ttc face index
       honoured), bold/italic/bold-italic (real faces, else synthetic oblique
       and synthetic bold), alignment (left/centre/right), tracking in em/1000;
@@ -349,10 +386,22 @@ None of these could be tested in the container.
 
 ## 7. Ecosystem and release
 
+- [x] `lumenply batch` (Photoshop's Image Processor): images, camera RAW
+      (camera tone curve, `--auto` exposure/whites/blacks), PSD and projects
+      to PNG / JPEG / WebP with `--resize 50%|2048|1920x1080` (Lanczos, never
+      enlarging a fit), per-file report, non-zero exit when any file fails
+
 - [ ] Scripting: Python via PyO3 on the command API; macro recording from history
 - [ ] Sandboxed WASM plugins (wasmtime)
 - [ ] Browser build (WebAssembly + WebGPU) — engine crates are UI-free by design
-- [ ] Packaging: Windows installer, signed macOS app, Flatpak; nightly builds from CI
+- [~] Packaging: `scripts/bundle-macos.sh` builds Lumenply.app (release
+      binary, .icns rendered by the app's own `--write-icon` on Apple's icon
+      grid, Info.plist with file types: .lumen/.nge owner, PSD/PSB, ORA,
+      images, camera RAW). Files opened from Finder (double-click, Open With,
+      Dock drop) arrive through an `application:openURLs:` method added at
+      launch (macos_open.rs), cold launch verified with `open -a`. Still
+      open: code signing + notarisation, Windows installer, Flatpak,
+      nightly CI builds
 - [x] Project name: **Lumenply** (brand assets in img/; crates, CLI, titles,
       `.lumen` extension and `~/.lumenply` all renamed; legacy `.nge` loads)
 - [~] Full GPLv3 text now in `LICENSE`. A preliminary web search (Oct 2025)
@@ -383,11 +432,10 @@ None of these could be tested in the container.
   on a real tablet.
 - Gradient midpoints/smoothness are not modelled; Selective Color approximates
   Photoshop's undocumented maths; fill layers can't be scaled or rotated
-  without rasterizing; vector shape layers import as pixels.
+  without rasterizing; shapes re-import from PSD as path shapes (radius/sides
+  not editable after); centre/outside strokes have round joins.
 - Dust & Scratches radius is capped at 8 (per-pixel median).
 
 - Text layers cannot be scaled or rotated without rasterizing.
-- Opening files from Finder (double-click, Open With, Dock drop) does nothing:
-  eframe 0.29 does not deliver those events.
 - egui menus cannot scroll; the quick-add "More..." list is tall (~500 px).
 

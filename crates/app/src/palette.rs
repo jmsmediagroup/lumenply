@@ -30,7 +30,7 @@ pub(crate) enum PaletteAct {
 }
 
 /// Every tool, so "Search tools..." finds them, in rail order.
-const TOOLS: [Tool; 17] = [
+const TOOLS: [Tool; 18] = [
     Tool::Move,
     Tool::RectSelect,
     Tool::EllipseSelect,
@@ -45,6 +45,7 @@ const TOOLS: [Tool; 17] = [
     Tool::Bucket,
     Tool::Gradient,
     Tool::Pen,
+    Tool::Shape,
     Tool::Text,
     Tool::Eyedropper,
     Tool::Hand,
@@ -117,6 +118,20 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Show or hide the history strip", "toggle-history"),
     ("About Lumenply", "about"),
     ("Liquify...", "liquify"),
+    ("Export As...", "export-as"),
+    ("Edit smart object contents", "smart-edit"),
+    ("Save selection...", "save-selection"),
+    ("Trim...", "trim"),
+    ("Cut", "cut"),
+    ("Copy", "copy"),
+    ("Copy merged", "copy-merged"),
+    ("Paste", "paste"),
+    ("Paste in place", "paste-in-place"),
+    ("Keyboard shortcuts", "shortcuts"),
+    ("Reveal all", "reveal-all"),
+    ("Rotate image by angle...", "rot-angle"),
+    ("Load selection...", "load-selection"),
+    ("Replace smart object contents...", "smart-replace"),
     ("Duplicate layer", "duplicate-layer"),
     ("Merge down (group, clipping mask)", "merge-down"),
     ("Merge visible", "merge-visible"),
@@ -155,7 +170,70 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Snap on or off", "snap"),
     ("New fill layer: solid color", "fill-solid"),
     ("New fill layer: gradient", "fill-gradient"),
+    ("New shape layer from path", "shape-from-path"),
 ];
+
+impl App {
+    /// Help ▸ Keyboard shortcuts: every tool key, every command with a
+    /// shortcut (as currently bound), and the keys that are not commands.
+    pub(crate) fn shortcuts_reference(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let row = |ui: &mut egui::Ui, what: &str, keys: &str| {
+            ui.horizontal(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(230.0, 18.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.set_min_width(230.0);
+                        ui.add(egui::Label::new(RichText::new(what).color(TEXT)).truncate());
+                    },
+                );
+                ui.label(RichText::new(keys).monospace().color(MUTED));
+            });
+        };
+        let list_h = (ctx.screen_rect().height() - 220.0).clamp(160.0, 560.0);
+        let scroll = egui::ScrollArea::vertical()
+            .id_salt("shortcuts-reference")
+            .max_height(list_h)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.set_min_width(380.0);
+                section_title(ui, "TOOLS");
+                for t in Tool::ALL {
+                    // The second tool of a pair takes Shift with the key.
+                    let shifted = matches!(t, Tool::EllipseSelect | Tool::PolyLasso | Tool::Gradient);
+                    let keys = if shifted {
+                        format!("Shift+{}", t.key())
+                    } else {
+                        t.key().to_string()
+                    };
+                    row(ui, t.name(), &keys);
+                }
+                row(ui, "Quick selection (Wand sibling)", "Shift+W");
+                section_title(ui, "COMMANDS");
+                for (label, id) in ACTIONS {
+                    let keys = self.action_keys(&ctx, id);
+                    if !keys.is_empty() {
+                        row(ui, label, &keys);
+                    }
+                }
+                section_title(ui, "CANVAS");
+                for (what, keys) in [
+                    ("Brush size", "[  ]"),
+                    ("Swap / default colours", "X  /  D"),
+                    ("Quick mask", "Q"),
+                    ("Pan", "Space + drag, scroll"),
+                    ("Zoom at the pointer", "Alt + scroll, pinch"),
+                    ("Commit / cancel (crop, transform, text)", "Enter  /  Esc"),
+                    ("Add to / subtract from a selection", "Shift  /  Alt"),
+                ] {
+                    row(ui, what, keys);
+                }
+            });
+        a11y_scroll(ui.ctx(), &scroll, "Keyboard shortcuts");
+        crate::dialogs::note(ui, "Command shortcuts can be changed in Preferences.");
+    }
+}
 
 /// The id of the destructive filter dialog for a filter kind.
 pub(crate) fn filter_id(f: &Filter) -> &'static str {
@@ -418,6 +496,8 @@ impl App {
         let layer = self.active_layer();
         let pixel = self.active_is_pixel();
         let smart = layer.is_some_and(|l| l.smart_layer().is_some());
+        // Shapes transform and flip as vectors, like smart objects.
+        let shape = layer.is_some_and(|l| l.shape_layer().is_some());
         let selection = doc.selection.is_some();
         let need_pixel = Some("Select a pixel layer first");
         let need_layer = Some("Select a layer first");
@@ -438,15 +518,28 @@ impl App {
         match id {
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
             "redo" if !self.editor.can_redo() => Some("Nothing to redo"),
-            "flip-h" | "flip-v" if !pixel && !smart => Some("Select a pixel layer or smart object first"),
+            "flip-h" | "flip-v" if !pixel && !smart && !shape => {
+                Some("Select a pixel layer, smart object or shape first")
+            }
             "fill" | "clear" | "layer-via-copy" | "smart-object" if !pixel => need_pixel,
-            "xform" if !pixel && !smart => Some("Select a pixel layer or smart object first"),
+            "xform" if !pixel && !smart && !shape => {
+                Some("Select a pixel layer, smart object or shape first")
+            }
+            "perspective" | "warp" if shape => Some("Rasterize the shape first"),
             "perspective" | "warp" if smart => Some("Rasterize the smart object first"),
             "perspective" | "warp" if !pixel => need_pixel,
             "liquify" if smart || layer.is_some_and(|l| l.text_layer().is_some()) => {
                 Some("Rasterize the layer first")
             }
             "liquify" if !pixel => need_pixel,
+            "smart-edit" | "smart-replace" if !smart => Some("Select a smart object first"),
+            "save-selection" if !selection => need_selection,
+            "cut" if !pixel => need_pixel,
+            "copy" if layer.and_then(|l| l.raster_store()).is_none() => Some("Select a layer with pixels"),
+            "load-selection" if doc.saved_selections.is_empty() => Some("No saved selections yet"),
+            "reveal-all" if lumenply_core::canvas_ops::RevealAll::frame(doc) == doc.canvas() => {
+                Some("Everything is already on the canvas")
+            }
             id if id.starts_with("filter-") && !pixel => Some("Filters apply to a pixel layer"),
             "deselect" | "feather" if !selection => need_selection,
             "crop" => {
@@ -480,10 +573,16 @@ impl App {
             "clear-guides" if doc.guides.is_empty() => Some("There are no guides"),
             "rasterize"
                 if !layer.is_some_and(|l| {
-                    l.smart_layer().is_some() || l.text_layer().is_some() || l.fill_layer().is_some()
+                    l.smart_layer().is_some()
+                        || l.text_layer().is_some()
+                        || l.fill_layer().is_some()
+                        || l.shape_layer().is_some()
                 }) =>
             {
-                Some("Select a smart object, text or fill layer first")
+                Some("Select a smart object, text, fill or shape layer first")
+            }
+            "shape-from-path" if doc.work_path.as_ref().is_none_or(|p| p.is_empty()) => {
+                Some("Draw a path with the Pen first")
             }
             "sel-expand" | "sel-contract" | "sel-border" | "sel-smooth" | "sel-grow" | "sel-similar"
                 if !selection =>
@@ -509,6 +608,11 @@ impl App {
         }
         let (m, k) = match id {
             "fill" => (M::SHIFT, Key::F5),
+            "cut" => (M::COMMAND, Key::X),
+            "copy" => (M::COMMAND, Key::C),
+            "copy-merged" => (M::COMMAND | M::SHIFT, Key::C),
+            "paste" => (M::COMMAND, Key::V),
+            "paste-in-place" => (M::COMMAND | M::SHIFT, Key::V),
             "fill-dialog" => (M::SHIFT, Key::Backspace),
             "clear" => return "Delete".into(),
             // egui spells these keys "Equals"/"Minus"; show the symbols.
@@ -551,10 +655,7 @@ impl App {
             "open" => self.pick_open(),
             "demo" => self.open_demo(),
             "place" => self.pick_place(),
-            "save" => match self.path.clone() {
-                Some(p) => self.save_path(&p.to_string_lossy()),
-                None => self.pick_save(),
-            },
+            "save" => self.save_live(),
             "saveas" => self.pick_save(),
             "export-png" => self.pick_export_png(),
             "export-jpeg" => self.pick_export_jpeg(),
@@ -611,6 +712,7 @@ impl App {
                 }
             }
             "fill-solid" | "fill-gradient" => self.add_fill_layer(id == "fill-gradient"),
+            "shape-from-path" => self.shape_from_path(),
             "delete-layer" => self.delete_active(),
             "layer-up" => self.reorder_active(1),
             "layer-down" => self.reorder_active(-1),
@@ -679,7 +781,38 @@ impl App {
             }
             "prefs" => self.dialog = Some(Dialog::Preferences(self.prefs.clone(), None)),
             "about" => self.dialog = Some(Dialog::About),
+            "shortcuts" => self.dialog = Some(Dialog::Shortcuts),
+            "cut" => self.cut_pixels(),
+            "copy" => {
+                self.copy_pixels(false);
+            }
+            "copy-merged" => {
+                self.copy_pixels(true);
+            }
+            "paste" => self.paste_pixels(false),
+            "paste-in-place" => self.paste_pixels(true),
             "liquify" => self.open_liquify(),
+            "export-as" => self.open_export_as(),
+            "smart-edit" => self.edit_smart_contents(),
+            "save-selection" => {
+                let n = self.editor.doc().saved_selections.len() + 1;
+                self.dialog = Some(Dialog::SaveSelection(format!("Selection {n}")));
+            }
+            "load-selection" => self.dialog = Some(Dialog::LoadSelection(0, CombineOp::Replace, false)),
+            "trim" => {
+                // Transparent borders when there are any, else flat colour.
+                let t = lumenply_core::canvas_ops::Trim {
+                    basis: lumenply_core::canvas_ops::TrimBasis::Transparent,
+                };
+                let transparent = t.frame(self.editor.doc()).is_some();
+                self.dialog = Some(Dialog::Trim(transparent));
+            }
+            "reveal-all" => {
+                self.run(&lumenply_core::canvas_ops::RevealAll);
+                self.view_cmd = Some(ViewCmd::Fit);
+            }
+            "rot-angle" => self.dialog = Some(Dialog::RotateBy(15.0, true)),
+            "smart-replace" => self.pick_replace_smart_contents(),
             "zoom-in" => self.view_cmd = Some(ViewCmd::ZoomIn),
             "zoom-out" => self.view_cmd = Some(ViewCmd::ZoomOut),
             "toggle-history" => {
@@ -738,7 +871,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 103); // + liquify, layer ops, locks, align, select modify, fill, view aids, fill layers
+        assert_eq!(n, 118); // + cut, copy, copy merged, paste, paste in place
     }
 
     #[test]
@@ -756,6 +889,6 @@ mod tests {
         let mut names: Vec<&str> = TOOLS.iter().map(|t| t.name()).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 17);
+        assert_eq!(names.len(), 18);
     }
 }

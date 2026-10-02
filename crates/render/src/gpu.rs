@@ -346,7 +346,8 @@ impl GpuCompositor {
                         LayerContent::Pixel(_)
                         | LayerContent::Text(_)
                         | LayerContent::Smart(_)
-                        | LayerContent::Fill(_) => true,
+                        | LayerContent::Fill(_)
+                        | LayerContent::Shape(_) => true,
                         LayerContent::Group(c) => ok(c),
                         LayerContent::Filter(_) => false,
                         LayerContent::Adjustment(a) => {
@@ -430,7 +431,8 @@ impl GpuCompositor {
                 LayerContent::Pixel(_)
                 | LayerContent::Text(_)
                 | LayerContent::Smart(_)
-                | LayerContent::Fill(_) => {
+                | LayerContent::Fill(_)
+                | LayerContent::Shape(_) => {
                     let Some(store) = layer.raster_store() else {
                         continue;
                     };
@@ -964,5 +966,42 @@ mod tests {
             d.add_adjustment(adj.clone());
             assert!(!GpuCompositor::supports(&d), "{} stays on the CPU", adj.name());
         }
+    }
+
+    /// Shape layers are plain raster tiles (their rendered cache) to the
+    /// GPU path, so they render there and match the CPU reference.
+    #[test]
+    fn gpu_renders_shape_layers() {
+        use lumenply_doc::shape::{ShapeGeometry, ShapeLayer, ShapeStroke, StrokeAlign};
+        use lumenply_doc::Fill;
+        let mut doc = Document::new(300, 200);
+        doc.add_pixel_layer("bg");
+        let id = doc.alloc_id();
+        let mut shape = Layer::shape(
+            id,
+            ShapeLayer::new(
+                ShapeGeometry::Ellipse {
+                    rect: [30.5, 20.25, 200.0, 120.0],
+                },
+                Some(Fill::Solid {
+                    color: [0.9, 0.3, 0.1],
+                }),
+                Some(ShapeStroke {
+                    color: [0.1, 0.2, 0.8],
+                    width: 6.0,
+                    align: StrokeAlign::Outside,
+                    dash: None,
+                }),
+            ),
+        );
+        shape.blend = BlendMode::Multiply;
+        shape.opacity = 0.7;
+        let mut m = Mask::hide_all();
+        m.fill_rect(Rect::new(0, 0, 150, 200), 1.0);
+        shape.mask = Some(m);
+        doc.add_layer(shape);
+        crate::fill::refresh_stale(&mut doc);
+        assert!(GpuCompositor::supports(&doc));
+        assert_matches_cpu(&doc, "shape layers");
     }
 }

@@ -134,15 +134,16 @@ impl App {
 
     pub(crate) fn begin_free_transform(&mut self) {
         let Some(id) = self.active else { return };
-        // Pixel layers and smart objects transform; a smart object's
-        // bounds come from its rendered cache.
+        // Pixel layers, smart objects and shapes transform; a smart
+        // object's or shape's bounds come from its rendered cache (a shape
+        // then composes the transform into its outline, staying vector).
         let Some(b) = self
             .active_layer()
-            .filter(|l| l.pixels().is_some() || l.smart_layer().is_some())
+            .filter(|l| l.pixels().is_some() || l.smart_layer().is_some() || l.shape_layer().is_some())
             .and_then(|l| l.raster_store())
             .and_then(|p| p.content_bounds())
         else {
-            self.status = "Free transform needs a pixel layer or smart object with content".into();
+            self.status = "Free transform needs a pixel layer, smart object or shape with content".into();
             return;
         };
         self.tool = Tool::Move;
@@ -369,6 +370,7 @@ impl App {
     /// Every export format, grouped by what survives: File ▸ Export and
     /// the Export button both show this list.
     fn export_items(&mut self, ui: &mut egui::Ui) {
+        self.act(ui, "Export As...", "export-as");
         menu_heading(ui, "FLATTENED IMAGE");
         self.act(ui, "PNG...", "export-png");
         self.act(ui, "JPEG...", "export-jpeg");
@@ -394,6 +396,12 @@ impl App {
         self.act(ui, &undo, "undo");
         self.act(ui, &redo, "redo");
         menu_separator(ui);
+        self.act(ui, "Cut", "cut");
+        self.act(ui, "Copy", "copy");
+        self.act(ui, "Copy merged", "copy-merged");
+        self.act(ui, "Paste", "paste");
+        self.act(ui, "Paste in place", "paste-in-place");
+        menu_separator(ui);
         self.act(ui, "Free transform", "xform");
         self.act(ui, "Perspective", "perspective");
         self.act(ui, "Warp", "warp");
@@ -410,10 +418,13 @@ impl App {
         self.act(ui, "Image size...", "image-size");
         self.act(ui, "Canvas size...", "canvas-size");
         self.act(ui, "Crop to selection", "crop");
+        self.act(ui, "Trim...", "trim");
+        self.act(ui, "Reveal all", "reveal-all");
         menu_separator(ui);
         self.act(ui, "Rotate 90° clockwise", "rot-cw");
         self.act(ui, "Rotate 90° counter-clockwise", "rot-ccw");
         self.act(ui, "Rotate 180°", "rot-180");
+        self.act(ui, "Rotate by angle...", "rot-angle");
         self.act(ui, "Flip image horizontal", "img-flip-h");
         self.act(ui, "Flip image vertical", "img-flip-v");
         menu_separator(ui);
@@ -450,6 +461,9 @@ impl App {
         let feather = format!("Feather {:.0} px", self.feather);
         self.act(ui, &feather, "feather");
         self.act(ui, "Layer mask from selection", "mask-from-sel");
+        menu_separator(ui);
+        self.act(ui, "Save selection...", "save-selection");
+        self.act(ui, "Load selection...", "load-selection");
     }
 
     fn layer_menu(&mut self, ui: &mut egui::Ui) {
@@ -485,6 +499,7 @@ impl App {
             self.act(ui, "Solid color", "fill-solid");
             self.act(ui, "Gradient", "fill-gradient");
         });
+        self.act(ui, "New shape from path", "shape-from-path");
         menu_separator(ui);
         layer_actions::column_separator(ui);
         self.act(ui, "Rename", "rename");
@@ -528,6 +543,8 @@ impl App {
         }
         layer_actions::column_separator(ui);
         self.act(ui, "Convert to smart object", "smart-object");
+        self.act(ui, "Edit smart object contents", "smart-edit");
+        self.act(ui, "Replace smart object contents...", "smart-replace");
         self.act(ui, "Rasterize", "rasterize");
     }
 
@@ -541,7 +558,10 @@ impl App {
         };
         let group = l.children().is_some();
         let pixel = l.pixels().is_some();
-        let rasterizable = l.smart_layer().is_some() || l.text_layer().is_some() || l.fill_layer().is_some();
+        let rasterizable = l.smart_layer().is_some()
+            || l.text_layer().is_some()
+            || l.fill_layer().is_some()
+            || l.shape_layer().is_some();
         let clip = l.clip;
         let mask = l.mask.as_ref().map(|m| m.enabled);
         self.act(ui, "Rename", "rename");
@@ -622,6 +642,7 @@ impl App {
 
     fn help_menu(&mut self, ui: &mut egui::Ui) {
         self.act(ui, "Search commands...", "palette");
+        self.act(ui, "Keyboard shortcuts", "shortcuts");
         menu_separator(ui);
         self.act(ui, "About Lumenply", "about");
     }

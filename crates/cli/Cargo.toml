@@ -20,3 +20,6 @@ lumenply-io.workspace = true
 lumenply-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+
+[dev-dependencies]
+image.workspace = true

@@ -52,6 +52,8 @@ pub(crate) enum DragKind {
     Move,
     Gradient,
     Xform(Handle),
+    /// Shape tool: drawing a new shape (shape_tool.rs).
+    Shape,
 }
 
 /// In-progress free transform of one layer.
@@ -275,6 +277,11 @@ impl App {
                 }
                 LayerContent::Fill(f) => {
                     if let Some(store) = &f.cache {
+                        thumbs.push((l.id, thumb_image(canvas, |x, y| store.get_pixel(x, y))))
+                    }
+                }
+                LayerContent::Shape(sh) => {
+                    if let Some(store) = &sh.cache {
                         thumbs.push((l.id, thumb_image(canvas, |x, y| store.get_pixel(x, y))))
                     }
                 }
@@ -1039,6 +1046,7 @@ impl App {
                 }
             }
             Tool::Crop => self.crop_input(ctx, resp, to_doc),
+            Tool::Shape => self.shape_input(ctx, resp, to_doc),
             Tool::Hand => {
                 if resp.hovered() {
                     ctx.set_cursor_icon(if resp.dragged() {
@@ -1092,6 +1100,7 @@ impl App {
                     }
                 }
             }
+            Tool::Wand if self.quick.on => self.quick_select_input(ctx, resp, &to_doc),
             Tool::Wand => {
                 if resp.hovered() {
                     ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -1122,46 +1131,7 @@ impl App {
                     }
                 }
             }
-            Tool::Gradient => {
-                if resp.hovered() {
-                    ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
-                }
-                if resp.drag_started_by(primary) {
-                    if self.active_is_pixel() {
-                        self.drag = Some(DragKind::Gradient);
-                        self.drag_start = ctx.input(|i| i.pointer.press_origin());
-                    } else {
-                        self.status = "Select a pixel layer for the gradient".into();
-                    }
-                }
-                if self.drag == Some(DragKind::Gradient) && resp.dragged_by(primary) {
-                    if let (Some(a), Some(b), Some(layer)) =
-                        (self.drag_start, resp.interact_pointer_pos(), self.active)
-                    {
-                        let cmd = self.gradient_command(layer, to_doc(a), to_doc(b));
-                        let mut preview = self.editor.doc().clone();
-                        if cmd.apply(&mut preview).is_ok() {
-                            let area = cmd.affected(self.editor.doc());
-                            self.preview(ctx, &preview, area);
-                        }
-                    }
-                }
-                if resp.drag_stopped() && self.drag == Some(DragKind::Gradient) {
-                    self.drag = None;
-                    let start = self.drag_start.take();
-                    let end = resp
-                        .interact_pointer_pos()
-                        .or_else(|| ctx.input(|i| i.pointer.latest_pos()));
-                    if let (Some(a), Some(b), Some(layer)) = (start, end, self.active) {
-                        if a.distance(b) >= 2.0 {
-                            let cmd = self.gradient_command(layer, to_doc(a), to_doc(b));
-                            self.run(&cmd);
-                        } else {
-                            self.mark(None);
-                        }
-                    }
-                }
-            }
+            Tool::Gradient => self.gradient_input(ctx, resp, to_doc),
             Tool::Text => self.type_tool_input(ctx, resp, &to_doc),
             Tool::Move => {
                 if resp.hovered() {
@@ -1177,7 +1147,9 @@ impl App {
                     }
                 }
                 if resp.drag_started_by(primary) {
-                    let fill = self.active_layer().is_some_and(|l| l.fill_layer().is_some());
+                    let fill = self
+                        .active_layer()
+                        .is_some_and(|l| l.fill_layer().is_some() || l.shape_layer().is_some());
                     if let Some(why) = self.lock_block(layer_actions::LockNeed::Move) {
                         self.status = why.into();
                     } else if self.active_is_pixel() || self.active_is_text() || fill {
@@ -1203,7 +1175,7 @@ impl App {
                                     .editor
                                     .doc()
                                     .layer(layer)
-                                    .and_then(|l| l.pixels())
+                                    .and_then(|l| l.pixels().or_else(|| l.shape_layer()?.cache.as_ref()))
                                     .and_then(|s| s.bounds());
                                 let mut preview = self.editor.doc().clone();
                                 let cmd = MoveLayer {
@@ -1583,16 +1555,7 @@ impl App {
                     }
                 }
             }
-            Tool::Gradient => {
-                if self.drag == Some(DragKind::Gradient) {
-                    if let (Some(a), Some(b)) = (self.drag_start, ctx.input(|i| i.pointer.latest_pos())) {
-                        painter.line_segment([a, b], Stroke::new(3.0, Color32::from_black_alpha(140)));
-                        painter.line_segment([a, b], Stroke::new(1.0, Color32::WHITE));
-                        painter.circle_filled(a, 4.0, Color32::WHITE);
-                        painter.circle_stroke(b, 4.0, Stroke::new(1.5, Color32::WHITE));
-                    }
-                }
-            }
+            Tool::Gradient => self.paint_gradient_overlay(painter, resp),
             Tool::Pen => {
                 let origin = resp.rect.min + self.pan;
                 let zoom = self.zoom;
@@ -1638,6 +1601,8 @@ impl App {
             }
             Tool::Text => self.paint_text_overlay(painter, resp),
             Tool::Crop => self.paint_crop(ctx, painter, resp),
+            Tool::Wand if self.quick.on => self.paint_quick_select(painter, resp),
+            Tool::Shape => self.paint_shape_overlay(painter, resp),
             Tool::Hand | Tool::Move | Tool::Eyedropper | Tool::Bucket | Tool::Wand => {}
         }
     }

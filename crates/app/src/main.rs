@@ -26,25 +26,32 @@ mod adjust_ui;
 mod brand;
 mod camera_raw;
 mod canvas;
+mod clipboard;
 mod color_picker;
 mod crop;
 mod debug;
 mod demo;
 mod dialogs;
+mod export_as;
+mod gradient_ui;
 mod guides;
 mod histogram;
 mod history;
 mod layer_actions;
 mod layers;
 mod liquify;
+mod macos_open;
 mod menu;
 mod options_bar;
 mod palette;
 mod pen;
 mod properties;
+mod quick_select_tool;
 #[cfg(test)]
 mod select_fill_tests;
 mod session;
+mod shape_tool;
+mod smart_contents;
 mod start;
 mod status;
 mod text_edit;
@@ -60,6 +67,29 @@ pub(crate) use tools::Tool;
 
 fn main() -> Result<(), eframe::Error> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `--write-icon PATH SIZE`: the app icon as a PNG (packaging builds the
+    // macOS .icns from these), then exit.
+    if let Some(i) = args.iter().position(|a| a == "--write-icon") {
+        let path = args.get(i + 1).map(String::as_str).unwrap_or("icon.png");
+        let size: usize = args
+            .get(i + 2)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1024)
+            .clamp(16, 2048);
+        // macOS icon grid: the tile takes 824/1024 of the canvas, centred,
+        // with transparent margins like every other Dock icon.
+        let inner = (size * 824 / 1024).max(1);
+        let tile = image::RgbaImage::from_raw(inner as u32, inner as u32, brand::icon_rgba(inner))
+            .expect("icon buffer matches its size");
+        let mut img = image::RgbaImage::new(size as u32, size as u32);
+        let off = ((size - inner) / 2) as i64;
+        image::imageops::overlay(&mut img, &tile, off, off);
+        if let Err(e) = img.save_with_format(path, image::ImageFormat::Png) {
+            eprintln!("could not write {path}: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_icon(std::sync::Arc::new(egui::IconData {
@@ -75,6 +105,7 @@ fn main() -> Result<(), eframe::Error> {
             .with_active(!args.iter().any(|a| a == "--screenshot")),
         ..Default::default()
     };
+    macos_open::install();
     eframe::run_native(
         "Lumenply",
         options,
@@ -255,8 +286,6 @@ struct App {
     tolerance: f32,
     contiguous: bool,
     sample_merged: bool,
-    gradient_kind: GradientKind,
-    gradient_to_transparent: bool,
     text_size: f32,
     text_bold: bool,
     text_italic: bool,
@@ -264,6 +293,18 @@ struct App {
     text_align: TextAlign,
     /// "New text" pressed: the next Text-tool click starts a new layer.
     text_new_armed: bool,
+    /// Edit ▸ Copy's pixels at full precision.
+    clip: Option<clipboard::Clip>,
+    /// Quick Selection (the Wand tool's sibling mode) and its stroke.
+    quick: quick_select_tool::QuickSelectState,
+    /// Identifies the live document across tab switches (contents tabs
+    /// save back to their parent by key).
+    doc_key: u64,
+    next_doc_key: u64,
+    /// Set in a smart object's contents tab: Save writes back there.
+    smart_link: Option<smart_contents::SmartLink>,
+    /// File ▸ Export ▸ Export As…, while open (it replaces the editor UI).
+    export_as: Option<Box<export_as::ExportAsState>>,
     /// Filter > Liquify's workspace, while open (it replaces the editor UI).
     liquify: Option<Box<liquify::LiquifyState>>,
     /// The Camera Raw develop workspace, while a RAW file is being opened.
@@ -368,6 +409,10 @@ struct App {
     crop: crop::CropTool,
     /// Rulers, guides, grid and snapping state (guides.rs).
     aids: guides::ViewAids,
+    /// The Shape tool's options and drag (shape_tool.rs).
+    shape: shape_tool::ShapeTool,
+    /// The Gradient tool's options, popover and drag (gradient_ui.rs).
+    gradient: gradient_ui::GradientTool,
     /// On-canvas text editing with the Text tool (text_edit.rs).
     typer: text_edit::TypeTool,
 }
@@ -375,6 +420,8 @@ struct App {
 /// A document parked in an inactive tab: its editor plus the per-document
 /// state that would otherwise live in the `App` fields.
 struct DocTab {
+    doc_key: u64,
+    smart_link: Option<smart_contents::SmartLink>,
     editor: Editor,
     path: Option<PathBuf>,
     saved_rev: usize,
@@ -404,6 +451,8 @@ impl App {
     fn new(cc: &eframe::CreationContext<'_>, args: &[String]) -> Self {
         theme::install(&cc.egui_ctx);
         pen::install();
+        clipboard::install();
+        macos_open::set_waker(&cc.egui_ctx);
         Self::launch(args)
     }
 
@@ -432,8 +481,6 @@ impl App {
             tolerance: 0.12,
             contiguous: true,
             sample_merged: false,
-            gradient_kind: GradientKind::Linear,
-            gradient_to_transparent: false,
             text_size: 72.0,
             text_bold: false,
             text_italic: false,
@@ -441,6 +488,12 @@ impl App {
             text_align: TextAlign::Left,
             text_new_armed: false,
             liquify: None,
+            doc_key: 0,
+            next_doc_key: 0,
+            smart_link: None,
+            export_as: None,
+            quick: Default::default(),
+            clip: None,
             camera_raw: None,
             clone_source: None,
             clone_picking: true,
@@ -522,6 +575,8 @@ impl App {
             start_thumb: None,
             crop: crop::CropTool::default(),
             aids: guides::ViewAids::default(),
+            shape: Default::default(),
+            gradient: Default::default(),
             typer: text_edit::TypeTool::default(),
         };
         // Everything opens through the same paths as File → Open, so a
@@ -637,6 +692,8 @@ impl App {
     /// Replace the live tab's document (startup, crash recovery).
     fn set_doc(&mut self, editor: Editor, path: Option<PathBuf>) {
         self.no_doc = false;
+        self.doc_key = self.alloc_doc_key();
+        self.smart_link = None;
         self.editor = editor;
         self.prefs.apply(&mut self.editor);
         self.path = path;
@@ -654,6 +711,8 @@ impl App {
     /// Move the live document's state out into a parked tab.
     fn park_live(&mut self) -> DocTab {
         DocTab {
+            doc_key: self.doc_key,
+            smart_link: self.smart_link.take(),
             editor: std::mem::replace(&mut self.editor, Editor::new(Document::new(1, 1))),
             path: self.path.take(),
             saved_rev: self.saved_rev,
@@ -667,6 +726,8 @@ impl App {
 
     /// Make a parked tab the live document, restoring its view.
     fn load_tab(&mut self, t: DocTab) {
+        self.doc_key = t.doc_key;
+        self.smart_link = t.smart_link;
         self.editor = t.editor;
         self.path = t.path;
         self.saved_rev = t.saved_rev;
@@ -874,22 +935,6 @@ impl App {
         }
     }
 
-    fn gradient_command(&self, layer: LayerId, start: (f32, f32), end: (f32, f32)) -> GradientFill {
-        let from = linear_rgba(self.brush_rgb, 1.0);
-        let to = if self.gradient_to_transparent {
-            [from[0], from[1], from[2], 0.0]
-        } else {
-            linear_rgba(self.bg_rgb, 1.0)
-        };
-        GradientFill {
-            layer,
-            start,
-            end,
-            colors: [from, to],
-            kind: self.gradient_kind,
-        }
-    }
-
     /// The command a brush stroke becomes: paint pixels, paint the mask, or clone.
     /// Flip quick-mask mode; the overlay swaps between red coverage and
     /// marching ants on the next refresh.
@@ -990,6 +1035,7 @@ impl App {
         // free transform consume it first for their own cancel).
         if self.editor.doc().selection.is_some()
             && !color_picker::is_open(ctx)
+            && !self.gradient.open
             && ctx.input_mut(|i| i.consume_key(M::NONE, Key::Escape))
         {
             self.run(&SetSelection { selection: None });
@@ -1113,6 +1159,8 @@ impl App {
                 Some(Tool::Hand)
             } else if i.key_pressed(Key::C) {
                 Some(Tool::Crop)
+            } else if i.key_pressed(Key::U) {
+                Some(Tool::Shape)
             } else {
                 None
             };
@@ -1138,13 +1186,26 @@ impl App {
             self.bg_rgb = [1.0; 3];
         }
         if let Some(t) = tool {
+            // Shift+W switches between the Magic Wand and Quick Selection.
+            if t == Tool::Wand && ctx.input(|i| i.modifiers.shift) {
+                self.quick.on = !self.quick.on;
+            }
             self.tool = t;
         }
+        let quick = self.tool == Tool::Wand && self.quick.on;
         if bigger {
-            self.brush.radius = (self.brush.radius * 1.25).min(200.0);
+            if quick {
+                self.quick.radius = (self.quick.radius * 1.25).min(300.0);
+            } else {
+                self.brush.radius = (self.brush.radius * 1.25).min(200.0);
+            }
         }
         if smaller {
-            self.brush.radius = (self.brush.radius / 1.25).max(1.0);
+            if quick {
+                self.quick.radius = (self.quick.radius / 1.25).max(1.0);
+            } else {
+                self.brush.radius = (self.brush.radius / 1.25).max(1.0);
+            }
         }
         if fit {
             self.view_cmd = Some(ViewCmd::Fit);
@@ -1273,6 +1334,18 @@ impl App {
             self.camera_raw_ui(ctx);
             self.debug_screenshot(ctx);
             return;
+        }
+        if self.export_as.is_some() {
+            self.export_as_ui(ctx);
+            self.debug_screenshot(ctx);
+            return;
+        }
+        // Files opened from Finder (or the Dock) while running or at launch.
+        for path in macos_open::take_pending() {
+            self.open_path(&path);
+        }
+        if !self.no_doc {
+            self.clipboard_keys(ctx);
         }
         self.handle_file_drop(ctx);
         // Intercept closing the window while there are unsaved changes.
@@ -1621,7 +1694,7 @@ pub(crate) mod a11y_tests {
     /// The app with no dialog up, and no autosave while frames run: a
     /// backup left in the test data folder would greet every later launch
     /// with the Recover dialog.
-    fn launch(args: &[String]) -> App {
+    pub(crate) fn launch(args: &[String]) -> App {
         let mut app = App::launch(args);
         app.dialog = None;
         app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
@@ -1734,6 +1807,19 @@ pub(crate) mod a11y_tests {
             check(&mut app, &format!("{name} fill layer"));
             app.run_menu_action("undo");
         }
+        for (kind, extra) in [
+            ("rectangle", "shape:fill=gradient"),
+            ("polygon", "shape:stroke=2"),
+            ("line", "shape:arrows=end"),
+            ("heart", "shape:fill=none"),
+        ] {
+            app.debug_shape(&ctx, &format!("shape:kind={kind}"));
+            app.debug_shape(&ctx, extra);
+            app.debug_shape(&ctx, "shape:draw=4:4:40:30");
+            assert!(app.active_layer().unwrap().shape_layer().is_some());
+            check(&mut app, &format!("{kind} shape layer"));
+            app.run_menu_action("undo");
+        }
         for (name, f) in filter_presets() {
             app.add_filter_layer(f.clone());
             check(&mut app, &format!("{name} filter layer"));
@@ -1753,6 +1839,14 @@ pub(crate) mod a11y_tests {
             ("Colour range", Dialog::ColorRange(25.0, false)),
             ("New guide", Dialog::NewGuide(true, 32.0)),
             ("About", Dialog::About),
+            ("Save selection", Dialog::SaveSelection("Sky".into())),
+            ("Trim", Dialog::Trim(true)),
+            ("Keyboard shortcuts", Dialog::Shortcuts),
+            ("Rotate canvas", Dialog::RotateBy(15.0, true)),
+            (
+                "Load selection",
+                Dialog::LoadSelection(0, CombineOp::Replace, false),
+            ),
             ("Expand selection", Dialog::SelectEdge(EdgeOp::Expand(4.0), false)),
             ("Border selection", Dialog::SelectEdge(EdgeOp::Border(8.0), false)),
             ("Content-aware fill", Dialog::Fill(true, 64.0, 0)),

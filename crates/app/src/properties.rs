@@ -151,9 +151,11 @@ impl App {
                     | LayerContent::Smart(_)
                     | LayerContent::Group(_)
                     | LayerContent::Fill(_)
+                    | LayerContent::Shape(_)
             );
         let is_smart = layer.smart_layer().is_some();
         let fill = layer.fill_layer().map(|f| f.fill.clone());
+        let shape = layer.shape_layer().cloned();
         // The painted bounds' centre: transforms pivot about it.
         let pivot = layer
             .raster_store()
@@ -236,6 +238,9 @@ impl App {
         } else if let Some(adj) = adj {
             section_title(ui, &adj.name().to_uppercase());
             self.adjustment_ui(ui, id, adj);
+        } else if let Some(sh) = shape {
+            section_title(ui, &format!("SHAPE · {}", sh.geometry.name().to_uppercase()));
+            self.shape_properties(ui, id, sh);
         } else if let Some(f) = fill {
             section_title(ui, &f.name().to_uppercase());
             self.fill_ui(ui, id, f);
@@ -321,6 +326,7 @@ impl App {
             );
         } else if self.active_is_pixel() || is_smart {
             let mut rasterize = false;
+            let mut contents: Option<&'static str> = None;
             if is_smart {
                 ui.horizontal(|ui| {
                     section_title(ui, "SMART OBJECT");
@@ -341,49 +347,75 @@ impl App {
                     .small()
                     .color(MUTED),
                 );
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Edit contents")
+                        .on_hover_text("Open the original pixels in a tab; Save there updates this layer")
+                        .clicked()
+                    {
+                        contents = Some("smart-edit");
+                    }
+                    if ui
+                        .button("Replace contents…")
+                        .on_hover_text("Put another image in, keeping the transform")
+                        .clicked()
+                    {
+                        contents = Some("smart-replace");
+                    }
+                });
             } else {
                 section_title(ui, "TRANSFORM");
             }
-            slider_row(ui, "Scale", &mut self.xform_scale, 10.0..=400.0, "%");
-            slider_row(ui, "Rotate", &mut self.xform_angle, -180.0..=180.0, "°");
+            // A position or pixel lock rules out every transform here, as
+            // the menus and canvas already say.
+            let locked = self.lock_block(crate::layer_actions::LockNeed::Reshape);
+            if let Some(why) = locked {
+                ui.label(RichText::new(why).small().color(MUTED));
+            }
+            ui.add_enabled_ui(locked.is_none(), |ui| {
+                slider_row(ui, "Scale", &mut self.xform_scale, 10.0..=400.0, "%");
+                slider_row(ui, "Rotate", &mut self.xform_angle, -180.0..=180.0, "°");
+            });
             let pending = (self.xform_scale - 100.0).abs() > 0.01 || self.xform_angle.abs() > 0.01;
             let mut apply = false;
             let mut flip = None;
             let mut free = false;
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-                if ui
-                    .add_enabled(pending, primary_button("Apply"))
-                    .on_hover_text("Scale and rotate the layer about its centre")
-                    .on_disabled_hover_text("Set a scale or angle first")
-                    .clicked()
-                {
-                    apply = true;
-                }
-                if ui
-                    .button("Flip H")
-                    .on_hover_text("Flip the layer horizontally")
-                    .clicked()
-                {
-                    flip = Some(true);
-                }
-                if ui
-                    .button("Flip V")
-                    .on_hover_text("Flip the layer vertically")
-                    .clicked()
-                {
-                    flip = Some(false);
-                }
-                if ui
-                    .add(
-                        egui::Button::new("Free transform…")
-                            .shortcut_text(self.action_keys(ui.ctx(), "xform")),
-                    )
-                    .on_hover_text("Transform on the canvas with handles")
-                    .clicked()
-                {
-                    free = true;
-                }
+            ui.add_enabled_ui(locked.is_none(), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    if ui
+                        .add_enabled(pending, primary_button("Apply"))
+                        .on_hover_text("Scale and rotate the layer about its centre")
+                        .on_disabled_hover_text("Set a scale or angle first")
+                        .clicked()
+                    {
+                        apply = true;
+                    }
+                    if ui
+                        .button("Flip H")
+                        .on_hover_text("Flip the layer horizontally")
+                        .clicked()
+                    {
+                        flip = Some(true);
+                    }
+                    if ui
+                        .button("Flip V")
+                        .on_hover_text("Flip the layer vertically")
+                        .clicked()
+                    {
+                        flip = Some(false);
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new("Free transform…")
+                                .shortcut_text(self.action_keys(ui.ctx(), "xform")),
+                        )
+                        .on_hover_text("Transform on the canvas with handles")
+                        .clicked()
+                    {
+                        free = true;
+                    }
+                })
             });
             // Scale and rotate about the painted centre (smart objects
             // compose this into their transform).
@@ -409,6 +441,10 @@ impl App {
             }
             if rasterize {
                 self.run(&RasterizeLayer { layer: id });
+            }
+            if let Some(action) = contents {
+                self.run_menu_action(action);
+                return;
             }
             if free {
                 self.begin_free_transform();
