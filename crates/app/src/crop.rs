@@ -504,25 +504,60 @@ impl App {
         }
         if let (Some(d), true) = (self.crop.drag, resp.dragged_by(primary)) {
             if let Some(p) = resp.interact_pointer_pos() {
-                let mut to = to_doc(p);
-                // Resizing and drawing snap the pointer; moving snaps the
-                // whole frame's edges and centre (axis-aligned frames only).
-                match d.grip {
-                    Grip::Corner(_) | Grip::Edge(_) | Grip::New if d.start.angle == 0.0 => {
-                        to = self.snap_point(to);
-                    }
-                    _ => self.clear_snap_hint(),
-                }
-                let mut f = drag_frame(&d.start, d.grip, d.press, to, self.crop_ratio());
-                if d.grip == Grip::Move && f.angle == 0.0 {
-                    let (dx, dy) = self.snap_rect_delta(
+                let to = to_doc(p);
+                let ratio = self.crop_ratio();
+                let mut f = drag_frame(&d.start, d.grip, d.press, to, ratio);
+                // Snap what moves (axis-aligned frames only): the dragged
+                // corner, the dragged edge, or the whole frame's edges and
+                // centre; then redo the drag by the snapped amount.
+                let (dx, dy) = if f.angle != 0.0 {
+                    self.clear_snap_hint();
+                    (0.0, 0.0)
+                } else {
+                    let (l, t, r, b) = (
                         f.cx - f.w / 2.0,
                         f.cy - f.h / 2.0,
                         f.cx + f.w / 2.0,
                         f.cy + f.h / 2.0,
                     );
-                    f.cx += dx;
-                    f.cy += dy;
+                    match d.grip {
+                        Grip::Corner(i) => {
+                            let c = f.corners()[i];
+                            let s = self.snap_point(c);
+                            (s.0 - c.0, s.1 - c.1)
+                        }
+                        Grip::New => {
+                            let s = self.snap_point(to);
+                            (s.0 - to.0, s.1 - to.1)
+                        }
+                        Grip::Edge(i) => {
+                            let (vertical, v) = match i {
+                                0 => (false, t),
+                                1 => (true, r),
+                                2 => (false, b),
+                                _ => (true, l),
+                            };
+                            let dv = self.snap_line(vertical, v) - v;
+                            if vertical {
+                                (dv, 0.0)
+                            } else {
+                                (0.0, dv)
+                            }
+                        }
+                        Grip::Move => self.snap_rect_delta(l, t, r, b),
+                        Grip::Rotate => (0.0, 0.0),
+                    }
+                };
+                if dx != 0.0 || dy != 0.0 {
+                    f = if d.grip == Grip::Move {
+                        Frame {
+                            cx: f.cx + dx,
+                            cy: f.cy + dy,
+                            ..f
+                        }
+                    } else {
+                        drag_frame(&d.start, d.grip, d.press, (to.0 + dx, to.1 + dy), ratio)
+                    };
                 }
                 self.crop.frame = Some(f);
             }

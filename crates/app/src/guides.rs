@@ -44,6 +44,8 @@ pub(crate) struct ViewAids {
     move_bounds: Option<Rect>,
     /// The marquee's snapped corners (document space) while dragging.
     marquee: Option<((f32, f32), (f32, f32))>,
+    /// The canvas area on screen last frame (tests and debug tokens).
+    pub(crate) view: Option<egui::Rect>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -298,7 +300,7 @@ impl App {
                 egui::CursorIcon::ResizeVertical
             });
             if let (true, Some(p)) = (resp.dragged_by(primary), resp.interact_pointer_pos()) {
-                d.pos = self.snap_guide(d.vertical, along(d.vertical, p));
+                d.pos = self.snap_line(d.vertical, along(d.vertical, p));
                 self.aids.guide_drag = Some(d);
             }
             if resp.drag_stopped() {
@@ -314,7 +316,14 @@ impl App {
         if !usable {
             return false;
         }
-        let Some(i) = resp.hover_pos().and_then(|p| self.guide_at(p, origin)) else {
+        // A drag is decided only once the pointer has moved, so grab the
+        // guide under the press, not under the pointer now.
+        let pressed_on = resp
+            .drag_started_by(primary)
+            .then(|| ctx.input(|i| i.pointer.press_origin()))
+            .flatten()
+            .and_then(|p| self.guide_at(p, origin));
+        let Some(i) = pressed_on.or_else(|| resp.hover_pos().and_then(|p| self.guide_at(p, origin))) else {
             return false;
         };
         let g = self.editor.doc().guides[i];
@@ -323,7 +332,7 @@ impl App {
         } else {
             egui::CursorIcon::ResizeVertical
         });
-        if resp.drag_started_by(primary) {
+        if pressed_on.is_some() {
             self.begin_snap(&[]);
             // A guide must not snap to where it already is.
             if let Some(lines) = self.aids.lines.as_mut() {
@@ -341,12 +350,16 @@ impl App {
                 vertical: g.is_vertical(),
                 pos: g.pos,
             });
+        } else if resp.drag_started_by(primary) {
+            // Pressed elsewhere and dragged over a guide: the tool's drag.
+            return false;
         }
         true
     }
 
-    /// Snap a dragged guide's position to the other lines.
-    fn snap_guide(&mut self, vertical: bool, pos: f32) -> f32 {
+    /// Snap a position along one axis (a dragged guide, a crop edge) to
+    /// the vertical (x) or horizontal (y) lines.
+    pub(crate) fn snap_line(&mut self, vertical: bool, pos: f32) -> f32 {
         let tol = self.snap_tol();
         let Some(lines) = &self.aids.lines else { return pos };
         let s = if vertical {
@@ -400,6 +413,7 @@ impl App {
     /// document pixels that follow zoom and pan, the pointer's position
     /// marked in the accent, and a drag out of either one adds a guide.
     pub(crate) fn rulers_ui(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        self.aids.view = Some(rect);
         if !self.prefs.show_rulers {
             return;
         }
@@ -539,7 +553,7 @@ impl App {
                 }
             }
             if let (true, Some(p)) = (resp.dragged(), resp.interact_pointer_pos()) {
-                let pos = self.snap_guide(vertical, along(p));
+                let pos = self.snap_line(vertical, along(p));
                 if let Some(d) = self.aids.guide_drag.as_mut() {
                     d.pos = pos;
                 }
@@ -648,5 +662,201 @@ mod tests {
         assert_eq!(ruler_steps(0.55), (200.0, 10));
         assert_eq!(ruler_label(1200.0, 100.0), "1200");
         assert_eq!(ruler_label(0.5, 0.5), "0.5");
+    }
+}
+
+/// Real pointer input through whole frames: rulers, guides, the crop
+/// frame and snapping, exercised the way a mouse would.
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+    use egui::{Event, PointerButton};
+
+    /// The demo with no dialog and no autosave while frames run.
+    fn launch() -> (App, egui::Context) {
+        let mut app = App::launch(&["--demo".to_string()]);
+        app.dialog = None;
+        app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        (app, ctx)
+    }
+
+    fn frame(app: &mut App, ctx: &egui::Context, events: Vec<Event>) {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(raw, |ctx| app.frame(ctx));
+    }
+
+    fn button(pos: Pos2, pressed: bool) -> Event {
+        Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// Press at `a`, move in steps to `b`, release there.
+    fn drag(app: &mut App, ctx: &egui::Context, a: Pos2, b: Pos2) {
+        frame(app, ctx, vec![Event::PointerMoved(a)]);
+        frame(app, ctx, vec![button(a, true)]);
+        for k in 1..=6 {
+            let p = a + (b - a) * (k as f32 / 6.0);
+            frame(app, ctx, vec![Event::PointerMoved(p)]);
+        }
+        frame(app, ctx, vec![button(b, false)]);
+        frame(app, ctx, vec![]);
+    }
+
+    /// Press at the first point, glide through the rest, release at the last.
+    fn drag_path(app: &mut App, ctx: &egui::Context, pts: &[Pos2]) {
+        frame(app, ctx, vec![Event::PointerMoved(pts[0])]);
+        frame(app, ctx, vec![button(pts[0], true)]);
+        for w in pts.windows(2) {
+            for k in 1..=4 {
+                let p = w[0] + (w[1] - w[0]) * (k as f32 / 4.0);
+                frame(app, ctx, vec![Event::PointerMoved(p)]);
+            }
+        }
+        frame(app, ctx, vec![button(*pts.last().unwrap(), false)]);
+        frame(app, ctx, vec![]);
+    }
+
+    #[test]
+    fn the_move_tool_snaps_a_layer_back_onto_the_canvas_edge() {
+        let (mut app, ctx) = launch();
+        app.prefs.snap = true;
+        let bg = app.editor.doc().layers()[0].id;
+        app.set_active(Some(bg));
+        app.tool = Tool::Move;
+        frame(&mut app, &ctx, vec![]);
+        let steps = app.editor.history().len();
+        // Out 50 px and back to 3 px off: the left edge snaps back to 0.
+        let a = screen(&app, 900.0, 600.0);
+        drag_path(
+            &mut app,
+            &ctx,
+            &[a, a + egui::vec2(50.0, 0.0), a + egui::vec2(3.0, 0.0)],
+        );
+        assert_eq!(app.editor.history().len(), steps, "snapped home: no move at all");
+        // A real move goes through.
+        drag_path(&mut app, &ctx, &[a, a + egui::vec2(60.0, 0.0)]);
+        assert_eq!(app.editor.history().last().copied(), Some("Move"));
+        let x = app.editor.doc().layers()[0]
+            .pixels()
+            .unwrap()
+            .content_bounds()
+            .unwrap()
+            .x;
+        assert!(
+            x as f32 > 50.0 / app.zoom,
+            "moved right by about 60 screen px: {x}"
+        );
+    }
+
+    /// Document point → screen.
+    fn screen(app: &App, x: f32, y: f32) -> Pos2 {
+        app.aids.view.unwrap().min + app.pan + egui::vec2(x, y) * app.zoom
+    }
+
+    #[test]
+    fn a_guide_is_dragged_out_moved_and_dropped_back_on_the_ruler() {
+        let (mut app, ctx) = launch();
+        app.prefs.show_rulers = true;
+        app.prefs.snap = false;
+        frame(&mut app, &ctx, vec![]);
+        let view = app.aids.view.unwrap();
+        // Out of the top ruler down to y = 300: a horizontal guide.
+        let start = egui::pos2(view.center().x, view.min.y + RULER / 2.0);
+        let to = screen(&app, 900.0, 300.0);
+        drag(&mut app, &ctx, start, to);
+        let g = app.editor.doc().guides.clone();
+        assert_eq!(g.len(), 1, "one guide added");
+        assert!(!g[0].is_vertical());
+        assert!(
+            (g[0].pos - 300.0).abs() <= 1.0 / app.zoom,
+            "at y ≈ 300: {}",
+            g[0].pos
+        );
+        assert_eq!(app.editor.history().last().copied(), Some("New guide"));
+
+        // The Move tool drags it to y = 500.
+        app.tool = Tool::Move;
+        let on = screen(&app, 700.0, g[0].pos);
+        let to = screen(&app, 700.0, 500.0);
+        drag(&mut app, &ctx, on, to);
+        let pos = app.editor.doc().guides[0].pos;
+        assert!((pos - 500.0).abs() <= 1.0 / app.zoom, "moved to ≈ 500: {pos}");
+        assert_eq!(app.editor.history().last().copied(), Some("Move guide"));
+
+        // Dropped back on the ruler, it is deleted.
+        let on = screen(&app, 700.0, pos);
+        drag(&mut app, &ctx, on, egui::pos2(on.x, view.min.y + 4.0));
+        assert!(app.editor.doc().guides.is_empty());
+        assert_eq!(app.editor.history().last().copied(), Some("Delete guide"));
+
+        // Locked guides stay put: the Move tool moves the layer instead.
+        app.run(&AddGuide {
+            guide: Guide::vertical(400.0),
+        });
+        app.prefs.lock_guides = true;
+        let on = screen(&app, 400.0, 600.0);
+        let to = screen(&app, 460.0, 600.0);
+        drag(&mut app, &ctx, on, to);
+        assert_eq!(app.editor.doc().guides[0].pos, 400.0);
+    }
+
+    #[test]
+    fn dragging_a_crop_corner_then_enter_crops() {
+        let (mut app, ctx) = launch();
+        app.prefs.snap = false;
+        app.tool = Tool::Crop;
+        frame(&mut app, &ctx, vec![]);
+        // The top-left handle (the bottom-right one sits by the zoom pill).
+        let corner = screen(&app, 0.0, 0.0);
+        let to = screen(&app, 300.0, 200.0);
+        drag(&mut app, &ctx, corner, to);
+        let r = app.crop.frame.unwrap().rect();
+        let slack = (1.0 / app.zoom).ceil() as i32;
+        assert_eq!((r.right(), r.bottom()), (1800, 1205));
+        assert!((r.x - 300).abs() <= slack && (r.y - 200).abs() <= slack, "{r:?}");
+        let key = |pressed| Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut app, &ctx, vec![key(true), key(false)]);
+        assert_eq!((app.editor.doc().width, app.editor.doc().height), (r.w, r.h));
+        assert_eq!(app.editor.history().last().copied(), Some("Crop"));
+    }
+
+    #[test]
+    fn a_crop_corner_snaps_to_a_guide() {
+        let (mut app, ctx) = launch();
+        app.prefs.snap = true;
+        app.run(&AddGuide {
+            guide: Guide::vertical(1000.0),
+        });
+        app.tool = Tool::Crop;
+        frame(&mut app, &ctx, vec![]);
+        // Release 3 screen pixels left of the guide: within 6, so it snaps.
+        let corner = screen(&app, 0.0, 0.0);
+        let near = screen(&app, 1000.0, 300.0) - egui::vec2(3.0, 0.0);
+        drag(&mut app, &ctx, corner, near);
+        let f = app.crop.frame.unwrap();
+        let left = f.cx - f.w / 2.0;
+        assert!(
+            (left - 1000.0).abs() < 0.01,
+            "the left edge sits on the guide: {left}"
+        );
+        assert!((f.cx + f.w / 2.0 - 1800.0).abs() < 0.01, "the right edge stays");
     }
 }
