@@ -84,6 +84,71 @@ impl App {
         Some(shortcut_text(ctx, m, k))
     }
 
+    /// Arrow keys nudge by a pixel (Shift: ten): the active layer with the
+    /// Move tool, the selection outline with a selection tool. A burst of
+    /// nudges is one undo step.
+    pub(crate) fn nudge_keys(&mut self, ctx: &egui::Context) {
+        use egui::Modifiers as M;
+        // An open text session uses the arrows for its caret.
+        if self.text_editing() {
+            return;
+        }
+        let (mut dx, mut dy) = (0, 0);
+        ctx.input_mut(|i| {
+            for (key, (x, y)) in [
+                (Key::ArrowLeft, (-1, 0)),
+                (Key::ArrowRight, (1, 0)),
+                (Key::ArrowUp, (0, -1)),
+                (Key::ArrowDown, (0, 1)),
+            ] {
+                for (m, step) in [(M::NONE, 1), (M::SHIFT, 10)] {
+                    while i.consume_key(m, key) {
+                        dx += x * step;
+                        dy += y * step;
+                    }
+                }
+            }
+        });
+        if (dx, dy) != (0, 0) {
+            self.nudge(dx, dy);
+        }
+    }
+
+    /// Move the active layer (Move tool) or the selection outline
+    /// (selection tools) by whole pixels.
+    pub(crate) fn nudge(&mut self, dx: i32, dy: i32) {
+        let selecting = matches!(
+            self.tool,
+            Tool::RectSelect | Tool::EllipseSelect | Tool::Lasso | Tool::PolyLasso | Tool::Wand
+        );
+        if self.tool == Tool::Move {
+            let Some(layer) = self.active else { return };
+            if let Some(why) = self.lock_block(layer_actions::LockNeed::Move) {
+                self.status = why.into();
+                return;
+            }
+            self.run_coalescing(&MoveLayer { layer, dx, dy }, &format!("nudge-{layer}"));
+        } else if selecting {
+            let Some(sel) = self.editor.doc().selection.as_ref() else {
+                return;
+            };
+            let m = sel.to_mask();
+            if m.default > 0.0 {
+                return; // everything is selected: nothing to move
+            }
+            let moved = Selection::from_mask(&lumenply_doc::Mask {
+                tiles: m.tiles.translated(dx, dy),
+                ..m
+            });
+            self.run_coalescing(
+                &SetSelection {
+                    selection: Some(moved),
+                },
+                "nudge-selection",
+            );
+        }
+    }
+
     /// Cmd-click on a layer thumbnail: its pixels as the selection (Shift
     /// adds, Alt subtracts, both intersect).
     pub(crate) fn load_layer_pixels(&mut self, layer: LayerId, op: CombineOp) {
@@ -241,5 +306,55 @@ mod tests {
         assert_eq!(app.tab_infos().len(), tabs + 1);
         assert_eq!(app.editor.doc().layers().len(), 3);
         assert!(app.any_unsaved());
+    }
+}
+
+#[cfg(test)]
+mod nudge_tests {
+    use super::*;
+    use lumenply_tiles::{Rect, Rgba};
+
+    #[test]
+    fn arrow_nudges_move_the_layer_or_the_selection_in_one_step() {
+        let mut doc = Document::new(40, 40);
+        let id = doc.add_pixel_layer("dot");
+        doc.layer_mut(id)
+            .unwrap()
+            .pixels_mut()
+            .unwrap()
+            .set_pixel(5, 5, Rgba::new(1.0, 0.0, 0.0, 1.0));
+        let mut app = App::launch(&[]);
+        app.open_in_new_tab(Editor::new(doc), None);
+        app.dialog = None;
+        app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
+        app.set_active(Some(id));
+        app.tool = Tool::Move;
+        let steps = app.editor.history().len();
+        app.nudge(1, 0);
+        app.nudge(10, 0);
+        app.nudge(0, -1);
+        let px = app.editor.doc().layer(id).unwrap().pixels().unwrap();
+        assert_eq!(px.get_pixel(16, 4).a, 1.0);
+        assert_eq!(px.get_pixel(5, 5).a, 0.0);
+        assert_eq!(app.editor.history().len(), steps + 1, "one undo step");
+        // A selection tool nudges the outline instead.
+        app.run(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(2, 2, 4, 4))),
+        });
+        app.tool = Tool::RectSelect;
+        app.nudge(3, 1);
+        let s = app.editor.doc().selection.clone().unwrap();
+        assert_eq!((s.value(5, 3), s.value(4, 2), s.value(8, 6)), (1.0, 0.0, 1.0));
+        assert_eq!(
+            app.editor
+                .doc()
+                .layer(id)
+                .unwrap()
+                .pixels()
+                .unwrap()
+                .get_pixel(16, 4)
+                .a,
+            1.0
+        );
     }
 }

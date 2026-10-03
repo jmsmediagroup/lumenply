@@ -1162,6 +1162,12 @@ impl App {
                     let fill = self
                         .active_layer()
                         .is_some_and(|l| l.fill_layer().is_some() || l.shape_layer().is_some());
+                    // Alt-drag moves a copy, as in Photoshop.
+                    if ctx.input(|i| i.modifiers.alt)
+                        && (self.active_is_pixel() || self.active_is_text() || fill)
+                    {
+                        self.duplicate_active();
+                    }
                     if let Some(why) = self.lock_block(layer_actions::LockNeed::Move) {
                         self.status = why.into();
                     } else if self.active_is_pixel() || self.active_is_text() || fill {

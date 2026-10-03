@@ -1136,6 +1136,13 @@ impl App {
             if i.consume_key(M::COMMAND | M::ALT, Key::R) {
                 fired.push("select-mask");
             }
+            // Bring to front / send to back, before the bare [ ] brush keys.
+            if i.consume_key(M::COMMAND | M::SHIFT, Key::CloseBracket) {
+                fired.push("layer-front");
+            }
+            if i.consume_key(M::COMMAND | M::SHIFT, Key::OpenBracket) {
+                fired.push("layer-back");
+            }
             for (id, ..) in session::SHORTCUTS {
                 if let Some((m, k)) = session::resolve_chord(&self.prefs, id) {
                     if i.consume_key(m, k) {
@@ -1160,6 +1167,7 @@ impl App {
             };
             self.run_menu_action(id);
         }
+        self.nudge_keys(ctx);
         // Canvas zoom: Cmd+= / Cmd+−, and Cmd+0 / Cmd+1 alongside the plain
         // 0 / 1 keys (what Photoshop hands expect). `|` consumes both
         // spellings of zoom-in.

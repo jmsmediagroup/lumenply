@@ -398,7 +398,10 @@ None of these could be tested in the container.
       Edit ▸ Stroke (inside/centre/outside, width, opacity, foreground
       colour), Cmd-click a layer thumbnail to load its pixels as the
       selection (Shift adds, Alt subtracts, both intersect), Bring to Front /
-      Send to Back (Shift+Cmd+] / [), Image ▸ Duplicate
+      Send to Back (Shift+Cmd+] / [), Image ▸ Duplicate; arrow keys nudge
+      the layer (Move tool) or the selection outline (selection tools) by 1
+      px, Shift by 10, a burst as one undo step; Alt-drag with the Move tool
+      moves a copy
 - [x] Merge selected layers (Cmd+E with several layers selected, "Merge
       layers"): the selected visible siblings composite into the topmost
       one's slot and name; hidden ones stay; picture unchanged (tested)
