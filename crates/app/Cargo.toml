@@ -18,6 +18,10 @@ path = "src/main.rs"
 # say this build doesn't include them).
 default = ["ai"]
 ai = ["dep:lumenply-ai"]
+# The user-session test harness (src/uitest, docs/testing/harness.md):
+# drives the real UI headlessly with input events, renders it offscreen
+# and records each session as a video. `lumenply-app --uitest`.
+uitest = ["dep:egui-wgpu", "dep:wgpu", "dep:pollster", "dep:fontdue"]
 
 [dependencies]
 lumenply-tiles.workspace = true
@@ -38,6 +42,11 @@ rfd = "0.15"
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
+# uitest only: offscreen rendering of the UI and the video captions.
+egui-wgpu = { version = "0.29", default-features = false, optional = true }
+wgpu = { workspace = true, optional = true }
+pollster = { workspace = true, optional = true }
+fontdue = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

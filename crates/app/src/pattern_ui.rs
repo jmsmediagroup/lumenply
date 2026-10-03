@@ -484,7 +484,7 @@ impl App {
 
     /// Edit ▸ Import patterns…
     pub(crate) fn pick_import_patterns(&mut self) {
-        if let Some(p) = rfd::FileDialog::new()
+        if let Some(p) = crate::sys_dialog::FileDialog::new()
             .set_title("Import patterns")
             .add_filter("Photoshop patterns", &["pat", "PAT"])
             .pick_file()

@@ -70,6 +70,15 @@ pub(crate) struct ExportAsState {
     shown: Option<ExportSettings>,
 }
 
+impl ExportAsState {
+    /// A preview is being encoded in the background (the UI test harness
+    /// waits for it before it calls the app idle).
+    #[cfg(feature = "uitest")]
+    pub(crate) fn encoding(&self) -> bool {
+        self.job.is_some()
+    }
+}
+
 /// The output for `s`: resampled, encoded, and (for JPEG) decoded back so
 /// the preview shows the compression.
 fn encode(flat: &Raster, s: ExportSettings) -> Encoded {

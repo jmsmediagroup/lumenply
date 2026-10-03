@@ -411,7 +411,7 @@ impl App {
 
     /// File ▸ Import brushes…
     pub(crate) fn pick_import_brushes(&mut self) {
-        if let Some(p) = rfd::FileDialog::new()
+        if let Some(p) = crate::sys_dialog::FileDialog::new()
             .set_title("Import brushes")
             .add_filter("Photoshop brushes", &["abr", "ABR"])
             .pick_file()
