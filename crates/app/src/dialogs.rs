@@ -107,8 +107,8 @@ pub(crate) fn enforce_extension(p: PathBuf, allowed: &[&str]) -> PathBuf {
 }
 
 impl App {
-    pub(crate) fn file_dialog(&self) -> rfd::FileDialog {
-        let mut d = rfd::FileDialog::new();
+    pub(crate) fn file_dialog(&self) -> crate::sys_dialog::FileDialog {
+        let mut d = crate::sys_dialog::FileDialog::new();
         if let Some(dir) = dialog_start_dir(self.path.as_deref(), &self.recent) {
             d = d.set_directory(dir);
         }

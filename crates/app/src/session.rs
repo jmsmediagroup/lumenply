@@ -282,6 +282,12 @@ pub(crate) fn data_dir() -> Option<PathBuf> {
             None => base,
         });
     }
+    // A scratch profile in place of the user's: the UI test harness
+    // (uitest/) always sets it, so a session never reads or writes the
+    // real recent list, prefs or autosave.
+    if let Some(dir) = std::env::var_os("LUMENPLY_DATA_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(|h| {

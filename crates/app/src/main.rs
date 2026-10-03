@@ -87,10 +87,13 @@ mod smart_guides;
 mod soft_proof;
 mod start;
 mod status;
+mod sys_dialog;
 mod text_edit;
 mod text_ui;
 mod theme;
 mod tools;
+#[cfg(feature = "uitest")]
+mod uitest;
 
 pub(crate) use canvas::*;
 pub(crate) use dialogs::Dialog;
@@ -100,6 +103,12 @@ pub(crate) use tools::Tool;
 
 fn main() -> Result<(), eframe::Error> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `--uitest [SCENARIO...]`: run user-session scenarios headlessly and
+    // record them (builds with the `uitest` feature; docs/testing/harness.md).
+    #[cfg(feature = "uitest")]
+    if args.first().is_some_and(|a| a == "--uitest") {
+        std::process::exit(uitest::runner::main(&args[1..]));
+    }
     // `--write-icon PATH SIZE`: the app icon as a PNG (packaging builds the
     // macOS .icns from these), then exit.
     if let Some(i) = args.iter().position(|a| a == "--write-icon") {

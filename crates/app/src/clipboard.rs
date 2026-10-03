@@ -59,8 +59,13 @@ fn from_rgba8(w: usize, h: usize, bytes: &[u8]) -> Raster {
     r
 }
 
-/// The system clipboard's image, if any (never touched by unit tests).
+/// The system clipboard's image, if any (never touched by unit tests; a
+/// UI test session has an in-memory clipboard of its own).
 fn system_image() -> Option<(usize, usize, Vec<u8>)> {
+    #[cfg(feature = "uitest")]
+    if let Some(image) = crate::uitest::seam::clipboard_image() {
+        return image;
+    }
     if cfg!(test) {
         return None;
     }
@@ -69,6 +74,10 @@ fn system_image() -> Option<(usize, usize, Vec<u8>)> {
 }
 
 fn set_system_image(w: usize, h: usize, bytes: &[u8]) {
+    #[cfg(feature = "uitest")]
+    if crate::uitest::seam::set_clipboard_image(w, h, bytes) {
+        return;
+    }
     if cfg!(test) {
         return;
     }
@@ -194,6 +203,13 @@ impl App {
             self.paste_pixels(shift);
         }
     }
+}
+
+/// What the macOS key monitor reports for a Cmd+V (Shift+Cmd+V with
+/// `shift`): the UI test harness stands in for AppKit with it.
+#[cfg(feature = "uitest")]
+pub(crate) fn os_paste_key(shift: bool) {
+    PASTE_KEY.store(if shift { 2 } else { 1 }, Ordering::Relaxed);
 }
 
 /// Starts the macOS Cmd+V monitor (main thread, after the app exists).
