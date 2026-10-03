@@ -31,6 +31,8 @@ session.json, keyframes/*.png (failures/*.png when a step fails).
   --still PNG [ARG...]  launch with ARGs, wait until idle, save the
                      rendered window (no pointer or caption) and exit;
                      compare with `lumenply-app ARG... --screenshot PNG`
+                     (--tree and --still take the rest of the line: put
+                     --size and --ppp before them)
 ";
 
 fn parse_size(s: &str) -> Option<egui::Vec2> {

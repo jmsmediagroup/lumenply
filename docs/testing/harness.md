@@ -33,6 +33,9 @@ cargo test --release -p lumenply-app --features uitest uitest_ -- --ignored
   same as `lumenply-app [APP ARGS] --window-size 1440x900 --screenshot out.png` from
   the real window, for comparing the two.
 
+Both take the rest of the command line as the app's arguments, so `--size` and `--ppp`
+go before them: `--uitest --ppp 2 --still out.png --demo`.
+
 Under `cargo test`, `LUMENPLY_UITEST_OUT` moves the output and
 `LUMENPLY_UITEST_RECORD=0` skips rendering and video.
 
