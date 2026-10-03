@@ -1336,3 +1336,56 @@ fn sync_overhead_per_edit() {
         "  keys {keys:.3} ms, sync {sync:.3} ms, blob refs of one version {refs:.3} ms ({versions} versions)"
     );
 }
+
+/// The tiles a layer's pixels are made of, by address.
+fn tile_addrs(doc: &Document, layer: LayerId) -> Vec<usize> {
+    let store = doc.layer(layer).and_then(|l| l.pixels()).expect("a pixel layer");
+    let mut v: Vec<usize> = store
+        .coords()
+        .map(|c| Arc::as_ptr(store.tile_arc(c).unwrap()) as usize)
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn undo_and_redo_keep_the_pixels_of_layers_they_do_not_change() {
+    let mut ed = layered_editor();
+    let (base, top) = (id_of(&ed, "Base"), id_of(&ed, "Top"));
+    // Both layers' pixels come from stroke chains, which projecting from
+    // scratch evaluates again (new tiles).
+    ed.execute(&dab(base, 100.0, 220.0, [0.0, 1.0, 0.0, 1.0]))
+        .unwrap();
+    ed.execute(&dab(top, 470.0, 270.0, [1.0, 0.0, 0.0, 1.0])).unwrap();
+    ed.execute(&dab(top, 520.0, 300.0, [0.0, 0.0, 1.0, 1.0])).unwrap();
+    let kept = tile_addrs(ed.doc(), base);
+    for step in ["undo", "undo", "redo", "jump back", "jump forward"] {
+        // As on a large document, whose layers outgrow the render cache.
+        ed.renderer().cache.clear();
+        ed.renderer().wholes.clear();
+        match step {
+            "undo" => {
+                ed.undo().unwrap();
+            }
+            "redo" => {
+                ed.redo().unwrap();
+            }
+            "jump back" => ed.jump_to(ed.history().len() - 1),
+            _ => ed.jump_to(ed.history().len() + 1),
+        }
+        // Still exactly the version's document...
+        let projected = lumenply_graph::project(ed.graph(), ed.doc_state(), ed.blobs(), ed.renderer());
+        assert_same_doc(ed.doc(), &projected);
+        // ...with the untouched layer's pixels carried over, not remade.
+        assert_eq!(
+            tile_addrs(ed.doc(), base),
+            kept,
+            "{step}: Base was evaluated again"
+        );
+    }
+    // Undoing the stroke on Base itself does make its pixels again.
+    ed.jump_to(ed.history().len() - 2);
+    ed.renderer().cache.clear();
+    ed.undo().unwrap();
+    assert_ne!(tile_addrs(ed.doc(), base), kept);
+}

@@ -147,6 +147,8 @@ struct Step {
     /// The document this version stands for, projected when
     /// [`Editor::state`] first asks for it.
     doc: OnceLock<Document>,
+    /// This version's [`Editor::revision`].
+    revision: u64,
 }
 
 impl Step {
@@ -156,12 +158,14 @@ impl Step {
         affected: Option<lumenply_tiles::Rect>,
         bytes: usize,
     ) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Step {
             state: Arc::new(state),
             affected,
             bytes,
             blob_ids,
             doc: OnceLock::new(),
+            revision: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
 }
@@ -353,6 +357,26 @@ impl Editor {
         self.last_target
     }
 
+    /// A number naming the document state the editor is at, unique to
+    /// it in this process: every edit (and every tick of a coalesced
+    /// drag) makes a new one, undo and redo come back to earlier ones.
+    /// "Unsaved" is "the revision differs from the one saved": unlike the
+    /// history's length, it tells a different edit made after undoing
+    /// from the saved one, and keeps changing once the history is full.
+    pub fn revision(&self) -> u64 {
+        self.history.current_version().payload.revision
+    }
+
+    /// The revision of every kept version, oldest first: the undo steps,
+    /// the current one at `history().len()`, then the redo steps.
+    pub fn revisions(&self) -> Vec<u64> {
+        self.history
+            .versions()
+            .iter()
+            .map(|v| v.payload.revision)
+            .collect()
+    }
+
     /// Estimated bytes the undo stack keeps alive beyond the live document.
     pub fn history_bytes(&self) -> usize {
         let v = self.history.versions();
@@ -445,14 +469,31 @@ impl Editor {
         self.renderer.prune();
     }
 
-    /// The current version's document.
-    fn project_current(&mut self) -> Document {
+    /// The current version's graph and state, to project another version
+    /// from later (see [`Editor::project_current`]).
+    fn current_parts(&self) -> (Arc<Graph>, Arc<DocState>) {
+        let v = self.history.current_version();
+        (v.graph.clone(), v.payload.state.clone())
+    }
+
+    /// The current version's document. `left` is the version the editor
+    /// was at, whose document `self.doc` still is: layers whose content
+    /// didn't change between the two keep their pixels from it rather
+    /// than being evaluated again.
+    fn project_current(&mut self, left: (Arc<Graph>, Arc<DocState>)) -> Document {
         let v = self.history.current_version_mut();
         // A projection made for `state` serves again.
         if let Some(doc) = v.payload.doc.take() {
             return doc;
         }
-        graph_sync::project(&v.graph, &v.payload.state, &self.blobs, &self.renderer)
+        let v = self.history.current_version();
+        graph_sync::project_reusing(
+            &v.graph,
+            &v.payload.state,
+            &self.blobs,
+            &self.renderer,
+            (&left.0, &left.1, &self.doc),
+        )
     }
 
     /// Apply a command, recording an undo step. On error the document is
@@ -521,11 +562,12 @@ impl Editor {
         if !self.coalescing(key) || self.history.cursor() == 0 {
             return false;
         }
+        let left = self.current_parts();
         let dropped = self.history.rollback(1);
         self.coalesce_key = None;
         self.last_target = None;
         self.last_affected = dropped.first().and_then(|v| v.payload.affected);
-        self.doc = self.project_current();
+        self.doc = self.project_current(left);
         self.collect_garbage();
         true
     }
@@ -577,9 +619,10 @@ impl Editor {
     pub fn undo(&mut self) -> Option<String> {
         self.coalesce_key = None;
         self.last_target = None;
+        let left = self.current_parts();
         let (label, affected) = self.step_back()?;
         self.last_affected = affected;
-        self.doc = self.project_current();
+        self.doc = self.project_current(left);
         Some(label)
     }
 
@@ -587,9 +630,10 @@ impl Editor {
     pub fn redo(&mut self) -> Option<String> {
         self.coalesce_key = None;
         self.last_target = None;
+        let left = self.current_parts();
         let (label, affected) = self.step_forward()?;
         self.last_affected = affected;
-        self.doc = self.project_current();
+        self.doc = self.project_current(left);
         Some(label)
     }
 
@@ -604,6 +648,7 @@ impl Editor {
             });
         };
         let mut moved = false;
+        let left = self.current_parts();
         while self.history.cursor() > steps {
             self.coalesce_key = None;
             self.last_target = None;
@@ -619,7 +664,7 @@ impl Editor {
             moved = true;
         }
         if moved {
-            self.doc = self.project_current();
+            self.doc = self.project_current(left);
         }
         if let Some(a) = acc {
             self.last_affected = a;
@@ -656,6 +701,13 @@ impl Editor {
             .iter()
             .map(|v| v.label.as_str())
             .collect()
+    }
+
+    /// Label of the oldest state kept: "Open" until the history limit
+    /// drops it, then the label of the step that made the oldest state
+    /// left (that state is no longer the opened document).
+    pub fn base_label(&self) -> &str {
+        &self.history.versions()[0].label
     }
 
     /// Labels of steps that were undone and can be redone, in redo order.
@@ -711,8 +763,9 @@ impl Editor {
         self.coalesce_key = None;
         self.last_target = None;
         self.last_affected = self.newest_affected(n);
+        let left = self.current_parts();
         self.history.rollback(n);
-        self.doc = self.project_current();
+        self.doc = self.project_current(left);
         self.collect_garbage();
     }
 }
@@ -1023,10 +1076,13 @@ mod tests {
     fn history_limit_is_enforced() {
         let mut ed = Editor::new(Document::new(8, 8));
         ed.history_limit = 3;
+        assert_eq!(ed.base_label(), "Open");
         for i in 0..5 {
             ed.execute(&AddPixelLayer::new(format!("L{i}"))).unwrap();
         }
         assert_eq!(ed.history().len(), 3);
+        // The oldest state kept is the one after the second layer.
+        assert_eq!(ed.base_label(), "Add layer 'L1'");
 
         // Lowering the limit takes full effect on the next edit, not one
         // entry at a time.
@@ -1084,5 +1140,70 @@ mod tests {
         }
         assert_eq!(ed.history().len(), 1);
         assert!(ed.can_undo());
+    }
+
+    #[test]
+    fn revisions_name_document_states_not_history_lengths() {
+        let mut ed = Editor::new(Document::new(8, 8));
+        let opened = ed.revision();
+        ed.execute(&AddPixelLayer::new("A")).unwrap();
+        ed.execute(&AddPixelLayer::new("B")).unwrap();
+        let saved = ed.revision();
+        assert_ne!(saved, opened);
+        // Undo and redo come back to the very same revision.
+        ed.undo();
+        let one = ed.revision();
+        assert_ne!(one, saved);
+        ed.redo();
+        assert_eq!(ed.revision(), saved);
+        // A different edit after undoing has as many steps as the saved
+        // state but is another document: another revision.
+        ed.undo();
+        ed.execute(&AddPixelLayer::new("C")).unwrap();
+        assert_eq!(ed.history().len(), 2);
+        assert_ne!(ed.revision(), saved);
+        ed.undo();
+        assert_eq!(ed.revision(), one);
+        assert_eq!(ed.revisions().len(), 3); // Open, A, C (redoable)
+        assert_eq!(ed.revisions()[1], one);
+
+        // With the history full every edit drops the oldest step: the
+        // length stays put, the revision doesn't.
+        let mut ed = Editor::new(Document::new(8, 8));
+        ed.history_limit = 2;
+        let mut seen = vec![ed.revision()];
+        for i in 0..4 {
+            ed.execute(&AddPixelLayer::new(format!("L{i}"))).unwrap();
+            assert!(!seen.contains(&ed.revision()), "edit {i} reused a revision");
+            seen.push(ed.revision());
+        }
+        assert_eq!(ed.history().len(), 2);
+        assert_eq!(ed.revisions(), seen[2..].to_vec());
+
+        // Each tick of a slider drag is a new state; so is every editor's
+        // first version (two documents never share a revision).
+        let mut ed = Editor::new(Document::new(8, 8));
+        ed.execute(&AddPixelLayer::new("L")).unwrap();
+        let id = ed.doc().layers()[0].id;
+        ed.execute_coalescing(
+            &SetOpacity {
+                layer: id,
+                opacity: 0.5,
+            },
+            "op",
+        )
+        .unwrap();
+        let tick = ed.revision();
+        ed.execute_coalescing(
+            &SetOpacity {
+                layer: id,
+                opacity: 0.4,
+            },
+            "op",
+        )
+        .unwrap();
+        assert_ne!(ed.revision(), tick);
+        assert_eq!(ed.history().len(), 2);
+        assert_ne!(Editor::new(Document::new(8, 8)).revision(), opened);
     }
 }

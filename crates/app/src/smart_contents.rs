@@ -73,7 +73,7 @@ impl App {
         };
         match parent.editor.execute(&cmd) {
             Ok(()) => {
-                self.saved_rev = self.editor.history().len();
+                self.saved_rev = self.editor.revision();
                 self.status = format!("Updated smart object '{}'", link.name);
                 true
             }
@@ -177,7 +177,7 @@ mod tests {
         app.run_menu_action("save");
         assert!(app.status.starts_with("Updated smart object"), "{}", app.status);
         assert_eq!(
-            app.editor.history().len(),
+            app.editor.revision(),
             app.saved_rev,
             "the contents tab counts as saved"
         );

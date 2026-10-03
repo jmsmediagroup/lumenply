@@ -407,7 +407,7 @@ impl App {
         match crate::project_io::ProjectSnapshot::of(&self.editor).save(std::path::Path::new(path)) {
             Ok(_) => {
                 self.path = Some(PathBuf::from(path));
-                self.saved_rev = self.editor.history().len();
+                self.saved_rev = self.editor.revision();
                 self.recent = session::push_recent(path);
                 if self.any_unsaved() {
                     // Other documents still need their backups: rewrite
@@ -1022,7 +1022,7 @@ impl App {
                             footer(ui, |ui| {
                                 if ui.add(primary_button("Save and quit")).clicked() || enter {
                                     self.save_live();
-                                    if self.editor.history().len() == self.saved_rev {
+                                    if self.editor.revision() == self.saved_rev {
                                         self.allow_close = true;
                                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                     }
@@ -1049,7 +1049,7 @@ impl App {
                             footer(ui, |ui| {
                                 if ui.add(primary_button("Save and close")).clicked() || enter {
                                     self.save_live();
-                                    if self.editor.history().len() == self.saved_rev {
+                                    if self.editor.revision() == self.saved_rev {
                                         self.force_close_tab(i);
                                     }
                                     keep = false;
@@ -1524,7 +1524,7 @@ fn anchor_grid(ui: &mut egui::Ui, anchor: &mut (f32, f32)) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -1569,6 +1569,48 @@ mod tests {
         assert_eq!(dialog_start_dir(None, &[]), None);
         // A bare file name has no usable folder.
         assert_eq!(dialog_start_dir(Some(Path::new("loose.lumen")), &[]), None);
+    }
+
+    /// What a click in the middle of the window lands on after `frames`
+    /// frames.
+    pub(crate) fn layer_at_centre(app: &mut App, ctx: &egui::Context, frames: usize) -> Option<egui::Id> {
+        for _ in 0..frames {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            let _ = ctx.run(raw, |ctx| app.frame(ctx));
+        }
+        ctx.layer_id_at(egui::pos2(720.0, 450.0)).map(|l| l.id)
+    }
+
+    #[test]
+    fn a_dialog_shown_again_after_another_is_still_clickable() {
+        let mut app = crate::a11y_tests::launch(&["--demo".to_string()]);
+        let ctx = crate::a11y_tests::ctx();
+        let new = egui::Id::new("New document");
+        app.dialog = Some(Dialog::New(800, 600, 72.0));
+        assert_eq!(layer_at_centre(&mut app, &ctx, 4), Some(new));
+        app.dialog = None;
+        layer_at_centre(&mut app, &ctx, 2);
+        app.dialog = Some(Dialog::CanvasSize(800, 600, (0.5, 0.5)));
+        assert_eq!(
+            layer_at_centre(&mut app, &ctx, 4),
+            Some(egui::Id::new("Canvas size"))
+        );
+        app.dialog = None;
+        layer_at_centre(&mut app, &ctx, 2);
+        // The second time: it used to sit under the backdrop, which took
+        // every click.
+        app.dialog = Some(Dialog::New(800, 600, 72.0));
+        assert_eq!(layer_at_centre(&mut app, &ctx, 4), Some(new));
+        assert_ne!(
+            layer_at_centre(&mut app, &ctx, 1),
+            Some(egui::Id::new("modal-backdrop"))
+        );
     }
 
     #[test]

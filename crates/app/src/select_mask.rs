@@ -420,11 +420,11 @@ impl App {
             layer: st.layer,
             sample: st.sample_source(st.layer),
         };
-        let before = self.editor.history().len();
+        let before = self.editor.revision();
         let t = std::time::Instant::now();
         self.run(&cmd);
         let secs = t.elapsed().as_secs_f32();
-        if self.editor.history().len() == before {
+        if self.editor.revision() == before {
             return; // `run` reported the error
         }
         if st.output.makes_layer() {

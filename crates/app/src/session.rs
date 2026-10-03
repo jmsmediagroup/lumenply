@@ -438,16 +438,29 @@ pub(crate) fn remove_autosave() {
 /// the UI thread, replacing the previous set. Project saves are atomic, so
 /// a crash mid-write never leaves a corrupt backup.
 pub(crate) fn autosave_all(docs: Vec<(crate::project_io::ProjectSnapshot, Option<PathBuf>)>) {
-    std::thread::spawn(move || write_backups(&docs));
+    // The folders are named here, on the app's thread: under `cargo test`
+    // each thread has a data folder of its own.
+    let Some(to) = backup_paths() else { return };
+    std::thread::spawn(move || write_backups_to(to, &docs));
+}
+
+/// The backup folder, the single backup and its sidecar.
+fn backup_paths() -> Option<(PathBuf, PathBuf, PathBuf)> {
+    Some((autosave_dir()?, autosave_file()?, autosave_source_file()?))
 }
 
 /// [`autosave_all`]'s work, on the calling thread.
+#[cfg(test)]
 pub(crate) fn write_backups(docs: &[(crate::project_io::ProjectSnapshot, Option<PathBuf>)]) {
-    let (Some(dir), Some(single), Some(single_src)) =
-        (autosave_dir(), autosave_file(), autosave_source_file())
-    else {
-        return;
-    };
+    if let Some(to) = backup_paths() {
+        write_backups_to(to, docs);
+    }
+}
+
+fn write_backups_to(
+    (dir, single, single_src): (PathBuf, PathBuf, PathBuf),
+    docs: &[(crate::project_io::ProjectSnapshot, Option<PathBuf>)],
+) {
     {
         if std::fs::create_dir_all(&dir).is_err() {
             return;

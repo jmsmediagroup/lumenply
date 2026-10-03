@@ -133,7 +133,7 @@ impl App {
         self.cancel_interaction();
         self.editor = Editor::new(Document::new(1, 1));
         self.path = None;
-        self.saved_rev = self.editor.history().len();
+        self.saved_rev = self.editor.revision();
         self.hist_thumbs.clear();
         self.active = None;
         self.selected.clear();
@@ -180,7 +180,7 @@ impl App {
                         self.untitled = "Recovered".into();
                     }
                     // Recovered work is unsaved by definition.
-                    self.saved_rev = usize::MAX;
+                    self.saved_rev = u64::MAX;
                     ok += 1;
                 }
                 Err(e) => failed.push(e),
@@ -963,9 +963,9 @@ mod tests {
         app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
         // Two unsaved documents (one from a file) and one saved one.
         app.open_in_new_tab(blank(40, 30), Some(PathBuf::from("/work/a.lumen")));
-        app.saved_rev = usize::MAX;
+        app.saved_rev = u64::MAX;
         app.open_in_new_tab(blank(20, 10), None);
-        app.saved_rev = usize::MAX;
+        app.saved_rev = u64::MAX;
         app.open_in_new_tab(blank(8, 8), None);
         let docs = app.unsaved_docs();
         assert_eq!(docs.len(), 2, "the saved tab needs no backup");

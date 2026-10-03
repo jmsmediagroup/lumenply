@@ -472,13 +472,13 @@ impl App {
             self.status = "The frame covers the whole canvas: drag a handle first".into();
             return;
         }
-        let before = self.editor.history().len();
+        let before = self.editor.revision();
         self.run(&CropCanvas {
             rect,
             angle,
             delete_cropped: self.crop.delete_cropped,
         });
-        if self.editor.history().len() > before {
+        if self.editor.revision() != before {
             self.crop.frame = None;
             self.crop.drag = None;
             self.crop_sync();
