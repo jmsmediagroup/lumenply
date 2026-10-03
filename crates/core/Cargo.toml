@@ -12,6 +12,7 @@ authors.workspace = true
 lumenply-tiles.workspace = true
 lumenply-doc.workspace = true
 lumenply-render.workspace = true
+lumenply-graph.workspace = true
 thiserror.workspace = true
 rayon.workspace = true
 serde.workspace = true

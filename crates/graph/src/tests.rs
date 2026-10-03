@@ -123,7 +123,7 @@ pub(crate) fn busy_document() -> Document {
     doc
 }
 
-fn assert_same(a: &TileStore, b: &TileStore, canvas: Rect) {
+pub(crate) fn assert_same(a: &TileStore, b: &TileStore, canvas: Rect) {
     let mut worst = 0.0f32;
     for y in canvas.y..canvas.bottom() {
         for x in canvas.x..canvas.right() {

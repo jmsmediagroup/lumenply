@@ -1,10 +1,13 @@
 //! The app core: every edit is a [`Command`] applied through an [`Editor`],
-//! which keeps undo/redo history as document snapshots.
+//! which keeps undo/redo history as versions of the edit graph (ADR 0025).
 //!
-//! Snapshots are cheap because tiles are shared copy-on-write: an undo step
-//! costs only the tiles the command actually touched. Tools, scripts and
-//! plugins all go through this one path, so undo, macros and the headless
-//! CLI behave identically.
+//! Each version is a [`Graph`] plus the document state that isn't pixels
+//! ([`DocState`]); the document the app reads is its projection. Versions
+//! share every node an edit didn't change, and pixels live in
+//! content-addressed blobs whose tiles are shared copy-on-write, so an undo
+//! step costs only the tiles the command actually touched. Tools, scripts
+//! and plugins all go through this one path, so undo, macros and the
+//! headless CLI behave identically.
 
 pub mod actions;
 pub mod adjust_cmds;
@@ -44,7 +47,16 @@ pub mod smart_contents;
 pub mod smart_filter_cmds;
 pub mod snap;
 
+#[cfg(test)]
+mod graph_history_tests;
+
+use std::collections::HashSet;
+use std::sync::{Arc, OnceLock};
+
 use lumenply_doc::{Document, LayerId};
+use lumenply_graph::sync::{self as graph_sync, Base, BlobRefMemo};
+pub use lumenply_graph::sync::{ContentEdit, DocState, EditInput};
+use lumenply_graph::{BlobStore, Graph, History, Renderer};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EditError {
@@ -98,53 +110,58 @@ pub trait Command {
     fn motion(&self) -> Motion {
         Motion::None
     }
-}
-
-struct Snapshot {
-    label: String,
-    doc: Document,
-    /// Canvas area the step changed (see [`Command::affected`]); undoing or
-    /// redoing the step dirties exactly this area. `None` means "anything".
-    affected: Option<lumenply_tiles::Rect>,
-    /// Estimated bytes this snapshot keeps alive: its tiles that the state
-    /// replacing it no longer shares.
-    bytes: usize,
-}
-
-/// Estimated bytes of tile data in `old` that `new` does not share (compared
-/// per layer id and tile coordinate by allocation identity). This is what
-/// dropping `old` from the history would free, modulo sharing with even
-/// older snapshots.
-fn delta_bytes(old: &Document, new: &Document) -> usize {
-    fn store_delta(old: &lumenply_tiles::TileStore, new: Option<&lumenply_tiles::TileStore>) -> usize {
-        // A tile shared across coordinates (a solid fill's) counts once.
-        let mut seen = std::collections::HashSet::new();
-        old.coords()
-            .filter_map(|c| {
-                let ot = old.tile(c)?;
-                let shared = new.and_then(|n| n.tile(c)).is_some_and(|nt| std::ptr::eq(ot, nt));
-                (!shared && seen.insert(ot as *const lumenply_tiles::Tile)).then(|| ot.byte_size())
-            })
-            .sum()
+    /// The edit as an operation on one layer's content in the edit graph,
+    /// for commands ported to it (ADR 0025). When this returns `Some`, the
+    /// editor appends the op to the layer's content chain (and, outside
+    /// float mode, a `compact` node, so the layer rests at 16 bits as after
+    /// any command) and takes the layer's pixels from the graph instead of
+    /// calling [`Command::apply`]. The op must therefore paint exactly what
+    /// `apply` would, in a case where `apply` can't fail. Pixel data the op
+    /// names (a brush tip) goes into `blobs`; pixels feeding its other
+    /// ports (a selection) are [`EditInput`]s. Layer locks are still
+    /// enforced on the result. When the graph doesn't hold the layer's
+    /// pixels (smart filters, say) the editor runs `apply` after all.
+    fn graph_edit(&self, _doc: &Document, _blobs: &mut BlobStore) -> Option<ContentEdit> {
+        None
     }
-    let mut total = 0;
-    old.for_each_layer(|l| {
-        let counterpart = new.layer(l.id);
-        if let Some(s) = l.content_store() {
-            total += store_delta(s, counterpart.and_then(|n| n.content_store()));
+}
+
+/// What the editor keeps with each graph version besides the graph.
+struct Step {
+    /// The document state that isn't in the graph.
+    state: Arc<DocState>,
+    /// Canvas area the step that made this version changed (see
+    /// [`Command::affected`]); undoing or redoing the step dirties exactly
+    /// this area. `None` means "anything".
+    affected: Option<lumenply_tiles::Rect>,
+    /// Estimated bytes of pixel data the version before this one keeps
+    /// alive that this one doesn't: what dropping that version (this
+    /// step's undo) frees.
+    bytes: usize,
+    /// The blobs this version's graph names, found once when it is made:
+    /// dropping unused blobs is then a union of these, however long the
+    /// graph's chains grow.
+    blob_ids: HashSet<lumenply_graph::BlobId>,
+    /// The document this version stands for, projected when
+    /// [`Editor::state`] first asks for it.
+    doc: OnceLock<Document>,
+}
+
+impl Step {
+    fn new(
+        state: DocState,
+        blob_ids: HashSet<lumenply_graph::BlobId>,
+        affected: Option<lumenply_tiles::Rect>,
+        bytes: usize,
+    ) -> Self {
+        Step {
+            state: Arc::new(state),
+            affected,
+            bytes,
+            blob_ids,
+            doc: OnceLock::new(),
         }
-        if let Some(c) = &l.smart_filters.cache {
-            let other = counterpart.and_then(|n| n.smart_filters.cache.as_ref());
-            total += store_delta(&c.store, other.map(|o| &o.store));
-        }
-        if let Some(m) = &l.mask {
-            total += store_delta(
-                &m.tiles,
-                counterpart.and_then(|n| n.mask.as_ref()).map(|nm| &nm.tiles),
-            );
-        }
-    });
-    total
+    }
 }
 
 fn union_opt(
@@ -215,10 +232,22 @@ pub fn storage_bytes(doc: &Document) -> usize {
 }
 
 /// Owns the live document and its history.
+///
+/// The history is a list of graph versions (ADR 0025): each successful edit
+/// commits a new [`Graph`] plus the [`DocState`] beside it, and undo, redo,
+/// jumps and coalescing move over those versions. The document the app
+/// reads ([`Editor::doc`]) is the projection of the current version. A
+/// command runs on a copy of it (or, when it offers a
+/// [`Command::graph_edit`], on the graph itself) and the result is synced
+/// into the next version, which reuses every node of the layers it didn't
+/// change.
 pub struct Editor {
     doc: Document,
-    undo: Vec<Snapshot>,
-    redo: Vec<Snapshot>,
+    history: History<Step>,
+    blobs: BlobStore,
+    /// The blobs each graph node names, memoised (see [`BlobRefMemo`]).
+    blob_refs: BlobRefMemo,
+    renderer: Arc<Renderer>,
     pub history_limit: usize,
     /// Rough cap on the bytes the undo stack may keep alive; the oldest
     /// steps are dropped first. At least one step is always kept.
@@ -229,21 +258,86 @@ pub struct Editor {
     last_affected: Option<lumenply_tiles::Rect>,
     /// Layer targeted by the last successful edit (see [`Command::target_layer`]).
     last_target: Option<LayerId>,
+    /// Time the last edit spent on the graph (see [`Editor::last_sync_time`]).
+    last_sync: std::time::Duration,
+}
+
+/// The next version of a document: the document itself and its graph
+/// version, not yet committed.
+struct Prepared {
+    doc: Document,
+    graph: Graph,
+    state: DocState,
+    /// Time spent on the graph so far (a native edit, the sync).
+    graph_time: std::time::Duration,
 }
 
 impl Editor {
     pub fn new(mut doc: Document) -> Self {
         lumenply_render::fill::refresh_stale(&mut doc);
+        let renderer = Arc::new(Renderer::new());
+        let mut blobs = BlobStore::new();
+        let (graph, state) = graph_sync::sync(None, &doc, &mut blobs, &renderer.hasher);
+        Self::starting_at(doc, graph, state, blobs, renderer)
+    }
+
+    /// An editor whose history starts at one version.
+    fn starting_at(
+        doc: Document,
+        graph: Graph,
+        state: DocState,
+        blobs: BlobStore,
+        renderer: Arc<Renderer>,
+    ) -> Self {
+        let blob_refs = BlobRefMemo::default();
+        let ids = blob_refs.graph(&graph);
         Editor {
             doc,
-            undo: Vec::new(),
-            redo: Vec::new(),
+            history: History::with_payload(graph, Step::new(state, ids, None, 0)),
+            blobs,
+            blob_refs,
+            renderer,
             history_limit: 100,
             history_memory_limit: 1 << 30, // 1 GiB
             coalesce_key: None,
             last_affected: None,
             last_target: None,
+            last_sync: std::time::Duration::ZERO,
         }
+    }
+
+    /// Open a version read from a project file (format 3: its graph, its
+    /// `meta.json` and the blobs they name), ready to edit: derived pixels
+    /// are rebuilt, and pixel layers keep their chains of strokes and
+    /// moves. The history starts there.
+    pub fn from_graph_project(
+        graph: &Graph,
+        meta: &serde_json::Value,
+        mut blobs: BlobStore,
+    ) -> Result<Self, lumenply_graph::meta::MetaError> {
+        let renderer = Arc::new(Renderer::new());
+        let (graph, state, doc) = lumenply_graph::meta::open(graph, meta, &mut blobs, &renderer)?;
+        Ok(Self::starting_at(doc, graph, state, blobs, renderer))
+    }
+
+    /// The current version as a project file holds it (format 3): the
+    /// graph, its `meta.json` and the blobs they name (the store may hold
+    /// more; a save writes only what is named).
+    pub fn graph_project(&self) -> (Arc<Graph>, serde_json::Value, BlobStore) {
+        let mut blobs = self.blobs.clone();
+        let graph = self.history.current_arc();
+        let meta = self
+            .doc_state()
+            .to_meta(&graph, &mut blobs, &self.renderer.hasher);
+        (graph, meta, blobs)
+    }
+
+    /// Time the last successful edit spent keeping the graph in step: a
+    /// native graph edit, syncing the document into the new version,
+    /// memory accounting and dropping unused blobs. What the graph history
+    /// costs on top of running the command itself.
+    pub fn last_sync_time(&self) -> std::time::Duration {
+        self.last_sync
     }
 
     /// Canvas area touched by the most recent change (see [`Command::affected`]).
@@ -259,11 +353,104 @@ impl Editor {
 
     /// Estimated bytes the undo stack keeps alive beyond the live document.
     pub fn history_bytes(&self) -> usize {
-        self.undo.iter().map(|s| s.bytes).sum()
+        let v = self.history.versions();
+        v[1..=self.history.cursor()].iter().map(|v| v.payload.bytes).sum()
     }
 
     pub fn doc(&self) -> &Document {
         &self.doc
+    }
+
+    /// The current version of the edit graph: the document as operations.
+    pub fn graph(&self) -> &Graph {
+        self.history.current()
+    }
+
+    /// The current graph version, shared.
+    pub fn graph_arc(&self) -> Arc<Graph> {
+        self.history.current_arc()
+    }
+
+    /// What the current version holds besides its graph.
+    pub fn doc_state(&self) -> &DocState {
+        &self.history.current_version().payload.state
+    }
+
+    /// The pixel data the graph versions name.
+    pub fn blobs(&self) -> &BlobStore {
+        &self.blobs
+    }
+
+    /// The renderer and tile cache shared by every version of this
+    /// document: content keys don't change across versions for what an
+    /// edit didn't touch, so its cache keeps hitting across edits and undo.
+    pub fn renderer(&self) -> &Arc<Renderer> {
+        &self.renderer
+    }
+
+    /// Run `cmd` against the current document and turn the result into the
+    /// next graph version, changing nothing in the editor yet. `fold` lets
+    /// a native edit merge into the op on top of the layer's chain (the
+    /// previous tick of the same coalescing run).
+    fn prepare(&mut self, cmd: &dyn Command, fold: bool) -> EditResult<Prepared> {
+        let current = Base {
+            graph: self.history.current(),
+            state: &self.history.current_version().payload.state,
+            doc: &self.doc,
+        };
+        let started = std::time::Instant::now();
+        let edit = cmd.graph_edit(&self.doc, &mut self.blobs);
+        let edited =
+            edit.and_then(|e| graph_sync::content_edit(current, &e, fold, &mut self.blobs, &self.renderer));
+        let mut graph_time = started.elapsed();
+        let mut next = match &edited {
+            Some(e) => e.doc.clone(),
+            None => {
+                let mut next = self.doc.clone();
+                cmd.apply(&mut next)?;
+                next
+            }
+        };
+        locks::enforce(&self.doc, &mut next, cmd)?;
+        // Fill layers follow canvas size changes (crop, resize, rotate).
+        lumenply_render::fill::refresh_stale(&mut next);
+        compact_storage(&mut next);
+        let base = edited.as_ref().map_or(current, |e| e.base());
+        let started = std::time::Instant::now();
+        let (graph, state) = graph_sync::sync(Some(base), &next, &mut self.blobs, &self.renderer.hasher);
+        graph_time += started.elapsed();
+        Ok(Prepared {
+            doc: next,
+            graph,
+            state,
+            graph_time,
+        })
+    }
+
+    /// Bytes version `i` keeps alive that `next` (its blob ids and state)
+    /// doesn't.
+    fn released(&self, i: usize, next: (&HashSet<lumenply_graph::BlobId>, &DocState)) -> usize {
+        let v = &self.history.versions()[i].payload;
+        graph_sync::released_bytes((&v.blob_ids, &v.state), next, &self.blobs)
+    }
+
+    /// Drop the blobs no kept version names any more, and the memoised
+    /// hashes of nodes and tiles nothing uses.
+    fn collect_garbage(&mut self) {
+        let sets = self.history.versions().iter().map(|v| &v.payload.blob_ids);
+        graph_sync::collect_blobs(&mut self.blobs, sets);
+        self.blob_refs.prune();
+        self.renderer.prune();
+    }
+
+    /// The current version's document.
+    fn project_current(&mut self) -> Document {
+        let v = self.history.current_version_mut();
+        // A projection made for `state` serves again.
+        if let Some(doc) = v.payload.doc.take() {
+            return doc;
+        }
+        graph_sync::project(&v.graph, &v.payload.state, &self.blobs, &self.renderer)
     }
 
     /// Apply a command, recording an undo step. On error the document is
@@ -279,22 +466,31 @@ impl Editor {
     /// [`Editor::end_coalescing`] when the drag ends.
     pub fn execute_coalescing(&mut self, cmd: &dyn Command, key: &str) -> EditResult {
         if self.coalesce_key.as_deref() == Some(key) {
-            let mut next = self.doc.clone();
-            cmd.apply(&mut next)?;
-            locks::enforce(&self.doc, &mut next, cmd)?;
-            lumenply_render::fill::refresh_stale(&mut next);
-            compact_storage(&mut next);
-            self.last_affected = smart_filter_cmds::widen_affected(&next, cmd.affected(&self.doc));
+            let next = self.prepare(cmd, true)?;
+            self.last_affected = smart_filter_cmds::widen_affected(&next.doc, cmd.affected(&self.doc));
             self.last_target = cmd.target_layer();
+            let started = std::time::Instant::now();
+            let ids = self.blob_refs.graph(&next.graph);
             // The whole drag undoes in one go, so its undo step covers
             // every tick so far, and its memory estimate follows the
             // moving document.
-            let bytes = self.undo.last().map(|s| delta_bytes(&s.doc, &next));
-            if let (Some(s), Some(b)) = (self.undo.last_mut(), bytes) {
-                s.affected = union_opt(s.affected, self.last_affected);
-                s.bytes = b;
-            }
-            self.doc = next;
+            let cursor = self.history.cursor();
+            let (affected, bytes) = match cursor {
+                0 => (None, 0),
+                _ => (
+                    union_opt(
+                        self.history.current_version().payload.affected,
+                        self.last_affected,
+                    ),
+                    self.released(cursor - 1, (&ids, &next.state)),
+                ),
+            };
+            let v = self.history.current_version_mut();
+            v.graph = Arc::new(next.graph);
+            v.payload = Step::new(next.state, ids, affected, bytes);
+            self.collect_garbage();
+            self.last_sync = next.graph_time + started.elapsed();
+            self.doc = next.doc;
             Ok(())
         } else {
             self.push_command(cmd)?;
@@ -320,93 +516,108 @@ impl Editor {
     /// keeping, such as new text closed before anything was typed. Returns
     /// false, changing nothing, when `key` is not the open run.
     pub fn discard_coalescing(&mut self, key: &str) -> bool {
-        if !self.coalescing(key) {
+        if !self.coalescing(key) || self.history.cursor() == 0 {
             return false;
         }
-        let Some(snap) = self.undo.pop() else {
-            return false;
-        };
+        let dropped = self.history.rollback(1);
         self.coalesce_key = None;
         self.last_target = None;
-        self.last_affected = snap.affected;
-        self.doc = snap.doc;
+        self.last_affected = dropped.first().and_then(|v| v.payload.affected);
+        self.doc = self.project_current();
+        self.collect_garbage();
         true
     }
 
     fn push_command(&mut self, cmd: &dyn Command) -> EditResult {
-        let mut next = self.doc.clone();
-        cmd.apply(&mut next)?;
-        locks::enforce(&self.doc, &mut next, cmd)?;
-        // Fill layers follow canvas size changes (crop, resize, rotate).
-        lumenply_render::fill::refresh_stale(&mut next);
-        compact_storage(&mut next);
-        self.last_affected = smart_filter_cmds::widen_affected(&next, cmd.affected(&self.doc));
+        let next = self.prepare(cmd, false)?;
+        self.last_affected = smart_filter_cmds::widen_affected(&next.doc, cmd.affected(&self.doc));
         self.last_target = cmd.target_layer();
-        let prev = std::mem::replace(&mut self.doc, next);
-        let bytes = delta_bytes(&prev, &self.doc);
-        self.undo.push(Snapshot {
-            label: cmd.label(),
-            doc: prev,
-            affected: self.last_affected,
-            bytes,
-        });
-        while self.undo.len() > self.history_limit {
-            self.undo.remove(0);
+        let started = std::time::Instant::now();
+        let ids = self.blob_refs.graph(&next.graph);
+        let bytes = self.released(self.history.cursor(), (&ids, &next.state));
+        let before = self.history.versions().len();
+        self.history.limit = self.history_limit;
+        self.history.commit_with(
+            next.graph,
+            cmd.label(),
+            Step::new(next.state, ids, self.last_affected, bytes),
+        );
+        while self.history.cursor() > 1 && self.history_bytes() > self.history_memory_limit {
+            self.history.drop_oldest();
         }
-        while self.undo.len() > 1 && self.history_bytes() > self.history_memory_limit {
-            self.undo.remove(0);
+        // Anything but a plain append (redo steps or old steps dropped)
+        // may leave blobs unused.
+        if self.history.versions().len() != before + 1 {
+            self.collect_garbage();
         }
-        self.redo.clear();
+        self.last_sync = next.graph_time + started.elapsed();
+        self.doc = next.doc;
         Ok(())
+    }
+
+    /// Move one version back; the label and area of the step undone.
+    fn step_back(&mut self) -> Option<(String, Option<lumenply_tiles::Rect>)> {
+        let v = self.history.current_version();
+        let step = (v.label.clone(), v.payload.affected);
+        self.history.undo().then_some(step)
+    }
+
+    /// Move one version forward; the label and area of the step redone.
+    fn step_forward(&mut self) -> Option<(String, Option<lumenply_tiles::Rect>)> {
+        if !self.history.redo() {
+            return None;
+        }
+        let v = self.history.current_version();
+        Some((v.label.clone(), v.payload.affected))
     }
 
     /// Returns the label of the undone command.
     pub fn undo(&mut self) -> Option<String> {
         self.coalesce_key = None;
         self.last_target = None;
-        let snap = self.undo.pop()?;
-        self.last_affected = snap.affected;
-        let current = std::mem::replace(&mut self.doc, snap.doc);
-        self.redo.push(Snapshot {
-            label: snap.label.clone(),
-            doc: current,
-            affected: snap.affected,
-            bytes: snap.bytes,
-        });
-        Some(snap.label)
+        let (label, affected) = self.step_back()?;
+        self.last_affected = affected;
+        self.doc = self.project_current();
+        Some(label)
     }
 
     /// Returns the label of the redone command.
     pub fn redo(&mut self) -> Option<String> {
         self.coalesce_key = None;
         self.last_target = None;
-        let snap = self.redo.pop()?;
-        self.last_affected = snap.affected;
-        let current = std::mem::replace(&mut self.doc, snap.doc);
-        self.undo.push(Snapshot {
-            label: snap.label.clone(),
-            doc: current,
-            affected: snap.affected,
-            bytes: snap.bytes,
-        });
-        Some(snap.label)
+        let (label, affected) = self.step_forward()?;
+        self.last_affected = affected;
+        self.doc = self.project_current();
+        Some(label)
     }
 
     /// Undo or redo until exactly `steps` history entries remain applied.
     /// Afterwards [`Editor::last_affected`] covers every step crossed.
     pub fn jump_to(&mut self, steps: usize) {
         let mut acc: Option<Option<lumenply_tiles::Rect>> = None;
-        while self.undo.len() > steps && self.undo().is_some() {
+        let mut add = |a: Option<lumenply_tiles::Rect>| {
             acc = Some(match acc {
-                None => self.last_affected,
-                Some(a) => union_opt(a, self.last_affected),
+                None => a,
+                Some(prev) => union_opt(prev, a),
             });
+        };
+        let mut moved = false;
+        while self.history.cursor() > steps {
+            self.coalesce_key = None;
+            self.last_target = None;
+            let Some((_, a)) = self.step_back() else { break };
+            add(a);
+            moved = true;
         }
-        while self.undo.len() < steps && self.redo().is_some() {
-            acc = Some(match acc {
-                None => self.last_affected,
-                Some(a) => union_opt(a, self.last_affected),
-            });
+        while self.history.cursor() < steps {
+            self.coalesce_key = None;
+            self.last_target = None;
+            let Some((_, a)) = self.step_forward() else { break };
+            add(a);
+            moved = true;
+        }
+        if moved {
+            self.doc = self.project_current();
         }
         if let Some(a) = acc {
             self.last_affected = a;
@@ -414,74 +625,93 @@ impl Editor {
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty()
+        self.history.can_undo()
     }
 
     pub fn can_redo(&self) -> bool {
-        !self.redo.is_empty()
+        self.history.can_redo()
     }
 
     /// The document as it was after `steps` history steps: 0 is the oldest
     /// state kept (the opened image unless the history limit dropped it),
     /// `history().len()` the current one, beyond that the redo steps.
     pub fn state(&self, steps: usize) -> Option<&Document> {
-        let n = self.undo.len();
-        match steps.cmp(&n) {
-            std::cmp::Ordering::Less => Some(&self.undo[steps].doc),
-            std::cmp::Ordering::Equal => Some(&self.doc),
-            std::cmp::Ordering::Greater => self.redo.iter().rev().nth(steps - n - 1).map(|s| &s.doc),
+        if steps == self.history.cursor() {
+            return Some(&self.doc);
         }
+        let v = self.history.version(steps)?;
+        Some(
+            v.payload
+                .doc
+                .get_or_init(|| graph_sync::project(&v.graph, &v.payload.state, &self.blobs, &self.renderer)),
+        )
     }
 
     /// Labels of the undo stack, oldest first.
     pub fn history(&self) -> Vec<&str> {
-        self.undo.iter().map(|s| s.label.as_str()).collect()
+        let v = self.history.versions();
+        v[1..=self.history.cursor()]
+            .iter()
+            .map(|v| v.label.as_str())
+            .collect()
     }
 
     /// Labels of steps that were undone and can be redone, in redo order.
     pub fn redo_history(&self) -> Vec<&str> {
-        self.redo.iter().rev().map(|s| s.label.as_str()).collect()
+        let v = self.history.versions();
+        v[self.history.cursor() + 1..]
+            .iter()
+            .map(|v| v.label.as_str())
+            .collect()
+    }
+
+    /// Union of the areas of the newest `n` undo steps (`n` ≥ 1).
+    fn newest_affected(&self, n: usize) -> Option<lumenply_tiles::Rect> {
+        let c = self.history.cursor();
+        let steps = &self.history.versions()[c + 1 - n..=c];
+        steps
+            .iter()
+            .skip(1)
+            .fold(steps[0].payload.affected, |a, v| union_opt(a, v.payload.affected))
     }
 
     /// Merge the newest `n` undo steps into one labelled `label`, so a
     /// played action undoes in one go. `n` of 0 or 1 only relabels.
     pub fn squash_newest(&mut self, n: usize, label: &str) {
-        let n = n.min(self.undo.len());
+        let n = n.min(self.history.cursor());
         if n == 0 {
             return;
         }
         self.coalesce_key = None;
-        let merged: Vec<Snapshot> = self.undo.drain(self.undo.len() - n..).collect();
-        let affected = merged
-            .iter()
-            .skip(1)
-            .fold(merged[0].affected, |a, s| union_opt(a, s.affected));
-        let first = merged.into_iter().next().expect("n > 0");
-        let bytes = delta_bytes(&first.doc, &self.doc);
+        let affected = self.newest_affected(n);
+        let current = self.history.current_version();
+        let bytes = self.released(
+            self.history.cursor() - n,
+            (&current.payload.blob_ids, &current.payload.state),
+        );
+        let dropped = self.history.squash(n, label);
+        let step = &mut self.history.current_version_mut().payload;
+        step.affected = affected;
+        step.bytes = bytes;
         self.last_affected = affected;
-        self.undo.push(Snapshot {
-            label: label.to_string(),
-            doc: first.doc,
-            affected,
-            bytes,
-        });
+        if !dropped.is_empty() {
+            self.collect_garbage();
+        }
     }
 
     /// Throw away the newest `n` undo steps and their changes, leaving no
     /// redo entry: a failed action taking back the steps it already ran.
     pub fn rollback_newest(&mut self, n: usize) {
-        let n = n.min(self.undo.len());
+        let n = n.min(self.history.cursor());
         if n == 0 {
             return;
         }
         self.coalesce_key = None;
         self.last_target = None;
-        let mut merged: Vec<Snapshot> = self.undo.drain(self.undo.len() - n..).collect();
-        self.last_affected = merged
-            .iter()
-            .skip(1)
-            .fold(merged[0].affected, |a, s| union_opt(a, s.affected));
-        self.doc = merged.swap_remove(0).doc;
+        self.last_affected = self.newest_affected(n);
+        self.history.rollback(n);
+        self.doc = self.project_current();
+        self.collect_garbage();
     }
 }
 

@@ -204,3 +204,40 @@ impl Cx<'_> {
         id
     }
 }
+
+/// Where [`crate::sync`] lowers the parts of a document that changed: one
+/// step of [`lower`] at a time, onto a graph being built.
+pub(crate) struct Step<'a> {
+    pub graph: &'a mut Graph,
+    pub blobs: &'a mut BlobStore,
+    pub hasher: &'a TileHasher,
+    /// The document's 32-bit mode.
+    pub float: bool,
+}
+
+impl Step<'_> {
+    fn run<T>(&mut self, f: impl FnOnce(&mut Cx) -> T) -> T {
+        let mut cx = Cx {
+            graph: std::mem::replace(self.graph, Graph::new(0, 0)),
+            blobs: self.blobs,
+            hasher: self.hasher,
+            layer_nodes: HashMap::new(),
+            float: self.float,
+        };
+        let out = f(&mut cx);
+        *self.graph = cx.graph;
+        out
+    }
+
+    /// The nodes producing a (non-group) layer's own pixels, as [`lower`]
+    /// makes them; returns the last.
+    pub fn content(&mut self, layer: &Layer) -> NodeId {
+        debug_assert!(!matches!(layer.content, LayerContent::Group(_)));
+        self.run(|cx| cx.content(layer))
+    }
+
+    /// A layer's mask node, as [`lower`] makes it (`None`: no enabled mask).
+    pub fn mask(&mut self, layer: &Layer) -> Option<NodeId> {
+        self.run(|cx| cx.mask(layer))
+    }
+}

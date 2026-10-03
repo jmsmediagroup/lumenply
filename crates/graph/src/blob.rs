@@ -94,15 +94,46 @@ impl TileHasher {
     }
 
     pub fn store(&self, store: &TileStore) -> Hash {
+        use rayon::prelude::*;
         let mut coords: Vec<TileCoord> = store.coords().collect();
         coords.sort_by_key(|c| (c.y, c.x));
+        let tiles: Vec<&Arc<Tile>> = coords
+            .iter()
+            .map(|c| store.tile_arc(*c).expect("listed coordinate"))
+            .collect();
+        let mut hashes: Vec<Option<Hash>> = {
+            let memo = self.memo.lock().unwrap();
+            tiles
+                .iter()
+                .map(|t| match memo.get(&(Arc::as_ptr(t) as usize)) {
+                    Some((kept, h)) if Arc::ptr_eq(kept, t) => Some(*h),
+                    _ => None,
+                })
+                .collect()
+        };
+        // Tiles not seen before are hashed: in parallel when there are many
+        // (a document being opened), on this thread when an edit changed a
+        // few (no waiting on a busy pool).
+        let missing: Vec<usize> = (0..tiles.len()).filter(|&i| hashes[i].is_none()).collect();
+        let fresh: Vec<Hash> = if missing.len() > 8 {
+            missing.par_iter().map(|&i| tile_hash(tiles[i])).collect()
+        } else {
+            missing.iter().map(|&i| tile_hash(tiles[i])).collect()
+        };
+        if !missing.is_empty() {
+            let mut memo = self.memo.lock().unwrap();
+            for (&i, h) in missing.iter().zip(fresh) {
+                memo.insert(Arc::as_ptr(tiles[i]) as usize, (tiles[i].clone(), h));
+                hashes[i] = Some(h);
+            }
+        }
+        let hashes = hashes.into_iter().map(|h| h.expect("hashed above"));
         let mut h = blake3::Hasher::new();
         h.update(b"tilestore");
-        for c in coords {
-            let t = store.tile_arc(c).expect("listed coordinate");
+        for (c, t) in coords.iter().zip(hashes) {
             h.update(&c.x.to_le_bytes());
             h.update(&c.y.to_le_bytes());
-            h.update(&self.tile(t).0);
+            h.update(&t.0);
         }
         Hash(*h.finalize().as_bytes())
     }
@@ -214,14 +245,9 @@ impl BlobStore {
     }
 }
 
-/// Every blob the graph's operations name, with the nodes naming it: any
-/// 64-hex-digit string in an op's parameters. Ops keep blob ids in fields
-/// of their own choosing (an image's `blob`, a brush tip, a pattern), so
-/// scanning the parameters finds every one without each op listing them;
-/// a string that only looks like a hash matches no blob and costs nothing.
-pub fn blob_refs(
-    graph: &crate::model::Graph,
-) -> std::collections::BTreeMap<BlobId, Vec<crate::model::NodeId>> {
+/// The blobs one op names: any 64-hex-digit string in its parameters (see
+/// [`blob_refs`]).
+pub fn op_blob_refs(op: &crate::ops::Op) -> Vec<BlobId> {
     fn walk(v: &serde_json::Value, found: &mut Vec<Hash>) {
         match v {
             serde_json::Value::String(s) => found.extend(Hash::from_hex(s)),
@@ -230,14 +256,25 @@ pub fn blob_refs(
             _ => {}
         }
     }
+    let mut found = Vec::new();
+    walk(
+        &serde_json::to_value(op).expect("ops always serialise"),
+        &mut found,
+    );
+    found
+}
+
+/// Every blob the graph's operations name, with the nodes naming it: any
+/// 64-hex-digit string in an op's parameters. Ops keep blob ids in fields
+/// of their own choosing (an image's `blob`, a brush tip, a pattern), so
+/// scanning the parameters finds every one without each op listing them;
+/// a string that only looks like a hash matches no blob and costs nothing.
+pub fn blob_refs(
+    graph: &crate::model::Graph,
+) -> std::collections::BTreeMap<BlobId, Vec<crate::model::NodeId>> {
     let mut out: std::collections::BTreeMap<BlobId, Vec<crate::model::NodeId>> = Default::default();
     for (id, node) in graph.nodes() {
-        let mut found = Vec::new();
-        walk(
-            &serde_json::to_value(&node.op).expect("ops always serialise"),
-            &mut found,
-        );
-        for h in found {
+        for h in op_blob_refs(&node.op) {
             let users = out.entry(h).or_default();
             if users.last() != Some(&id) {
                 users.push(id);

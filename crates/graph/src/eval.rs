@@ -201,6 +201,31 @@ impl Renderer {
         }
     }
 
+    /// A bound on where `node`'s output can be non-transparent (`None`:
+    /// transparent everywhere). Not limited to the canvas.
+    pub fn extent(&self, graph: &Graph, blobs: &BlobStore, node: NodeId) -> Option<Rect> {
+        let ctx = self.ctx(graph, blobs, node);
+        crate::ops_content::prepare(&ctx, node);
+        ctx.extent(node)
+    }
+
+    /// All of `node`'s output: every tile within its extent, on the canvas
+    /// or off it (a layer's pixels may reach past the canvas).
+    pub fn render_all(&self, graph: &Graph, blobs: &BlobStore, node: NodeId) -> TileStore {
+        // One context: content keys cost a walk of everything upstream,
+        // which for a long chain of strokes is most of the work.
+        let ctx = self.ctx(graph, blobs, node);
+        crate::ops_content::prepare(&ctx, node);
+        crate::ops_paint::prepare(&ctx, node);
+        let Some(rect) = ctx.extent(node) else {
+            return TileStore::new();
+        };
+        if self.plan {
+            ctx.schedule(node, rect);
+        }
+        ctx.area(node, rect)
+    }
+
     /// `node`'s output over the tiles touching `rect`. Ops computed in one
     /// piece upstream of it are made first, independent ones in parallel,
     /// so that pulling tiles never waits for one.

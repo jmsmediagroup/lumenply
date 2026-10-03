@@ -113,6 +113,7 @@ impl Cx<'_> {
                         },
                         vec![Some(source)],
                     ));
+                    let placed = self.at_rest(layer, placed);
                     return self.smart_filters(layer, placed);
                 }
             },
@@ -124,7 +125,32 @@ impl Cx<'_> {
             // Filters of nothing are nothing.
             node
         } else {
+            let node = self.at_rest(layer, node);
             self.smart_filters(layer, node)
+        }
+    }
+
+    /// `node`, a text layer's glyphs or a smart object's placed source
+    /// (computed at 32 bits), followed by `compact` when the document holds
+    /// that cache at 16 bits, as the editor keeps a cache it re-rendered at
+    /// rest. A cache the editor never touched (a file just opened) stays at
+    /// 32 bits, and so does a 32-bit document's.
+    fn at_rest(&mut self, layer: &Layer, node: NodeId) -> NodeId {
+        let cache = match &layer.content {
+            LayerContent::Text(t) => t.cache.as_ref(),
+            LayerContent::Smart(s) => s.cache.as_ref(),
+            _ => None,
+        };
+        let compacted = cache
+            .is_some_and(|c| !c.is_empty() && c.coords().all(|k| c.tile(k).is_some_and(|t| t.is_compact())));
+        let computes_f32 = matches!(
+            self.graph.node(node).map(|n| &n.op),
+            Some(Op::Text { .. } | Op::Transform { .. })
+        );
+        if compacted && computes_f32 && !self.float {
+            self.graph.add(Node::new(Op::Compact, vec![Some(node)]))
+        } else {
+            node
         }
     }
 

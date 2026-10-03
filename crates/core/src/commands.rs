@@ -5,6 +5,7 @@ use lumenply_doc::{
     Adjustment, BlendMode, CombineOp, Document, Filter, Layer, LayerContent, LayerId, Mask, Selection,
     TextLayer,
 };
+use lumenply_graph::BlobStore;
 use lumenply_tiles::{Affine, Raster, Rect, Rgba, TileStore};
 
 use crate::{Command, EditError, EditResult, Motion};
@@ -813,11 +814,20 @@ impl Command for MoveLayer {
     }
 
     fn apply(&self, doc: &mut Document) -> EditResult {
+        self.as_transform().apply(doc)
+    }
+
+    fn graph_edit(&self, doc: &Document, blobs: &mut BlobStore) -> Option<crate::ContentEdit> {
+        self.as_transform().graph_edit(doc, blobs)
+    }
+}
+
+impl MoveLayer {
+    fn as_transform(&self) -> TransformLayer {
         TransformLayer {
             layer: self.layer,
             transform: Affine::translate(self.dx as f32, self.dy as f32),
         }
-        .apply(doc)
     }
 }
 
@@ -859,6 +869,21 @@ impl Command for TransformLayer {
         } else {
             "Transform".into()
         }
+    }
+
+    /// Moving a plain pixel layer by whole pixels is a `translate` op on
+    /// its content: exactly `TileStore::translated`, which is what `apply`
+    /// does for it. A layer with a mask or a smart-filter mask goes through
+    /// `apply`, which moves those too.
+    fn graph_edit(&self, doc: &Document, _blobs: &mut BlobStore) -> Option<crate::ContentEdit> {
+        let (dx, dy) = self.transform.integer_translation()?;
+        let l = doc.layer(self.layer)?;
+        let plain = matches!(l.content, LayerContent::Pixel(_))
+            && l.mask.is_none()
+            && l.smart_filters.mask.is_none()
+            && l.smart_filters.filtered().is_none();
+        (plain && (dx, dy) != (0, 0))
+            .then(|| crate::ContentEdit::new(self.layer, lumenply_graph::Op::Translate { dx, dy }))
     }
 
     fn apply(&self, doc: &mut Document) -> EditResult {
@@ -2721,6 +2746,23 @@ impl Command for PaintStroke {
         let store = layer.pixels_mut().ok_or(EditError::NotPixel(self.layer))?;
         lumenply_render::paint::paint_stroke(store, &self.brush, &self.points, canvas, sel.as_ref())
             .map_err(|e| EditError::Invalid(e.to_string()))
+    }
+
+    /// A `stroke` node on the layer's content, the selection (if any) as a
+    /// `mask` node on its second port: the op paints what `apply` paints,
+    /// bit for bit. History mode, an empty stroke and a layer that isn't a
+    /// pixel layer go through `apply`, which refuses them.
+    fn graph_edit(&self, doc: &Document, blobs: &mut BlobStore) -> Option<crate::ContentEdit> {
+        if self.points.is_empty() || self.brush.mode == BrushMode::History {
+            return None;
+        }
+        doc.layer(self.layer)?.pixels()?;
+        let op = lumenply_graph::Op::stroke(&self.brush, self.points.clone(), blobs);
+        let edit = crate::ContentEdit::new(self.layer, op);
+        Some(match &doc.selection {
+            Some(s) => edit.with_input(crate::EditInput::Mask(s.coverage.clone())),
+            None => edit,
+        })
     }
 }
 

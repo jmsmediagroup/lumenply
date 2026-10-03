@@ -218,6 +218,15 @@ pub enum Op {
         #[serde(with = "crate::ops_paint::points_json")]
         points: Vec<lumenply_render::paint::StrokePoint>,
     },
+    /// The input shifted by whole pixels (a pixel layer moved).
+    /// Port: input.
+    Translate { dx: i32, dy: i32 },
+    /// The input stored at 16 bits per channel, as the editor keeps a
+    /// layer's pixels at rest after each command (`Tile::compact`). Follows
+    /// an op that computes at 32 bits (text, a smart object's transform)
+    /// where the document holds its result compacted.
+    /// Port: input.
+    Compact,
 }
 
 impl Op {
@@ -238,6 +247,8 @@ impl Op {
             Op::Transform { .. } => "transform",
             Op::SmartFilter { .. } => "smart-filter",
             Op::Stroke { .. } => "stroke",
+            Op::Translate { .. } => "translate",
+            Op::Compact => "compact",
         }
     }
 
@@ -253,6 +264,7 @@ impl Op {
             Op::Transform { .. } => &["input"],
             Op::SmartFilter { .. } => &["input", "mask"],
             Op::Stroke { .. } => &["pixels", "selection"],
+            Op::Translate { .. } | Op::Compact => &["input"],
         }
     }
 
@@ -370,6 +382,8 @@ pub(crate) fn extent(ctx: &Ctx, id: crate::NodeId) -> Option<Rect> {
         | Op::Transform { .. }
         | Op::SmartFilter { .. } => crate::ops_content::extent(ctx, id, node),
         Op::Stroke { .. } => crate::ops_paint::extent(ctx, id),
+        Op::Translate { dx, dy } => input(0).map(|r| crate::pixel_ops::shift(r, *dx, *dy)),
+        Op::Compact => input(0),
     }
 }
 
@@ -470,6 +484,8 @@ pub(crate) fn input_needs(ctx: &Ctx, node: &Node, coord: TileCoord) -> Vec<(crat
             out.extend(at(0, tile));
             out.extend(at(1, tile));
         }
+        Op::Translate { dx, dy } => out.extend(at(0, crate::pixel_ops::shift(tile, -dx, -dy))),
+        Op::Compact => out.extend(at(0, tile)),
     }
     out
 }
@@ -634,5 +650,7 @@ pub(crate) fn eval_tile(ctx: &Ctx, id: crate::NodeId, node: &Node, coord: TileCo
         | Op::Transform { .. }
         | Op::SmartFilter { .. } => crate::ops_content::eval_tile(ctx, id, node, coord),
         Op::Stroke { .. } => crate::ops_paint::tile(ctx, id, coord),
+        Op::Translate { dx, dy } => crate::pixel_ops::tile(ctx, input(0), *dx, *dy, coord),
+        Op::Compact => crate::pixel_ops::compact(ctx.tile(input(0), coord)),
     }
 }

@@ -47,6 +47,11 @@ pub struct Node {
     /// What the UI calls it (a layer name, say); never affects pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The layer this node composites, for the Layers panel and for
+    /// rebuilding the layer tree from the graph. Like the name it never
+    /// affects pixels, so it is not part of the content key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<lumenply_doc::LayerId>,
 }
 
 impl Node {
@@ -55,11 +60,18 @@ impl Node {
             op,
             inputs,
             name: None,
+            layer: None,
         }
     }
 
     pub fn named(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// Tag the node with the layer it composites.
+    pub fn for_layer(mut self, layer: lumenply_doc::LayerId) -> Self {
+        self.layer = Some(layer);
         self
     }
 
@@ -144,6 +156,25 @@ impl Graph {
 
     pub fn nodes(&self) -> impl Iterator<Item = (NodeId, &Node)> {
         self.nodes.iter().map(|(id, n)| (*id, n.as_ref()))
+    }
+
+    pub fn contains(&self, id: NodeId) -> bool {
+        self.nodes.contains_key(&id)
+    }
+
+    /// Hand out new ids after `other`'s, so nodes carried over from it (with
+    /// [`Graph::insert_arc`]) keep theirs and a new node never takes an id
+    /// that meant something else in an earlier version.
+    pub fn continue_ids(&mut self, other: &Graph) {
+        self.next_id = self.next_id.max(other.next_id);
+    }
+
+    /// Put a shared node under a given id: a node carried over unchanged
+    /// from another version keeps its id and its `Arc`, so its content key
+    /// stays memoised (see [`crate::key`]).
+    pub fn insert_arc(&mut self, id: NodeId, node: Arc<Node>) {
+        self.next_id = self.next_id.max(id.0 + 1);
+        self.nodes.insert(id, node);
     }
 
     /// Add a node and return its new id.

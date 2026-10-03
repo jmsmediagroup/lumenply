@@ -768,40 +768,22 @@ pub fn load_any_as_graph(path: impl AsRef<Path>) -> Result<GraphProject, Project
 }
 
 /// A layer-tree document as a graph project: the layers lowered to a graph
-/// (pixel content becomes `image` blobs) and the document state that isn't
-/// layers in the meta:
+/// (pixel content becomes `image` blobs) and everything else in the meta,
+/// as the editor keeps it beside each graph version
+/// ([`lumenply_graph::DocState::to_meta`], the one mapping):
 ///
 /// ```text
 /// {"resolution": 72.0, "float_mode": false, "guides": [...],
 ///  "work_path": {...}, "saved_paths": [...],
 ///  "channels": [{"name": "Sky", "default": 0.0, "blob": "<hash>"}],
+///  "layers": [{"id": 1, "name": "Background", "node": "n3", ...}, ...],
 ///  "blobs": ["<hash>", ...]}
 /// ```
 pub fn document_to_graph(doc: &Document, source_version: u32) -> GraphProject {
     let hasher = TileHasher::default();
     let mut blobs = BlobStore::new();
-    let graph = lumenply_graph::lower(doc, &mut blobs, &hasher).graph;
-    let mut meta_blobs = Vec::new();
-    let channels: Vec<Value> = doc
-        .saved_selections
-        .iter()
-        .map(|ch| {
-            let blob = (!ch.mask.tiles.is_empty()).then(|| blobs.insert(&hasher, ch.mask.tiles.clone()));
-            meta_blobs.extend(blob);
-            serde_json::json!({"name": ch.name, "default": ch.mask.default, "blob": blob})
-        })
-        .collect();
-    let mut meta = serde_json::json!({
-        "resolution": doc.resolution,
-        "float_mode": doc.float_mode,
-        "guides": doc.guides,
-        "saved_paths": doc.saved_paths,
-        "channels": channels,
-        "blobs": meta_blobs,
-    });
-    if let Some(p) = &doc.work_path {
-        meta["work_path"] = serde_json::to_value(p).expect("paths serialise");
-    }
+    let (graph, state) = lumenply_graph::sync(None, doc, &mut blobs, &hasher);
+    let meta = state.to_meta(&graph, &mut blobs, &hasher);
     GraphProject {
         graph,
         blobs,

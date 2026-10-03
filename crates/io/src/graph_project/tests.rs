@@ -517,11 +517,12 @@ fn pattern_overlays_keep_their_pattern_pixels() {
     );
     let back = load_graph_project(&path).unwrap();
     assert!(back.warnings.is_empty(), "{:?}", back.warnings);
-    assert_eq!(
-        back.blobs.len(),
-        1,
-        "the pattern's pixels live on the overlay again"
-    );
+    // The pattern's pixels live on the overlay again; the meta keeps the
+    // document's pattern list too, under the same blob.
+    assert_eq!(back.blobs.len(), 2, "the layer and the pattern");
+    let listed: Vec<BlobId> = serde_json::from_value(back.meta["blobs"].clone()).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(back.meta["patterns"][0]["pixels"]["blob"], listed[0].to_hex());
     let (_, node) = back
         .graph
         .nodes()
@@ -616,5 +617,63 @@ fn a_pattern_fill_keeps_the_blob_its_op_names() {
     assert_same_bits(&ours, &before, doc.canvas());
     // The fill rests in 16-bit tiles: 0.5 is stored as 32768/65535.
     assert_eq!(ours.get_pixel(0, 0), Rgba::new(1.0, 32768.0 / 65535.0, 0.0, 1.0));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Same layer settings and pixels (masks and pixel layers bit for bit).
+fn assert_same_layers(a: &[Layer], b: &[Layer]) {
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(b) {
+        assert_eq!(
+            (x.id, &x.name, x.visible, x.opacity),
+            (y.id, &y.name, y.visible, y.opacity)
+        );
+        assert_eq!(
+            (x.blend, x.clip, x.pass_through, x.locks),
+            (y.blend, y.clip, y.pass_through, y.locks)
+        );
+        assert_eq!(x.effects, y.effects);
+        match (&x.mask, &y.mask) {
+            (Some(m), Some(n)) => {
+                assert_eq!(
+                    (m.enabled, m.default, m.tiles.len()),
+                    (n.enabled, n.default, n.tiles.len())
+                );
+                assert!(m.tiles.coords().all(|c| m.tiles.tile(c) == n.tiles.tile(c)));
+            }
+            (m, n) => assert_eq!(m.is_some(), n.is_some()),
+        }
+        match (&x.content, &y.content) {
+            (LayerContent::Group(p), LayerContent::Group(q)) => assert_same_layers(p, q),
+            (LayerContent::Pixel(p), LayerContent::Pixel(q)) => {
+                assert_eq!(p.len(), q.len(), "{}", x.name);
+                assert!(p.coords().all(|c| p.tile(c) == q.tile(c)), "{}", x.name);
+            }
+            (p, q) => assert_eq!(std::mem::discriminant(p), std::mem::discriminant(q)),
+        }
+    }
+}
+
+#[test]
+fn a_saved_document_opens_again_as_the_same_layers() {
+    let mut doc = busy_document();
+    // A disabled mask and locks travel in the meta alone.
+    doc.layers_mut()[1].mask.as_mut().unwrap().enabled = false;
+    doc.layers_mut()[2].locks.position = true;
+    let p = document_to_graph(&doc, 1);
+    let path = temp("reopen.lumen");
+    save_graph_project(&path, &p.graph, &p.blobs, &p.meta, None).unwrap();
+    let mut back = load_graph_project(&path).unwrap();
+    assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+    let r = Renderer::new();
+    let (graph, _, opened) =
+        lumenply_graph::meta::open(&back.graph, &back.meta, &mut back.blobs, &r).unwrap();
+    assert_eq!((opened.resolution, &opened.guides), (300.0, &doc.guides));
+    assert_eq!(opened.saved_selections[0].name, "Sky");
+    assert_eq!(opened.next_id(), doc.next_id());
+    assert_same_layers(opened.layers(), doc.layers());
+    // The graph it opens to renders the document.
+    let ours = r.render_canvas(&graph, &back.blobs);
+    assert_same_bits(&ours, &lumenply_render::composite(&opened), doc.canvas());
     let _ = std::fs::remove_file(&path);
 }
