@@ -32,6 +32,7 @@ impl App {
             || self.debug_pattern(ctx, tok)
             || self.debug_cas(tok)
             || self.debug_pcrop(tok)
+            || self.debug_image_size(tok)
     }
 
     /// Selections and what acts on them (`select:...`):
@@ -437,7 +438,7 @@ impl App {
                 }
             }
             "start:recover-now" => self.recover_autosave(),
-            "start:new" => self.dialog = Some(Dialog::New(1920, 1080)),
+            "start:new" => self.dialog = Some(Dialog::New(1920, 1080, 72.0)),
             _ => return false,
         }
         true

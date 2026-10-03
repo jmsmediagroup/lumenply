@@ -72,6 +72,9 @@ impl App {
         let hsb = rgb.map(rgb_to_hsb);
         let sel = self.info_selection(ctx);
         let (dw, dh) = (self.editor.doc().width, self.editor.doc().height);
+        let ppi = self.editor.doc().resolution;
+        let print = format!("{:.2} × {:.2} in", dw as f32 / ppi, dh as f32 / ppi);
+        let ppi = format!("{} ppi", crate::image_size_ui::fmt_ppi(ppi));
         let at = self.cursor_doc;
         let mut close = false;
         let out = egui::Area::new("info-panel".into())
@@ -133,6 +136,11 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Document").color(MUTED));
                         ui.label(val(format!("{dw} × {dh} px")));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Print").color(MUTED));
+                        ui.label(val(print));
+                        ui.label(RichText::new(ppi).monospace().color(MUTED));
                     });
                 });
             });

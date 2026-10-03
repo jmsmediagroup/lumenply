@@ -745,7 +745,7 @@ impl App {
                 .frame(false),
         );
         if plus.on_hover_text("New document (tab)").clicked() {
-            self.dialog = Some(Dialog::New(1920, 1080));
+            self.dialog = Some(Dialog::New(1920, 1080, 72.0));
         }
         if let Some(i) = switch {
             self.switch_tab(i);

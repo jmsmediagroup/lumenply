@@ -749,7 +749,7 @@ impl App {
             return;
         }
         match id {
-            "new" => self.dialog = Some(Dialog::New(1920, 1080)),
+            "new" => self.dialog = Some(Dialog::New(1920, 1080, 72.0)),
             "open" => self.pick_open(),
             "demo" => self.open_demo(),
             "place" => self.pick_place(),
@@ -851,7 +851,9 @@ impl App {
             }
             "image-size" => {
                 let d = self.editor.doc();
-                self.dialog = Some(Dialog::ImageSize(d.width, d.height, true));
+                self.dialog = Some(Dialog::ImageSize(crate::image_size_ui::ImageSizeState::for_doc(
+                    d,
+                )));
             }
             "canvas-size" => {
                 let d = self.editor.doc();

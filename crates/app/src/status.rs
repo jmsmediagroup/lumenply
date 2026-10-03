@@ -16,6 +16,14 @@ impl App {
                     let mono = |s: String| RichText::new(s).monospace().color(TEXT);
                     ui.label(mono(format!("{} × {} px", doc.width, doc.height)))
                         .on_hover_text("Canvas size");
+                    // Print resolution, the print size on hover.
+                    let ppi = crate::image_size_ui::fmt_ppi(doc.resolution);
+                    ui.label(RichText::new(format!("{ppi} ppi")).color(MUTED))
+                        .on_hover_text(format!(
+                            "Prints at {} ({})",
+                            crate::image_size_ui::print_size_text(doc.width, doc.height, doc.resolution),
+                            crate::image_size_ui::print_size_cm(doc.width, doc.height, doc.resolution)
+                        ));
                     ui.separator();
                     let at = match self.cursor_doc {
                         Some((x, y)) => format!("x {x:<5} y {y:<5}"),

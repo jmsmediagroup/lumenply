@@ -43,6 +43,7 @@ mod gradient_ui;
 mod guides;
 mod histogram;
 mod history;
+mod image_size_ui;
 mod info_panel;
 mod layer_actions;
 mod layers;
@@ -2005,8 +2006,11 @@ pub(crate) mod a11y_tests {
             check(&mut app, &format!("{name} filter dialog"));
         }
         let dialogs = [
-            ("New", Dialog::New(1920, 1080)),
-            ("Image size", Dialog::ImageSize(800, 600, true)),
+            ("New", Dialog::New(1920, 1080, 72.0)),
+            (
+                "Image size",
+                Dialog::ImageSize(crate::image_size_ui::ImageSizeState::new(800, 600, 72.0)),
+            ),
             ("Canvas size", Dialog::CanvasSize(800, 600, (0.5, 0.5))),
             ("Export JPEG", Dialog::ExportJpeg("out.jpg".into(), 90)),
             ("Confirm close", Dialog::ConfirmClose),

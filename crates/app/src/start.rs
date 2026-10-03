@@ -372,7 +372,7 @@ impl App {
         )
         .clicked()
         {
-            self.dialog = Some(Dialog::New(1920, 1080));
+            self.dialog = Some(Dialog::New(1920, 1080, 72.0));
         }
         ui.add_space(10.0);
         let open_hint = session::chord_label(ui.ctx(), &self.prefs, "open");
