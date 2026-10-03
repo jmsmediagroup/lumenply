@@ -244,54 +244,59 @@ fn highlight_weight(z: &ToneZone, b: f32) -> f32 {
 }
 
 /// Box sums (window `2r+1`, clipped at the edges) of a `w`×`h` plane.
-fn box_sum(v: &[f64], w: usize, h: usize, r: usize) -> Vec<f64> {
-    let mut tmp = vec![0.0f64; w * h];
+/// Stored as f32, summed in f64, so a sum doesn't depend on where the
+/// running window started (tiles and the whole image agree).
+fn box_sum(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+    let mut tmp = vec![0.0f32; w * h];
     tmp.par_chunks_mut(w).enumerate().for_each(|(y, out)| {
         let row = &v[y * w..(y + 1) * w];
-        let mut acc: f64 = row[..=r.min(w - 1)].iter().sum();
+        let mut acc: f64 = row[..=r.min(w - 1)].iter().map(|&x| x as f64).sum();
         for (x, o) in out.iter_mut().enumerate() {
-            *o = acc;
+            *o = acc as f32;
             if x + r + 1 < w {
-                acc += row[x + r + 1];
+                acc += row[x + r + 1] as f64;
             }
             if x >= r {
-                acc -= row[x - r];
+                acc -= row[x - r] as f64;
             }
         }
     });
     // Vertical: independent column strips, each a running sum down the rows.
-    let mut out = vec![0.0f64; w * h];
+    let mut out = vec![0.0f32; w * h];
     const STRIP: usize = 64;
-    let strips: Vec<(usize, Vec<f64>)> = (0..w.div_ceil(STRIP))
+    let strips: Vec<(usize, Vec<f32>)> = (0..w.div_ceil(STRIP))
         .into_par_iter()
         .map(|s| {
             let x0 = s * STRIP;
             let sw = STRIP.min(w - x0);
-            let mut col = vec![0.0f64; sw * h];
+            let mut col = vec![0.0f32; sw * h];
             let mut acc = vec![0.0f64; sw];
             for y in 0..=r.min(h - 1) {
                 for (a, t) in acc.iter_mut().zip(&tmp[y * w + x0..y * w + x0 + sw]) {
-                    *a += t;
+                    *a += *t as f64;
                 }
             }
             for y in 0..h {
-                col[y * sw..(y + 1) * sw].copy_from_slice(&acc);
+                for (c, a) in col[y * sw..(y + 1) * sw].iter_mut().zip(&acc) {
+                    *c = *a as f32;
+                }
                 if y + r + 1 < h {
                     let base = (y + r + 1) * w + x0;
                     for (a, t) in acc.iter_mut().zip(&tmp[base..base + sw]) {
-                        *a += t;
+                        *a += *t as f64;
                     }
                 }
                 if y >= r {
                     let base = (y - r) * w + x0;
                     for (a, t) in acc.iter_mut().zip(&tmp[base..base + sw]) {
-                        *a -= t;
+                        *a -= *t as f64;
                     }
                 }
             }
             (x0, col)
         })
         .collect();
+    drop(tmp);
     for (x0, col) in strips {
         let sw = col.len() / h;
         for y in 0..h {
@@ -306,41 +311,49 @@ fn box_sum(v: &[f64], w: usize, h: usize, r: usize) -> Vec<f64> {
 /// count for nothing). Radius `r`; depends on pixels up to `2r` away.
 pub fn tone_base(lum: &[f32], alpha: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
     let n = w * h;
-    let wt: Vec<f64> = alpha.iter().map(|&a| a.clamp(0.0, 1.0) as f64).collect();
-    let wi: Vec<f64> = (0..n).map(|i| wt[i] * lum[i] as f64).collect();
-    let wii: Vec<f64> = (0..n).map(|i| wi[i] * lum[i] as f64).collect();
-    let (sw, si, sii) = (
-        box_sum(&wt, w, h, r),
-        box_sum(&wi, w, h, r),
-        box_sum(&wii, w, h, r),
-    );
-    // Per-window linear model base = a·I + b.
-    let mut wa = vec![0.0f64; n];
-    let mut wb = vec![0.0f64; n];
+    let wt: Vec<f32> = alpha.iter().map(|&a| a.clamp(0.0, 1.0)).collect();
+    let sw = box_sum(&wt, w, h, r);
+    let (si, sii) = {
+        let wi: Vec<f32> = (0..n).map(|i| wt[i] * lum[i]).collect();
+        let si = box_sum(&wi, w, h, r);
+        let wii: Vec<f32> = (0..n).map(|i| wi[i] * lum[i]).collect();
+        drop(wi);
+        (si, box_sum(&wii, w, h, r))
+    };
+    // Per-window linear model base = a·I + b (in f64: the variance is a
+    // small difference of large sums).
+    let mut wa = vec![0.0f32; n];
+    let mut wb = vec![0.0f32; n];
     wa.par_iter_mut()
         .zip(wb.par_iter_mut())
         .enumerate()
         .for_each(|(i, (oa, ob))| {
-            if sw[i] <= 1e-9 {
+            let s = sw[i] as f64;
+            if s <= 1e-9 {
                 return;
             }
-            let m = si[i] / sw[i];
-            let var = (sii[i] / sw[i] - m * m).max(0.0);
+            let m = si[i] as f64 / s;
+            let var = (sii[i] as f64 / s - m * m).max(0.0);
             let a = var / (var + SH_EPS);
             let b = (1.0 - a) * m;
-            *oa = wt[i] * a;
-            *ob = wt[i] * b;
+            *oa = (wt[i] as f64 * a) as f32;
+            *ob = (wt[i] as f64 * b) as f32;
         });
+    drop((si, sii, wt));
     // Every weighted pixel's own window holds its weight, so the second
     // pass normalises by the same window sums `sw`.
-    let (sa, sb) = (box_sum(&wa, w, h, r), box_sum(&wb, w, h, r));
+    let sa = box_sum(&wa, w, h, r);
+    drop(wa);
+    let sb = box_sum(&wb, w, h, r);
+    drop(wb);
     (0..n)
         .into_par_iter()
         .map(|i| {
-            if sw[i] <= 1e-9 {
+            let s = sw[i] as f64;
+            if s <= 1e-9 {
                 return lum[i];
             }
-            ((sa[i] / sw[i]) * lum[i] as f64 + sb[i] / sw[i]) as f32
+            ((sa[i] as f64 / s) * lum[i] as f64 + sb[i] as f64 / s) as f32
         })
         .collect()
 }
@@ -368,10 +381,12 @@ pub fn shadows_highlights(src: &Raster, p: &ShadowsHighlights) -> Raster {
     let sh_on = p.shadows.amount > 0.0;
     let hi_on = p.highlights.amount > 0.0;
     let base_s = sh_on.then(|| tone_base(&lum, &alpha, w, h, rs));
-    let base_h = match (hi_on, &base_s) {
-        (true, Some(b)) if rh == rs => Some(b.clone()),
-        (true, _) => Some(tone_base(&lum, &alpha, w, h, rh)),
+    // The same radius shares one base.
+    let own_h = (hi_on && !(sh_on && rh == rs)).then(|| tone_base(&lum, &alpha, w, h, rh));
+    let base_h: Option<&Vec<f32>> = match (hi_on, &own_h) {
         (false, _) => None,
+        (true, Some(b)) => Some(b),
+        (true, None) => base_s.as_ref(),
     };
     let mut out = src.clone();
     out.pixels.par_iter_mut().enumerate().for_each(|(i, o)| {
@@ -380,9 +395,7 @@ pub fn shadows_highlights(src: &Raster, p: &ShadowsHighlights) -> Raster {
         }
         let l = lum[i];
         let ws = base_s.as_ref().map_or(0.0, |b| shadow_weight(&p.shadows, b[i]));
-        let wh = base_h
-            .as_ref()
-            .map_or(0.0, |b| highlight_weight(&p.highlights, b[i]));
+        let wh = base_h.map_or(0.0, |b| highlight_weight(&p.highlights, b[i]));
         let l1 = lift_curve(l, ws);
         let l2 = 1.0 - lift_curve(1.0 - l1, wh);
         let m = p.midtone.clamp(-1.0, 1.0);
