@@ -831,4 +831,84 @@ mod tests {
         full[histogram::BINS - 1] = 10;
         assert!(auto_tone_levels(&full).is_none());
     }
+
+    /// The app on a small blank document (white), with no dialog and no
+    /// autosave.
+    fn small_app() -> App {
+        let mut app = crate::a11y_tests::launch(&[]);
+        app.open_in_new_tab(blank(64, 48), None);
+        app
+    }
+
+    fn frames(app: &mut App, ctx: &egui::Context, n: usize) {
+        for _ in 0..n {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            let _ = ctx.run(raw, |ctx| app.frame(ctx));
+        }
+    }
+
+    #[test]
+    fn every_adjustment_dialog_names_its_controls() {
+        let mut app = small_app();
+        let ctx = crate::a11y_tests::ctx();
+        // A selection, so Equalize asks and Match Color offers its option.
+        app.run(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(4, 4, 20, 20))),
+        });
+        for id in [ADJ_SH, ADJ_EQUALIZE, ADJ_REPLACE, ADJ_MATCH] {
+            app.run_menu_action(id);
+            assert!(app.adjx.is_some(), "{id} opens a dialog");
+            if let Some(AdjxKind::MatchColor { pick, .. }) = app.adjx.as_mut().map(|s| &mut s.kind) {
+                pick.doc = Some(0); // the layer list shows too
+            }
+            let missing = crate::a11y_tests::nameless(&mut app, &ctx);
+            assert_eq!(missing, Vec::<String>::new(), "in {id}");
+            app.adjx = None;
+        }
+    }
+
+    #[test]
+    fn ok_is_one_undo_step_and_cancel_none() {
+        let mut app = small_app();
+        let ctx = crate::a11y_tests::ctx();
+        let before = app.editor.history().len();
+        app.run_menu_action(ADJ_SH);
+        frames(&mut app, &ctx, 2);
+        // Previewing never touches the history.
+        assert_eq!(app.editor.history().len(), before);
+        app.adjx.as_mut().unwrap().debug_ok = true;
+        frames(&mut app, &ctx, 1);
+        assert!(app.adjx.is_none());
+        assert_eq!(app.editor.history().len(), before + 1);
+        assert_eq!(app.editor.history().last().copied(), Some("Shadows/Highlights"));
+        // Cancel (Esc) closes without a step.
+        app.run_menu_action(ADJ_REPLACE);
+        frames(&mut app, &ctx, 1);
+        app.adjx = None;
+        frames(&mut app, &ctx, 1);
+        assert_eq!(app.editor.history().len(), before + 1);
+        // Desaturate runs straight away: white stays white, one step.
+        app.run_menu_action(ADJ_DESATURATE);
+        assert_eq!(app.editor.history().last().copied(), Some("Desaturate"));
+    }
+
+    #[test]
+    fn adjustments_need_an_unlocked_pixel_layer() {
+        let mut app = small_app();
+        assert_eq!(app.adjx_action_block(ADJ_SH), Some(None));
+        app.add_adjustment(Adjustment::Invert);
+        assert_eq!(
+            app.adjx_action_block(ADJ_SH),
+            Some(Some("Select a pixel layer first"))
+        );
+        assert_eq!(app.adjx_action_block("auto-contrast"), None, "not ours");
+        app.run_menu_action(ADJ_SH);
+        assert!(app.adjx.is_none(), "blocked: no dialog");
+    }
 }
