@@ -15,9 +15,20 @@ impl App {
                 // was measured too wide at that tier (per tool and state,
                 // so each tier's width is remembered and nothing flickers).
                 let w = ui.available_width();
+                // A tool's modes carry different controls (Spot healing a
+                // whole brush bar, Patch three checkboxes), so each mode
+                // is measured on its own: one crowded mode must not keep
+                // the others on the tight bar.
+                let mode = match self.tool {
+                    Tool::Heal => format!("{:?}", self.retouch.heal_mode),
+                    Tool::Eraser => format!("{:?}", self.retouch.eraser_mode),
+                    Tool::Brush => format!("{:?}", self.brush.mode),
+                    _ => String::new(),
+                };
                 let key = egui::Id::new((
                     "options-fit",
                     self.tool.name(),
+                    mode,
                     self.editing_mask,
                     self.quick_mask,
                     self.xform.is_some(),
@@ -258,36 +269,29 @@ impl App {
                                 return;
                             }
                             if self.tool == Tool::Brush {
-                                const MODES: [(BrushMode, &str); 9] = [
-                                    (BrushMode::Paint, "Paint"),
-                                    (BrushMode::Dodge, "Dodge"),
-                                    (BrushMode::Burn, "Burn"),
-                                    (BrushMode::Smudge, "Smudge"),
-                                    (BrushMode::Saturate, "Sat+"),
-                                    (BrushMode::Desaturate, "Sat−"),
-                                    (BrushMode::Blur, "Blur"),
-                                    (BrushMode::Sharpen, "Sharpen"),
-                                    (BrushMode::History, "History"),
-                                ];
                                 if tier == Tier::Wide {
-                                    segmented(ui, &mut self.brush.mode, &MODES);
+                                    segmented(ui, &mut self.brush.mode, &BRUSH_MODES);
                                 } else {
                                     // Narrow: the modes fold into a menu.
-                                    let current = MODES
+                                    let current = BRUSH_MODES
                                         .iter()
                                         .find(|(m, _)| *m == self.brush.mode)
                                         .map_or("Paint", |(_, l)| *l);
                                     let r = egui::ComboBox::from_id_salt("brush-mode")
                                         .selected_text(current)
-                                        .width(86.0)
+                                        .width(96.0)
+                                        // Every mode in view: History and
+                                        // Blur must not hide below a scroll.
+                                        .height(480.0)
                                         .show_ui(ui, |ui| {
-                                            for (m, label) in MODES {
+                                            popup_style(ui);
+                                            for (m, label) in BRUSH_MODES {
                                                 ui.selectable_value(&mut self.brush.mode, m, label);
                                             }
                                         })
                                         .response;
                                     a11y_name(&r, "Brush mode");
-                                    r.on_hover_text("Brush mode");
+                                    r.on_hover_text(BRUSH_MODE_TIP);
                                 }
                                 if self.brush.mode == BrushMode::History {
                                     self.history_source_ui(ui);
@@ -353,14 +357,19 @@ impl App {
                             let mut hard = self.brush.hardness * 100.0;
                             // A sampled tip carries its own edge.
                             let round = self.brush.tip.is_none();
-                            if ui
-                                .add_enabled_ui(round, |ui| row(ui, "Hardness", &mut hard, 0.0..=100.0))
-                                .inner
-                            {
+                            // Greyed out with a sampled tip, and says why.
+                            if greyed_out_because(ui, round, SAMPLED_TIP_HARDNESS, |ui| {
+                                row(ui, "Hardness", &mut hard, 0.0..=100.0)
+                            }) {
                                 self.brush.hardness = hard / 100.0;
                             }
                             let mut op = self.brush.color[3] * 100.0;
-                            if row(ui, "Opacity", &mut op, 1.0..=100.0) {
+                            let mode = if self.tool == Tool::Brush {
+                                self.brush.mode
+                            } else {
+                                BrushMode::Paint
+                            };
+                            if row(ui, strength_label(mode), &mut op, 1.0..=100.0) {
                                 self.brush.color[3] = op / 100.0;
                             }
                             if pen::toggle(ui, &mut self.prefs.pen_opacity, "Pen pressure controls opacity") {
@@ -543,12 +552,13 @@ impl App {
         } else {
             "Save preset"
         };
-        if ui
-            .button(save)
-            .on_hover_text(
-                "Save a brush preset: the current tip, size, hardness, opacity, spacing and dynamics",
-            )
-            .clicked()
+        let r = ui.button(save);
+        // A tight bar's "Save" still says what it saves.
+        a11y_name(&r, "Save brush preset");
+        if r.on_hover_text(
+            "Save a brush preset: the current tip, size, hardness, opacity, spacing and dynamics",
+        )
+        .clicked()
         {
             let kind = match &self.brush.tip {
                 Some(t) => t.name().to_string(),
@@ -594,6 +604,39 @@ impl App {
         }
     }
 }
+
+/// The Brush's modes, in the bar's order: Photoshop's painting and
+/// retouching brushes (Sponge is Saturate / Desaturate).
+pub(crate) const BRUSH_MODES: [(BrushMode, &str); 9] = [
+    (BrushMode::Paint, "Paint"),
+    (BrushMode::Dodge, "Dodge"),
+    (BrushMode::Burn, "Burn"),
+    (BrushMode::Smudge, "Smudge"),
+    (BrushMode::Saturate, "Saturate"),
+    (BrushMode::Desaturate, "Desaturate"),
+    (BrushMode::Blur, "Blur"),
+    (BrushMode::Sharpen, "Sharpen"),
+    (BrushMode::History, "History"),
+];
+
+/// What the brush's strength control is called in `mode`, by Photoshop's
+/// names for its retouching brushes: Dodge and Burn have an Exposure, the
+/// Sponge a Flow, Smudge, Blur and Sharpen a Strength.
+pub(crate) fn strength_label(mode: BrushMode) -> &'static str {
+    match mode {
+        BrushMode::Dodge | BrushMode::Burn => "Exposure",
+        BrushMode::Saturate | BrushMode::Desaturate => "Flow",
+        BrushMode::Smudge | BrushMode::Blur | BrushMode::Sharpen => "Strength",
+        BrushMode::Paint | BrushMode::Erase | BrushMode::History => "Opacity",
+    }
+}
+
+/// Why Hardness is greyed out with a sampled tip.
+pub(crate) const SAMPLED_TIP_HARDNESS: &str =
+    "A sampled tip has its own edge: pick the Round tip in Brush settings to set the hardness";
+
+const BRUSH_MODE_TIP: &str = "Brush mode: paint, or retouch with Dodge (O), Burn, Smudge, the Sponge \
+     (Saturate, Desaturate), Blur, Sharpen or the History Brush (Y)";
 
 /// How much horizontal room the options bar has.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -714,10 +757,41 @@ pub(crate) fn bar_value(
             58.0,
         );
         a11y_name(&b, label);
-        b.on_hover_text(format!("{label}: drag to change, click to type"))
+        disabled_reason(ui, b)
+            .on_hover_text(format!("{label}: drag to change, click to type"))
             .changed()
     })
     .inner
+}
+
+/// Where [`greyed_out_because`] keeps its reason for the bar's widgets.
+fn reason_id() -> egui::Id {
+    egui::Id::new("options-bar-disabled-reason")
+}
+
+/// Lay out `add` greyed out (unless `enabled`), its bar sliders and
+/// number fields saying `why` on hover.
+pub(crate) fn greyed_out_because<R>(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    why: &str,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.data_mut(|d| d.insert_temp(reason_id(), why.to_string()));
+        let r = add(ui);
+        ui.data_mut(|d| d.remove::<String>(reason_id()));
+        r
+    })
+    .inner
+}
+
+/// A greyed-out bar widget says why, when its row gave a reason.
+fn disabled_reason(ui: &egui::Ui, r: egui::Response) -> egui::Response {
+    match ui.data(|d| d.get_temp::<String>(reason_id())) {
+        Some(why) if !ui.is_enabled() => r.on_disabled_hover_text(why),
+        _ => r,
+    }
 }
 
 /// A slider cluster in the bar: muted label, slider, typeable mono value.
@@ -741,7 +815,7 @@ pub(crate) fn bar_slider(
                 .show_value(false),
         );
         a11y_name(&a, label);
-        let a = a.on_hover_text(label).changed();
+        let a = disabled_reason(ui, a).on_hover_text(label).changed();
         let b = num_field(
             ui,
             egui::DragValue::new(v)
@@ -752,7 +826,7 @@ pub(crate) fn bar_slider(
             58.0,
         );
         a11y_name(&b, label);
-        a || b.changed()
+        a || disabled_reason(ui, b).changed()
     })
     .inner
 }
@@ -775,7 +849,7 @@ pub(crate) fn select_ops(ui: &mut egui::Ui, op: &mut CombineOp) {
 fn tool_hint(tool: Tool) -> Option<&'static str> {
     Some(match tool {
         Tool::Move => "Drag moves the layer · Alt-drag a copy · Shift+arrows 10 px",
-        Tool::Eyedropper => "Click to pick the brush colour from the image",
+        Tool::Eyedropper => "Click to pick the foreground colour from the image",
         Tool::Gradient => "Drag on the canvas; Shift snaps to 45°",
         Tool::RectSelect | Tool::EllipseSelect => {
             "Shift adds, Alt subtracts; mid-drag Shift squares, Alt centres"

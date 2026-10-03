@@ -235,7 +235,7 @@ pub(crate) fn gradient_editor_opts(
     let sel = st.selected;
     let swatch_id = id.with("swatch");
     ui.horizontal(|ui| {
-        row_label(ui, "Stop color", LABEL_W);
+        row_label(ui, "Stop colour", LABEL_W);
         let (r, _) = ui.allocate_exact_size(egui::vec2(34.0, 20.0), Sense::hover());
         let sresp = ui.interact(r, swatch_id, Sense::click());
         let mut srgb = g.stops[sel].color.map(linear_to_srgb_f);
@@ -413,7 +413,12 @@ impl App {
                     }
                 });
                 finished |= slider_row(ui, "Angle", angle, -180.0..=180.0, "°");
-                finished |= slider_row_scaled(ui, "Scale", scale, 0.1..=1.5, 100.0, "%");
+                // The Gradient tool's fill-layer mode can make any scale
+                // (a long radial drag passes 150%): the range takes the
+                // value in, so showing the panel never clamps it, which
+                // would change the gradient and add an undo step.
+                let range = scale.min(0.1)..=scale.max(1.5);
+                finished |= slider_row_scaled(ui, "Scale", scale, range, 100.0, "%");
                 if check(ui, reverse, "Reverse").changed() {
                     finished = true;
                 }

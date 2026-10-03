@@ -23,7 +23,11 @@ impl App {
 
     pub(crate) fn fill_active(&mut self) {
         if let Some(layer) = self.active {
-            let color = self.make_brush().color;
+            // Full strength, as Photoshop's Alt+Backspace: the brush's
+            // Opacity belongs to the brush, not to Fill (and Cmd+Backspace
+            // fills the background colour at full strength too).
+            let mut color = self.make_brush().color;
+            color[3] = 1.0;
             self.run(&Fill { layer, color });
         }
     }
@@ -412,7 +416,7 @@ impl App {
         self.act(ui, "Puppet Warp", "puppet-warp");
         self.act(ui, "Content-Aware Scale", "content-aware-scale");
         menu_separator(ui);
-        self.act(ui, "Fill with brush colour", "fill");
+        self.act(ui, "Fill with foreground colour", "fill");
         self.act(ui, "Fill with background colour", "fill-bg");
         self.act(ui, "Fill...", "fill-dialog");
         self.act(ui, "Stroke...", "stroke-selection");
