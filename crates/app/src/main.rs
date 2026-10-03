@@ -72,6 +72,7 @@ mod session;
 mod shape_tool;
 mod smart_contents;
 mod smart_filters_ui;
+mod soft_proof;
 mod start;
 mod status;
 mod text_edit;
@@ -356,6 +357,9 @@ struct App {
     pan: Vec2,
     view_cmd: Option<ViewCmd>,
     canvas_tex: Option<TextureHandle>,
+    /// View ▸ Proof Colors / Gamut Warning (soft_proof.rs): display only.
+    proof_colors: bool,
+    gamut_warning: bool,
     overlay_tex: Option<TextureHandle>,
     thumbs: HashMap<LayerId, TextureHandle>,
     mask_thumbs: HashMap<LayerId, TextureHandle>,
@@ -565,6 +569,8 @@ impl App {
             pan: Vec2::ZERO,
             view_cmd: Some(ViewCmd::Fit),
             canvas_tex: None,
+            proof_colors: false,
+            gamut_warning: false,
             overlay_tex: None,
             thumbs: HashMap::new(),
             mask_thumbs: HashMap::new(),
@@ -1166,8 +1172,9 @@ impl App {
             self.run(&SetSelection { selection: None });
         }
         // Rebindable command chords (see session::SHORTCUTS for the
-        // defaults and Preferences for rebinding); Ctrl+Y stays a fixed
-        // redo alias.
+        // defaults and Preferences for rebinding); Ctrl+Y is a redo alias
+        // only when Proof colors no longer holds it (its default, as in
+        // Photoshop).
         let mut fired: Vec<&'static str> = Vec::new();
         ctx.input_mut(|i| {
             // Stamp visible (Shift+Alt+Cmd+E) holds the merge chords, so

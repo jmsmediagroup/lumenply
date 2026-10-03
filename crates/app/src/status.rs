@@ -62,6 +62,11 @@ impl App {
                     ui.label(
                         RichText::new(format!("{n} layer{}", if n == 1 { "" } else { "s" })).color(MUTED),
                     );
+                    if self.proof_colors || self.gamut_warning {
+                        ui.separator();
+                        ui.label(RichText::new(crate::soft_proof::PROOF_NOTE).color(ACCENT))
+                            .on_hover_text("View ▸ Proof colors: the canvas shows how the image prints");
+                    }
                     if self.editing_mask {
                         ui.separator();
                         ui.label(RichText::new("Editing mask").color(ACCENT))

@@ -62,11 +62,13 @@ impl App {
             return;
         }
         let size = nav_size(doc.width, doc.height);
+        let proof = self.proof_view();
         let img = thumb_with(doc.canvas(), size, |x, y| {
-            to_color32(flat.get(
+            let c = to_color32(flat.get(
                 x.clamp(0, flat.width as i32 - 1) as u32,
                 y.clamp(0, flat.height as i32 - 1) as u32,
-            ))
+            ));
+            crate::soft_proof::proof_color32(c, proof)
         });
         upload(
             &mut self.panels.nav_tex,

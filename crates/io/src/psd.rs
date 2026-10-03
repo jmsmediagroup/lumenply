@@ -36,6 +36,9 @@ pub(crate) fn read_pattern_record_pub(b: &[u8]) -> Option<(lumenply_doc::Pattern
 mod shape;
 mod text;
 
+/// The built-in U.S. Web Coated (SWOP) model, shared with soft proofing.
+pub(crate) use color_modes::SWOP_PRIMARIES;
+
 #[derive(Debug, thiserror::Error)]
 pub enum PsdError {
     #[error("not a PSD file: {0}")]

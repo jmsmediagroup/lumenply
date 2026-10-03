@@ -77,6 +77,9 @@ def one(path, out):
         psd = PSDImage.open(path)
         rec.update(mode=str(psd.color_mode), depth=psd.depth)
         ref = psd.topil()
+        # Pillow's LAB -> RGBA conversion leaves alpha at 0; LAB -> RGB is right.
+        if ref is not None and ref.mode == "LAB":
+            ref = ref.convert("RGB")
     except Exception as e:  # noqa: BLE001 - psd-tools fails on some fixtures
         rec["reference_error"] = repr(e)[:200]
     t = time.time()
