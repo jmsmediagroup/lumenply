@@ -33,6 +33,7 @@ pub mod perspective_crop;
 pub mod puppet;
 pub mod quick_select;
 pub mod refine;
+pub mod resolution;
 mod retouch;
 mod retouch_brush;
 mod select_ops;

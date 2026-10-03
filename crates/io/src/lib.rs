@@ -15,6 +15,7 @@ pub mod psd;
 mod psd_channels;
 mod psd_guides;
 pub mod raw;
+pub mod resolution;
 pub mod system_image;
 
 use std::path::Path;

@@ -223,6 +223,9 @@ impl App {
             None => encode(&st.flat, s).bytes,
         };
         st.job = None;
+        // PNG and JPEG carry the document's print resolution.
+        let ppi = self.editor.doc().resolution;
+        let bytes = bytes.map(|b| lumenply_io::resolution::with_ppi(b, ppi));
         match bytes.and_then(|b| std::fs::write(path, b).map_err(|e| e.to_string())) {
             Ok(()) => {
                 self.status = format!("Exported {path} ({}×{})", s.width, s.height);

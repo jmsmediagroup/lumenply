@@ -76,6 +76,13 @@ struct Manifest {
     /// Patterns the layers use (ADR 0020), pixels under patterns/.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     patterns: Vec<PatternRecord>,
+    /// Print resolution in pixels per inch; files from before it load as 72.
+    #[serde(default = "default_resolution")]
+    resolution: f32,
+}
+
+fn default_resolution() -> f32 {
+    lumenply_doc::DEFAULT_RESOLUTION
 }
 
 #[derive(Serialize, Deserialize)]
@@ -256,6 +263,7 @@ fn write_archive(path: &Path, doc: &Document) -> Result<(), ProjectError> {
         channels,
         layers,
         patterns,
+        resolution: doc.resolution,
     };
     zip.start_file("manifest.json", stored)?;
     zip.write_all(&serde_json::to_vec_pretty(&manifest)?)?;
@@ -413,6 +421,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Document, ProjectError> {
         .cloned()
         .collect();
     doc.float_mode = manifest.float_mode;
+    if lumenply_doc::RESOLUTION_RANGE.contains(&manifest.resolution) {
+        doc.resolution = manifest.resolution;
+    }
     doc.guides = manifest
         .guides
         .iter()

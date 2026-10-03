@@ -1476,10 +1476,15 @@ impl Command for ResizeCanvas {
     }
 }
 
-/// Scale the whole image (every pixel layer and mask) to a new size.
+/// Scale the whole image (every pixel layer and mask) to a new size, and
+/// optionally set the print resolution in the same step (Image ▸ Image
+/// Size). When the size is unchanged no pixel is touched, so a pure
+/// resolution change (Resample off) never resamples.
 pub struct ResizeImage {
     pub width: u32,
     pub height: u32,
+    /// New resolution in pixels per inch; `None` keeps the current one.
+    pub resolution: Option<f32>,
 }
 
 impl Command for ResizeImage {
@@ -1490,6 +1495,21 @@ impl Command for ResizeImage {
     fn apply(&self, doc: &mut Document) -> EditResult {
         if self.width == 0 || self.height == 0 {
             return Err(EditError::Invalid("image size must be positive".into()));
+        }
+        if let Some(ppi) = self.resolution {
+            crate::resolution::check_ppi(ppi)?;
+        }
+        if (self.width, self.height) == (doc.width, doc.height) {
+            match self.resolution {
+                Some(ppi) if ppi != doc.resolution => {
+                    doc.resolution = ppi;
+                    return Ok(());
+                }
+                _ => return Err(EditError::Invalid("image size is unchanged".into())),
+            }
+        }
+        if let Some(ppi) = self.resolution {
+            doc.resolution = ppi;
         }
         let t = Affine::scale(
             self.width as f32 / doc.width as f32,
@@ -3695,6 +3715,7 @@ mod tests {
         ResizeImage {
             width: 140,
             height: 120,
+            resolution: None,
         }
         .apply(&mut doc)
         .unwrap();
@@ -3708,7 +3729,13 @@ mod tests {
             (total - 4.0).abs() < 0.3,
             "doubling spreads one pixel over ~4: {total}"
         );
-        assert!(ResizeImage { width: 0, height: 5 }.apply(&mut doc).is_err());
+        assert!(ResizeImage {
+            width: 0,
+            height: 5,
+            resolution: None
+        }
+        .apply(&mut doc)
+        .is_err());
     }
 
     #[test]

@@ -53,6 +53,7 @@ pub(crate) fn name_blocks(doc: &Document) -> Vec<u8> {
 pub(crate) fn resources_section(guides: &[u8], doc: &Document) -> Vec<u8> {
     let mut blocks = guides.get(4..).unwrap_or(&[]).to_vec();
     blocks.extend_from_slice(&name_blocks(doc));
+    blocks.extend_from_slice(&crate::resolution::psd_resource_block(doc.resolution));
     let mut out = (blocks.len() as u32).to_be_bytes().to_vec();
     out.extend_from_slice(&blocks);
     out
@@ -215,9 +216,11 @@ mod tests {
         crate::psd::save(&path, &doc).unwrap();
         let bytes = std::fs::read(&path).unwrap();
         let _ = std::fs::remove_file(&path);
-        // header 26 + colour mode 4 + resources (4 + 0) + layer&mask len 4 +
-        // layer info len 4, then the signed layer count.
-        let at = 26 + 4 + 4 + 4 + 4;
+        // header 26 + colour mode 4 + resources (4 + their length, the
+        // resolution block at least) + layer&mask len 4 + layer info len 4,
+        // then the signed layer count.
+        let res_len = u32::from_be_bytes(bytes[30..34].try_into().unwrap()) as usize;
+        let at = 26 + 4 + 4 + res_len + 4 + 4;
         assert_eq!(i16::from_be_bytes([bytes[at], bytes[at + 1]]), -1);
     }
 }

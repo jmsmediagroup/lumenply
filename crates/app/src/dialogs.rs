@@ -233,7 +233,10 @@ impl App {
             // Either container is fine; anything else gets ".png".
             let p = enforce_extension(p, &["png", "tif", "tiff"]);
             let flat = lumenply_render::composite_raster(self.editor.doc());
-            match lumenply_io::save_16bit(&p, &flat) {
+            let ppi = self.editor.doc().resolution;
+            match lumenply_io::save_16bit(&p, &flat)
+                .and_then(|()| lumenply_io::resolution::set_file_ppi(&p, ppi))
+            {
                 Ok(()) => self.status = format!("Exported {}", p.display()),
                 Err(e) => self.status = format!("Could not export: {e}"),
             }
@@ -354,6 +357,7 @@ impl App {
                 // EXR is linear float: open in float mode so HDR values
                 // survive the import (and every edit after it).
                 doc.float_mode = path.to_ascii_lowercase().ends_with(".exr");
+                doc.resolution = lumenply_io::resolution::file_ppi(path).unwrap_or(doc.resolution);
                 let mut ed = Editor::new(doc);
                 let _ = ed.execute(&AddPixelLayer::from_raster("Background", raster, 0, 0));
                 // A fresh editor: the opened image is the starting point,
@@ -409,7 +413,7 @@ impl App {
 
     pub(crate) fn export_png(&mut self, path: &str) {
         let flat = lumenply_render::composite_raster(self.editor.doc());
-        match lumenply_io::save_png(path, &flat) {
+        match lumenply_io::resolution::save_png(path, &flat, self.editor.doc().resolution) {
             Ok(()) => self.status = format!("Exported {path}"),
             Err(e) => self.status = format!("Could not export: {e}"),
         }
@@ -417,7 +421,7 @@ impl App {
 
     pub(crate) fn export_jpeg(&mut self, path: &str, quality: u8) {
         let flat = lumenply_render::composite_raster(self.editor.doc());
-        match lumenply_io::save_jpeg(path, &flat, quality) {
+        match lumenply_io::resolution::save_jpeg(path, &flat, quality, self.editor.doc().resolution) {
             Ok(()) => self.status = format!("Exported {path} (quality {quality})"),
             Err(e) => self.status = format!("Could not export: {e}"),
         }
@@ -1248,6 +1252,7 @@ impl App {
                     self.run(&ResizeImage {
                         width: *w,
                         height: *h,
+                        resolution: None,
                     });
                     self.view_cmd = Some(ViewCmd::Fit);
                 }

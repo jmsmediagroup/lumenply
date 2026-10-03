@@ -72,8 +72,9 @@ pub struct Options {
     pub flatten: bool,
 }
 
-/// The flattened image of any file Lumenply opens.
-fn open_flat(path: &Path, auto: bool) -> Result<Raster> {
+/// The flattened image of any file Lumenply opens, with its print
+/// resolution (ppi; 72 when the file has none).
+fn open_flat(path: &Path, auto: bool) -> Result<(Raster, f32)> {
     let lower = path.to_string_lossy().to_ascii_lowercase();
     if lower.ends_with(".lumen")
         || lower.ends_with(".nge")
@@ -81,9 +82,10 @@ fn open_flat(path: &Path, auto: bool) -> Result<Raster> {
         || lower.ends_with(".psb")
     {
         let doc = super::load_any(&path.to_path_buf())?;
-        return Ok(lumenply_render::composite_raster(&doc));
+        return Ok((lumenply_render::composite_raster(&doc), doc.resolution));
     }
     let raster = lumenply_io::load(path)?;
+    let ppi = lumenply_io::resolution::file_ppi(path).unwrap_or(lumenply_doc::DEFAULT_RESOLUTION);
     if lumenply_io::raw::is_raw(path) {
         // As the Camera Raw workspace opens it: the camera tone curve,
         // plus Auto when asked.
@@ -92,9 +94,9 @@ fn open_flat(path: &Path, auto: bool) -> Result<Raster> {
         } else {
             Develop::default()
         };
-        return Ok(develop(&raster, &d));
+        return Ok((develop(&raster, &d), ppi));
     }
-    Ok(raster)
+    Ok((raster, ppi))
 }
 
 fn encode(r: &Raster, o: &Options) -> Result<(Vec<u8>, &'static str)> {
@@ -115,7 +117,7 @@ pub fn run(inputs: &[PathBuf], o: &Options) -> Result<usize> {
     for input in inputs {
         let t = Instant::now();
         let result = (|| -> Result<PathBuf> {
-            let mut img = open_flat(input, o.auto)?;
+            let (mut img, ppi) = open_flat(input, o.auto)?;
             if let Some(rs) = o.resize {
                 let (w, h) = rs.apply(img.width, img.height);
                 img = resample(&img, w, h);
@@ -131,7 +133,7 @@ pub fn run(inputs: &[PathBuf], o: &Options) -> Result<usize> {
             if dest.canonicalize().ok() == input.canonicalize().ok() && dest.exists() {
                 bail!("would overwrite the input; choose another --out folder");
             }
-            std::fs::write(&dest, bytes)?;
+            std::fs::write(&dest, lumenply_io::resolution::with_ppi(bytes, ppi))?;
             println!(
                 "{} -> {} ({}×{}, {:.0} ms)",
                 input.display(),
@@ -204,6 +206,34 @@ mod tests {
         assert_eq!(failed, 1);
         let img = image::open(out.join("a.jpg")).unwrap();
         assert_eq!((img.width(), img.height()), (20, 10));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_batch_keeps_the_print_resolution() {
+        let dir = std::env::temp_dir().join(format!("lumenply-batch-ppi-{}", std::process::id()));
+        let out = dir.join("out");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("b.png");
+        lumenply_io::resolution::save_png(&src, &Raster::new(8, 6), 300.0).unwrap();
+        let mut doc = lumenply_doc::Document::new(8, 6);
+        doc.resolution = 240.0;
+        let proj = dir.join("c.lumen");
+        lumenply_io::project::save(&proj, &doc).unwrap();
+        for (format, ext) in [("jpeg", "jpg"), ("png", "png")] {
+            let opts = Options {
+                out: out.clone(),
+                format: format.into(),
+                quality: 80,
+                resize: None,
+                auto: false,
+                flatten: true,
+            };
+            assert_eq!(run(&[src.clone(), proj.clone()], &opts).unwrap(), 0);
+            let ppi = |name: &str| lumenply_io::resolution::file_ppi(out.join(format!("{name}.{ext}")));
+            assert_eq!(ppi("b"), Some(300.0), "{format}");
+            assert_eq!(ppi("c"), Some(240.0), "{format}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

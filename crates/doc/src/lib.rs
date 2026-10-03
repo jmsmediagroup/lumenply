@@ -1094,6 +1094,11 @@ pub struct Document {
     /// Patterns the document's fills and effects use (ADR 0020); covered
     /// by undo, saved with projects and PSDs.
     pub patterns: Vec<Pattern>,
+    /// Print resolution in pixels per inch (72 unless a file or the user
+    /// set one). Metadata only: it never changes pixels, just the print
+    /// size `width / resolution` inches. Covered by undo; saved with
+    /// projects, PSDs (resource 1005), PNG (pHYs) and JPEG (JFIF).
+    pub resolution: f32,
 }
 
 /// A path stored under a name in the document's Paths list.
@@ -1179,6 +1184,21 @@ fn dist(a: (f32, f32), b: (f32, f32)) -> f32 {
     ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
 }
 
+/// The resolution of a document no file or user gave one: 72 ppi, as in
+/// Photoshop.
+pub const DEFAULT_RESOLUTION: f32 = 72.0;
+
+/// The resolutions a document may have, in pixels per inch.
+pub const RESOLUTION_RANGE: std::ops::RangeInclusive<f32> = 1.0..=30_000.0;
+
+impl Document {
+    /// Print size in inches at the document's resolution.
+    pub fn print_size_inches(&self) -> (f32, f32) {
+        let ppi = self.resolution.max(f32::MIN_POSITIVE);
+        (self.width as f32 / ppi, self.height as f32 / ppi)
+    }
+}
+
 impl Document {
     pub fn new(width: u32, height: u32) -> Self {
         Document {
@@ -1194,6 +1214,7 @@ impl Document {
             layers: Vec::new(),
             next_id: 1,
             patterns: Vec::new(),
+            resolution: DEFAULT_RESOLUTION,
         }
     }
 
@@ -1212,6 +1233,7 @@ impl Document {
             layers,
             next_id,
             patterns: Vec::new(),
+            resolution: DEFAULT_RESOLUTION,
         }
     }
 
