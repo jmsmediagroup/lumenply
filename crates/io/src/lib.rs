@@ -12,6 +12,7 @@ pub mod ora;
 pub mod pattern_files;
 pub mod pdf;
 pub mod project;
+pub mod proof;
 pub mod psd;
 mod psd_channels;
 mod psd_guides;

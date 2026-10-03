@@ -589,7 +589,7 @@ fn cmyk_transform(icc: &[u8]) -> Option<qcms::Transform> {
 /// least-squares fit of the model below over 20 000 random CMYK values:
 /// mean error 4.6/255 against the profile, where the naive
 /// (1 − C)(1 − K) formula is off by 15.5/255.
-const SWOP_PRIMARIES: [[f32; 3]; 16] = [
+pub(crate) const SWOP_PRIMARIES: [[f32; 3]; 16] = [
     [1.0, 1.0, 1.0],
     [0.01678, 0.01374, 0.01448],
     [1.0, 0.88792, 0.00037],

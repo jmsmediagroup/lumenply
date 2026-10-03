@@ -247,6 +247,11 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Record an action", crate::actions_panel::ACTION_RECORD),
     ("Stop recording the action", crate::actions_panel::ACTION_STOP),
     ("Play the selected action", crate::actions_panel::ACTION_PLAY),
+    (
+        "Proof colors (CMYK: U.S. Web Coated SWOP)",
+        crate::soft_proof::PROOF_COLORS,
+    ),
+    ("Gamut warning (CMYK)", crate::soft_proof::GAMUT_WARNING),
 ];
 
 impl App {
@@ -797,7 +802,7 @@ impl App {
         if self.run_panel_action(id) || self.run_everyday_action(id) || self.run_adjx_action(id) {
             return;
         }
-        if self.run_actions_panel_action(id) {
+        if self.run_actions_panel_action(id) || self.run_proof_action(id) {
             return;
         }
         match id {
@@ -1031,7 +1036,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 185); // + Actions panel, record, stop, play
+        assert_eq!(n, 187); // + Proof colors, gamut warning
     }
 
     #[test]

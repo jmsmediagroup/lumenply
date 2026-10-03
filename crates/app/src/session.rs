@@ -58,6 +58,9 @@ pub(crate) const SHORTCUTS: &[(&str, &str, bool, bool, &str)] = &[
     ("adjd-curves", "Curves", true, false, "M"),
     ("adjd-hue-saturation", "Hue/Saturation", true, false, "U"),
     ("adjd-invert", "Invert", true, false, "I"),
+    // Before "proof-colors": Shift+Cmd+Y contains Cmd+Y.
+    ("gamut-warning", "Gamut warning", true, true, "Y"),
+    ("proof-colors", "Proof colors", true, false, "Y"),
 ];
 
 /// The effective chord for an action: the user's binding when it parses,
