@@ -14,6 +14,8 @@ lumenply-doc.workspace = true
 lumenply-render.workspace = true
 thiserror.workspace = true
 rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 image.workspace = true
