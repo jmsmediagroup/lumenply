@@ -428,7 +428,9 @@ None of these could be tested in the container.
       scales freely; Alt-click an eye shows that layer alone (again
       restores); Shift+[ / ] step the brush hardness; the Layers panel
       filters by name (searching inside collapsed groups, keeping each
-      match's groups) in place of its duplicate title
+      match's groups) in place of its duplicate title; History snapshots
+      (a card's menu ▸ New snapshot, or the palette): named states kept
+      ahead of the strip, clicked to return in one undo step
 - [x] Merge selected layers (Cmd+E with several layers selected, "Merge
       layers"): the selected visible siblings composite into the topmost
       one's slot and name; hidden ones stay; picture unchanged (tested)

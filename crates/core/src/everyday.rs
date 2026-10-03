@@ -277,6 +277,24 @@ impl Command for SetVisibilities {
     }
 }
 
+/// History ▸ a snapshot clicked: the whole document returns to the state
+/// the snapshot kept, as one undoable step.
+pub struct RestoreSnapshot {
+    pub doc: Document,
+    pub name: String,
+}
+
+impl Command for RestoreSnapshot {
+    fn label(&self) -> String {
+        format!("Snapshot: {}", self.name)
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        *doc = self.doc.clone();
+        Ok(())
+    }
+}
+
 /// Select ▸ Reselect (Shift+Cmd+D): the selection most recently cleared.
 pub struct Reselect;
 
@@ -461,6 +479,49 @@ mod tests {
         assert!(!before.matches(ed.doc()));
         ed.execute(&before).unwrap();
         assert!(ed.doc().layer(b).unwrap().visible);
+    }
+
+    #[test]
+    fn a_snapshot_restores_the_whole_document_in_one_step() {
+        let mut doc = Document::new(20, 20);
+        let id = red_square_small(&mut doc);
+        let mut ed = Editor::new(doc);
+        let kept = ed.doc().clone();
+        ed.execute(&crate::commands::Clear { layer: id }).unwrap();
+        ed.execute(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(0, 0, 5, 5))),
+        })
+        .unwrap();
+        ed.execute(&RestoreSnapshot {
+            doc: kept,
+            name: "Before".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            ed.doc().layer(id).unwrap().pixels().unwrap().get_pixel(3, 3).a,
+            1.0
+        );
+        assert!(ed.doc().selection.is_none());
+        assert_eq!(
+            ed.history().last().map(|s| s.to_string()),
+            Some("Snapshot: Before".to_string())
+        );
+        ed.undo();
+        assert!(ed.doc().selection.is_some(), "one undo step back");
+    }
+
+    fn red_square_small(doc: &mut Document) -> LayerId {
+        let id = doc.add_pixel_layer("square");
+        for y in 2..8 {
+            for x in 2..8 {
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::new(1.0, 0.0, 0.0, 1.0),
+                );
+            }
+        }
+        id
     }
 
     #[test]

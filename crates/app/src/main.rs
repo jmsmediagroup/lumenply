@@ -453,6 +453,8 @@ struct App {
     hand_zoom: bool,
     /// The Layers panel's name filter (empty shows every layer).
     layer_filter: String,
+    /// History snapshots: (document key, name, the kept state).
+    snapshots: Vec<(u64, String, lumenply_doc::Document)>,
     /// Alt-click on an eye: (document, soloed layer, visibility before), so
     /// a second Alt-click restores it.
     solo: Option<(u64, LayerId, lumenply_core::everyday::SetVisibilities)>,
@@ -632,6 +634,7 @@ impl App {
             last_stroke_end: None,
             hand_zoom: false,
             layer_filter: String::new(),
+            snapshots: Vec::new(),
             solo: None,
             panels: Default::default(),
             patterns: Default::default(),

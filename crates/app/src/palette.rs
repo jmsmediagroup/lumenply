@@ -207,6 +207,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Duplicate document", "duplicate-doc"),
     ("Fill with background colour", "fill-bg"),
     ("Export PDF...", "export-pdf"),
+    ("New history snapshot", "new-snapshot"),
     ("New fill layer: pattern...", "fill-pattern"),
     ("Define Pattern", "define-pattern"),
     ("Import patterns (.pat)...", "import-patterns"),
@@ -980,7 +981,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 159); // + content-aware scale, perspective crop
+        assert_eq!(n, 160); // + content-aware scale, perspective crop
     }
 
     #[test]

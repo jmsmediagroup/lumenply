@@ -26,6 +26,7 @@ impl App {
             "select-layer-pixels" => None,
             "layer-front" | "layer-back" if self.active_layer().is_none() => Some("Select a layer first"),
             "layer-front" | "layer-back" | "duplicate-doc" => None,
+            "new-snapshot" => None,
             "fill-bg" if !self.active_is_pixel() => Some("Select a pixel layer first"),
             "fill-bg" => None,
             _ => return None,
@@ -48,6 +49,7 @@ impl App {
                 }
             }
             "reselect" => self.run(&Reselect),
+            "new-snapshot" => self.new_snapshot(None),
             "fill-bg" => {
                 if let Some(layer) = self.active {
                     let color = linear_rgba(self.bg_rgb, 1.0);
@@ -380,6 +382,14 @@ mod tests {
         assert_eq!(names, ["photo"]);
         app.layer_filter.clear();
         assert_eq!(app.layer_rows().len(), 3);
+        // A snapshot brings the document back in one step.
+        app.run_menu_action("new-snapshot");
+        let before = app.editor.doc().layers().len();
+        app.run_menu_action("new-layer");
+        assert_eq!(app.editor.doc().layers().len(), before + 1);
+        let (_, name, kept) = app.snapshots.last().cloned().unwrap();
+        app.run(&lumenply_core::everyday::RestoreSnapshot { doc: kept, name });
+        assert_eq!(app.editor.doc().layers().len(), before);
         // Duplicate the document into a new, unsaved tab.
         let tabs = app.tab_infos().len();
         app.run_menu_action("duplicate-doc");
