@@ -118,3 +118,37 @@ fn live_camera_raw_layer_develops_what_is_below() {
     let p = lumenply_render::composite_raster(ed.doc()).get(100, 50);
     assert!((p.r - 0.8).abs() < 1e-3, "{p:?}");
 }
+
+/// Run with `--ignored --nocapture`: the editor's cost around the filter
+/// on a demo-sized (1800×1205) layer.
+#[test]
+#[ignore]
+fn timing_through_the_editor() {
+    let (w, h) = (1800u32, 1205u32);
+    let mut doc = Document::new(w, h);
+    let id = doc.add_pixel_layer("Photo");
+    let mut r = Raster::new(w, h);
+    for (i, p) in r.pixels.iter_mut().enumerate() {
+        let v = (i % 251) as f32 / 251.0;
+        *p = Rgba::new(v, v * 0.7, 0.3, 1.0);
+    }
+    *doc.layer_mut(id).unwrap().pixels_mut().unwrap() = TileStore::from_raster(&r, 0, 0);
+    let mut ed = Editor::new(doc);
+    let f = Filter::Develop {
+        settings: Develop {
+            clarity: 100.0,
+            texture: 60.0,
+            dehaze: 40.0,
+            ..Develop::NEUTRAL
+        },
+        frame: [0, 0, w as i32, h as i32],
+    };
+    let canvas = ed.doc().canvas();
+    let store = ed.doc().layer(id).unwrap().pixels().unwrap().clone();
+    let t = std::time::Instant::now();
+    let _ = lumenply_render::apply_filter_in_canvas(&store, &f, canvas);
+    println!("filter alone {:?}", t.elapsed());
+    let t = std::time::Instant::now();
+    ed.execute(&ApplyFilter { layer: id, filter: f }).unwrap();
+    println!("through the editor {:?}", t.elapsed());
+}
