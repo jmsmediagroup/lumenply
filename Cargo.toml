@@ -4,6 +4,7 @@ members = [
     "crates/tiles",
     "crates/doc",
     "crates/render",
+    "crates/graph",
     "crates/io",
     "crates/core",
     "crates/cli",
@@ -22,6 +23,7 @@ authors = ["NGE contributors"]
 lumenply-tiles = { path = "crates/tiles" }
 lumenply-doc = { path = "crates/doc" }
 lumenply-render = { path = "crates/render" }
+lumenply-graph = { path = "crates/graph" }
 lumenply-io = { path = "crates/io" }
 lumenply-core = { path = "crates/core" }
 
@@ -42,6 +44,7 @@ fontdue = "0.9"
 quick-xml = "0.36"
 wgpu = "22"
 pollster = "0.3"
+blake3 = "1.8"
 
 [profile.release]
 opt-level = 3

@@ -16,6 +16,7 @@ path = "src/main.rs"
 lumenply-tiles.workspace = true
 lumenply-doc.workspace = true
 lumenply-render.workspace = true
+lumenply-graph.workspace = true
 lumenply-io.workspace = true
 lumenply-core.workspace = true
 anyhow.workspace = true

@@ -177,7 +177,7 @@ fn composite_staged(
 /// tile padded by the filter's reach, clipped to the canvas). Outside the
 /// canvas the edge pixel is repeated, as Photoshop does, so borders don't
 /// fade.
-fn live_filter_into(
+pub fn live_filter_into(
     dst: &mut Option<Tile>,
     layer: &Layer,
     coord: TileCoord,
@@ -932,7 +932,7 @@ fn source_tile(layer: &Layer, coord: TileCoord, canvas: Rect) -> Option<Tile> {
 
 /// Mix `after` over `before` by `opacity × mask`: the result of a
 /// pass-through group at partial strength. `None` means a transparent tile.
-fn mix_tiles(
+pub fn mix_tiles(
     before: Option<Tile>,
     after: Option<Tile>,
     opacity: f32,

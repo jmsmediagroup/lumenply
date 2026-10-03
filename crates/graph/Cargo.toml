@@ -1,0 +1,19 @@
+[package]
+name = "lumenply-graph"
+description = "The document as a graph of operations: model, content keys, cached tile evaluation, history (ADR 0025)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+lumenply-tiles.workspace = true
+lumenply-doc.workspace = true
+lumenply-render.workspace = true
+rayon.workspace = true
+serde = { workspace = true, features = ["rc"] }
+serde_json.workspace = true
+blake3.workspace = true
+thiserror.workspace = true

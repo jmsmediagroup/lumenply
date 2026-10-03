@@ -444,6 +444,22 @@ impl Tile {
         }
     }
 
+    /// The stored pixel data as raw bytes (native endianness), with a tag
+    /// that tells the two storage formats apart: 0 for f32, 1 for 16-bit.
+    /// Equal tags and bytes mean equal tiles; content hashing relies on it.
+    pub fn raw_bytes(&self) -> (u8, &[u8]) {
+        match &self.data {
+            // SAFETY: Rgba is repr(C) of four f32 and [u16; 4] is plain old
+            // data; both have no padding, so every byte is initialised.
+            TileData::F32(p) => (0, unsafe {
+                std::slice::from_raw_parts(p.as_ptr() as *const u8, std::mem::size_of_val(&p[..]))
+            }),
+            TileData::U16(p) => (1, unsafe {
+                std::slice::from_raw_parts(p.as_ptr() as *const u8, std::mem::size_of_val(&p[..]))
+            }),
+        }
+    }
+
     /// True when every pixel is fully transparent.
     pub fn is_blank(&self) -> bool {
         match &self.data {

@@ -28,6 +28,8 @@ crates/tiles   sparse copy-on-write 256×256 tiles, Rect, Affine, Raster; compac
 crates/doc     document model: layer tree (pixel, group, adjustment, filter, text), masks,
                selections, Adjustment and Filter enums
 crates/render  CPU compositor (reference path), blend modes, filters, transforms, text rasteriser
+crates/graph   the document as a graph of operations (ADR 0025): JSON model, blobs, content
+               keys, cached tile evaluation, history, lowering from layer trees
 crates/io      PNG/JPEG load+save, native .nge (zip + JSON), PSD import/export
 crates/core    Editor (undo/redo, coalescing, history jumping) and every editing Command
 crates/cli     `nge` headless front end
@@ -35,7 +37,8 @@ crates/app     `nge-app` egui desktop shell (single large main.rs for now)
 docs/adr       architecture decisions — read before changing storage, file formats or PSD
 ```
 
-Dependencies point strictly downward: app/cli → core → render → doc → tiles; io beside them.
+Dependencies point strictly downward: app/cli → core → render → doc → tiles; io beside them;
+graph sits on render (core moves onto it in stage 3 of ADR 0025).
 
 ## Rules that keep the design intact
 
@@ -118,6 +121,9 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
   in main.rs render the whole UI (`App::frame`) and fail on any unnamed control.
 - `Response::has_focus()` is false whenever the window itself is unfocused (as in
   headless screenshot runs); check `ctx.memory(|m| m.has_focus(id))` instead.
+- **The graph must render what the layer tree renders**: `lumenply graph FILE --check`
+  lowers a document, renders it both ways and fails on any difference. Run it over the
+  corpus after touching `crates/graph` ops or the compositor.
 - **PSD fidelity is measured, not guessed**: `scripts/psd_corpus.py` renders the
   public psd-tools and ag-psd test files (~480 real Photoshop files) with the CLI
   and compares each with the composite Photoshop saved inside it. Run it before

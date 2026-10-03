@@ -60,6 +60,16 @@ enum Cmd {
     },
     /// Print the layer tree of a .lumen project.
     Info { project: PathBuf },
+    /// Lower a project or PSD to its edit graph (ADR 0025): print a
+    /// summary, write the graph's JSON with --out, and with --check render
+    /// it both ways and compare.
+    Graph {
+        project: PathBuf,
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        #[arg(long)]
+        check: bool,
+    },
     /// Time the compositor on a synthetic document (the Phase 1 gate).
     Bench {
         #[arg(long, default_value_t = 4096)]
@@ -187,6 +197,7 @@ fn main() -> Result<()> {
             println!("wrote {}", out.display());
             Ok(())
         }
+        Cmd::Graph { project, out, check } => graph_cmd(&project, out.as_ref(), check),
         Cmd::Info { project } => {
             let doc = load_any(&project)?;
             let (w_in, h_in) = doc.print_size_inches();
@@ -221,6 +232,70 @@ fn main() -> Result<()> {
 }
 
 /// Open a .lumen project or a .psd/.psb file.
+fn graph_cmd(path: &PathBuf, out: Option<&PathBuf>, check: bool) -> Result<()> {
+    use std::time::Instant;
+    let mut doc = load_any(path)?;
+    lumenply_render::fill::refresh_stale(&mut doc);
+    let renderer = lumenply_graph::Renderer::new();
+    let mut blobs = lumenply_graph::BlobStore::new();
+    let t = Instant::now();
+    let lowered = lumenply_graph::lower(&doc, &mut blobs, &renderer.hasher);
+    let graph = lowered.graph;
+    let lower_ms = t.elapsed().as_secs_f64() * 1e3;
+    let json = graph.to_json();
+    let mut by_type: std::collections::BTreeMap<&str, usize> = Default::default();
+    for (_, n) in graph.nodes() {
+        *by_type.entry(n.op.type_name()).or_default() += 1;
+    }
+    let types: Vec<String> = by_type.iter().map(|(t, n)| format!("{n} {t}")).collect();
+    println!(
+        "{}x{} px: {} nodes ({}), {} blobs, JSON {:.1} KB, lowered in {lower_ms:.1} ms",
+        graph.width,
+        graph.height,
+        graph.len(),
+        types.join(", "),
+        blobs.len(),
+        json.len() as f64 / 1024.0,
+    );
+    if let Some(out) = out {
+        std::fs::write(out, &json)?;
+        println!("wrote {}", out.display());
+    }
+    if check {
+        let canvas = doc.canvas();
+        let t = Instant::now();
+        let reference = lumenply_render::composite(&doc);
+        let tree_ms = t.elapsed().as_secs_f64() * 1e3;
+        let t = Instant::now();
+        let cold = renderer.render_canvas(&graph, &blobs);
+        let cold_ms = t.elapsed().as_secs_f64() * 1e3;
+        let t = Instant::now();
+        let warm = renderer.render_canvas(&graph, &blobs);
+        let warm_ms = t.elapsed().as_secs_f64() * 1e3;
+        let mut worst = 0f32;
+        for y in canvas.y..canvas.bottom() {
+            for x in canvas.x..canvas.right() {
+                let (p, q) = (reference.get_pixel(x, y), cold.get_pixel(x, y));
+                for (a, b) in [(p.r, q.r), (p.g, q.g), (p.b, q.b), (p.a, q.a)] {
+                    worst = worst.max((a - b).abs());
+                }
+            }
+        }
+        let same_warm = canvas.tiles().iter().all(|c| warm.tile(*c) == cold.tile(*c));
+        let stats = renderer.cache.stats();
+        println!(
+            "layer tree {tree_ms:.1} ms; graph cold {cold_ms:.1} ms, warm {warm_ms:.2} ms; max difference {worst:.2e}; \
+             cache {} tiles, {:.1} MB",
+            stats.tiles,
+            stats.bytes as f64 / 1048576.0
+        );
+        if worst > 1e-5 || !same_warm {
+            anyhow::bail!("the graph renders differently from the layer tree (max difference {worst})");
+        }
+    }
+    Ok(())
+}
+
 fn load_any(path: &PathBuf) -> Result<Document> {
     let lower = path.to_string_lossy().to_ascii_lowercase();
     if lower.ends_with(".psd") || lower.ends_with(".psb") {
