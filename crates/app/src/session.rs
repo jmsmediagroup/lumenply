@@ -135,7 +135,24 @@ pub(crate) struct Prefs {
     pub current_brush: Option<Box<BrushPreset>>,
     /// The dock's tab and the floating panels (panels.rs).
     pub panels: crate::panels::PanelPrefs,
+    /// Memory for rendered tiles the canvas can reuse (the edit graph's
+    /// render cache, ADR 0025), in megabytes; see [`DEFAULT_RENDER_CACHE_MB`].
+    pub render_cache_mb: usize,
+    /// Show the render cache's memory use in the status bar.
+    pub show_render_cache: bool,
 }
+
+/// The render cache's default budget. Rendering keeps the image, layers'
+/// pixels and the backdrop under the layer being edited (transient
+/// composites, see `lumenply_graph::Renderer::set_transient_composites`):
+/// on a 4000 × 3000 document each is 192 MB in 32-bit float, so 1.5 GB
+/// holds the image with an undo step or two of it and a backdrop besides,
+/// and keeps the previous versions of everything a session of local edits
+/// touches, while staying under a tenth of a 16 GB machine.
+pub(crate) const DEFAULT_RENDER_CACHE_MB: usize = 1536;
+
+/// Lowest and highest render cache budgets the Preferences offer (MB).
+pub(crate) const RENDER_CACHE_MB: std::ops::RangeInclusive<usize> = 256..=16384;
 
 /// One saved brush setup (the shape parameters; colour stays with the
 /// colour well, mode with the options bar).
@@ -198,6 +215,8 @@ impl Default for Prefs {
             gradient_presets: Vec::new(),
             current_brush: None,
             panels: Default::default(),
+            render_cache_mb: DEFAULT_RENDER_CACHE_MB,
+            show_render_cache: false,
         }
     }
 }
@@ -231,7 +250,23 @@ impl Prefs {
     pub(crate) fn apply(&self, editor: &mut Editor) {
         editor.history_limit = self.undo_steps.clamp(1, 10_000);
         editor.history_memory_limit = self.undo_memory_mb.clamp(16, 1 << 20) << 20;
+        // A quarter for whole-layer results (text, fills, smart filters),
+        // the rest for tiles.
+        let budget = self
+            .render_cache_mb
+            .clamp(*RENDER_CACHE_MB.start(), *RENDER_CACHE_MB.end())
+            << 20;
+        let r = editor.renderer();
+        r.cache.set_budget(budget / 4 * 3);
+        r.wholes.set_budget(budget / 4);
+        r.set_transient_composites(true);
     }
+}
+
+/// Bytes the editor's render caches hold (tiles and whole-layer results).
+pub(crate) fn render_cache_bytes(editor: &Editor) -> usize {
+    let r = editor.renderer();
+    r.cache.stats().bytes + r.wholes.stats().1
 }
 
 pub(crate) fn data_dir() -> Option<PathBuf> {
@@ -294,12 +329,12 @@ pub(crate) fn remove_autosave() {
 /// Back up every unsaved open document (and where each came from), off
 /// the UI thread, replacing the previous set. Project saves are atomic, so
 /// a crash mid-write never leaves a corrupt backup.
-pub(crate) fn autosave_all(docs: Vec<(Document, Option<PathBuf>)>) {
+pub(crate) fn autosave_all(docs: Vec<(crate::project_io::ProjectSnapshot, Option<PathBuf>)>) {
     std::thread::spawn(move || write_backups(&docs));
 }
 
 /// [`autosave_all`]'s work, on the calling thread.
-pub(crate) fn write_backups(docs: &[(Document, Option<PathBuf>)]) {
+pub(crate) fn write_backups(docs: &[(crate::project_io::ProjectSnapshot, Option<PathBuf>)]) {
     let (Some(dir), Some(single), Some(single_src)) =
         (autosave_dir(), autosave_file(), autosave_source_file())
     else {
@@ -310,7 +345,7 @@ pub(crate) fn write_backups(docs: &[(Document, Option<PathBuf>)]) {
             return;
         }
         for (i, (doc, source)) in docs.iter().enumerate() {
-            if project::save(dir.join(format!("{i}.lumen")), doc).is_ok() {
+            if doc.save(&dir.join(format!("{i}.lumen"))).is_ok() {
                 let text = source
                     .as_ref()
                     .map(|p| p.to_string_lossy().into_owned())

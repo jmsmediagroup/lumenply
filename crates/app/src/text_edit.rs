@@ -536,7 +536,6 @@ impl App {
         if live && s.t.text.trim().is_empty() {
             if s.created && open {
                 self.editor.discard_coalescing(&s.key);
-                self.below.note_change(self.editor.doc(), None);
                 let r = self.editor.last_affected();
                 self.mark(r);
                 self.fix_active();
@@ -568,7 +567,6 @@ impl App {
         // The open run goes without a trace; whatever came before it
         // (another edit closed an earlier run) is restored as a step.
         if self.editor.discard_coalescing(&s.key) {
-            self.below.note_change(self.editor.doc(), None);
             let r = self.editor.last_affected();
             self.mark(r);
             self.fix_active();

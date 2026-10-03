@@ -142,6 +142,50 @@ whose cache the document holds compacted. Pixels in a chain cost no
 history memory (they can be recomputed); the memory limit counts the blob
 and record tiles each step stops holding.
 
+### The canvas (stage 3b, as built)
+
+The app draws the editor's current graph version with the editor's
+renderer: a redraw renders the dirty area of the output node and the
+cache supplies every tile an edit didn't change; an undo or redo finds the
+previous version's output still cached. `BelowCache` is gone from the
+app. Previews of a document that isn't a graph version (a stroke being
+drawn, a move or transform being dragged, a filter or adjustment dialog)
+take the backdrop under the active layer's top-level layer from the graph
+(`render_node` of the node compositing the layer below) and composite the
+layers from the active one up with the reference compositor, falling back
+to it entirely when nothing is below or a live filter sits above. Both are
+tested equal to the reference composite, bit for bit, over a sequence of
+app edits.
+
+Caching every node's tiles made full-canvas edits about twice as slow as
+`BelowCache` on a 30-layer 4000 × 3000 document: every layer above an
+edit allocated a fresh megabyte per tile per render. The renderer therefore
+has **transient composites** (`Renderer::set_transient_composites`, on in
+the app): a compositing node read by one reader, tile by tile, hands its
+tile to that reader without caching or copying it, unless it is the
+unchanged backdrop directly under a node whose key no earlier render saw
+(an edit's target). So the cache keeps the output, layers' content chains
+and the backdrop the next edit of the same layer reads, which is
+`BelowCache`'s backdrop as a special case of the node cache.
+
+Measured with `render_bench` (both paths on the same edits, under load
+from other builds): compositing for a stroke, an opacity drag and hiding a
+layer costs the same as before (6.6–8 ms, 47–55 ms, 47–53 ms on the
+large document); undo and redo of a stroke drop from 13–21 ms to 0.2–0.5
+ms, re-showing a layer or undoing it from 47–113 ms to 0.3 ms. A render's
+fixed cost (content keys, preparation) is about 0.5 ms for an 800-node
+graph. The rest of a redraw (histogram, display conversion, tile copy)
+is now parallel and the histogram follows partial redraws, taking a full
+redraw of the large document from 174 ms to about 70 ms and a stroke's
+from 89 ms to 13 ms.
+
+The cache budget is a preference (1536 MB by default: the image, a
+backdrop and an undo step or two of a 4000 × 3000 float document, under a
+tenth of a 16 GB machine), a quarter of it for whole-layer results; a
+parked document tab drops its rendered tiles. Pattern Overlay pixels are a
+blob the `layer` op names (`pattern_pixels`), so the content key covers
+them.
+
 ### Storage
 
 `.lumen` becomes a zip of `graph.json` (the graph, format version 3) plus

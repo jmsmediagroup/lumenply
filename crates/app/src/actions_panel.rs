@@ -172,6 +172,7 @@ impl ActionHost for AppHost<'_> {
         if matches!(id, "auto-contrast" | "auto-color" | "auto-tone") {
             // They read the composite; earlier steps changed it.
             self.app.last_flat = Some(lumenply_render::composite_raster(self.app.editor.doc()));
+            self.app.update_histogram();
         }
         self.app.actions.edit_error = None;
         self.app.run_menu_action_unrecorded(id);
@@ -405,7 +406,6 @@ impl App {
         self.actions.mute += 1;
         let result = actions::play(&mut AppHost { app: self }, &action);
         self.actions.mute -= 1;
-        self.below = lumenply_render::BelowCache::new();
         self.mark(None);
         self.fix_active();
         if (self.editor.doc().width, self.editor.doc().height) != size {

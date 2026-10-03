@@ -9,15 +9,53 @@ pub(crate) const BINS: usize = 64;
 /// domain — the same scale the Levels endpoints and every familiar
 /// histogram use.
 pub(crate) fn luminance_histogram(flat: &Raster) -> [u32; BINS] {
+    luminance_counts(&flat.pixels)
+}
+
+/// The luminance bin of one pixel (`None` for a transparent one).
+fn luminance_bin(p: &lumenply_tiles::Rgba) -> Option<usize> {
+    if p.a <= 0.0 {
+        return None;
+    }
+    let [r, g, b, _] = p.to_straight();
+    let y = lumenply_doc::adjust::srgb_encode(0.2126 * r + 0.7152 * g + 0.0722 * b);
+    Some(((y * (BINS - 1) as f32).round() as usize).min(BINS - 1))
+}
+
+/// [`luminance_histogram`] of some pixels, counted in parallel (the counts
+/// are integers, so the result doesn't depend on how the work is split).
+fn luminance_counts(pixels: &[lumenply_tiles::Rgba]) -> [u32; BINS] {
+    use rayon::prelude::*;
+    pixels
+        .par_chunks(1 << 16)
+        .map(|chunk| {
+            let mut hist = [0u32; BINS];
+            for b in chunk.iter().filter_map(luminance_bin) {
+                hist[b] += 1;
+            }
+            hist
+        })
+        .reduce(
+            || [0u32; BINS],
+            |mut a, b| {
+                for (x, y) in a.iter_mut().zip(b) {
+                    *x += y;
+                }
+                a
+            },
+        )
+}
+
+/// The luminance histogram of the pixels of `flat` inside `r` (which lies
+/// within it).
+pub(crate) fn luminance_histogram_in(flat: &Raster, r: Rect) -> [u32; BINS] {
     let mut hist = [0u32; BINS];
-    for p in &flat.pixels {
-        if p.a <= 0.0 {
-            continue;
+    for y in r.y..r.bottom() {
+        let row = y as usize * flat.width as usize;
+        let row = &flat.pixels[row + r.x as usize..row + r.right() as usize];
+        for (x, y) in hist.iter_mut().zip(luminance_counts(row)) {
+            *x += y;
         }
-        let [r, g, b, _] = p.to_straight();
-        let y = lumenply_doc::adjust::srgb_encode(0.2126 * r + 0.7152 * g + 0.0722 * b);
-        let bin = ((y * (BINS - 1) as f32).round() as usize).min(BINS - 1);
-        hist[bin] += 1;
     }
     hist
 }

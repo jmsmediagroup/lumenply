@@ -411,3 +411,87 @@ fn cycles_dangling_inputs_and_newer_files_are_refused() {
         .replace("\"format\": 3", "\"format\": 9");
     assert_eq!(Graph::from_json(&newer), Err(GraphError::TooNew(9)));
 }
+
+/// Bit for bit: transient composites change what is kept, never pixels.
+fn assert_identical(a: &TileStore, b: &TileStore, canvas: Rect) {
+    for y in canvas.y..canvas.bottom() {
+        for x in canvas.x..canvas.right() {
+            assert_eq!(a.get_pixel(x, y), b.get_pixel(x, y), "at ({x}, {y})");
+        }
+    }
+}
+
+#[test]
+fn transient_composites_keep_only_what_the_next_edit_reads() {
+    let doc = busy_document();
+    let canvas = doc.canvas();
+    let tiles = canvas.tiles();
+    let plain = Renderer::new();
+    let r = Renderer::new();
+    r.set_transient_composites(true);
+    let mut blobs = BlobStore::new();
+    let low = lower(&doc, &mut blobs, &r.hasher);
+    let background = low.layer_nodes[&doc.layers()[0].id];
+    let red = low.layer_nodes[&doc.layers()[1].id];
+    let shadowed = low.layer_nodes[&doc.layers()[2].id];
+    let with_red_at = |opacity: f32| {
+        let mut g = low.graph.clone();
+        g.update(red, |n| {
+            if let Op::Layer { props } = &mut n.op {
+                props.opacity = opacity;
+            }
+        })
+        .unwrap();
+        g
+    };
+    let cached = |g: &Graph, node: NodeId| {
+        let key = r.keys(g, g.output.unwrap())[&node];
+        tiles.iter().filter(|c| r.cache.contains(key, **c)).count()
+    };
+
+    // A first render keeps the image, not the layers on the way to it.
+    let g = low.graph.clone();
+    assert_identical(
+        &r.render_canvas(&g, &blobs),
+        &plain.render_canvas(&g, &blobs),
+        canvas,
+    );
+    assert_eq!(cached(&g, g.output.unwrap()), 4, "the output's four tiles");
+    assert_eq!(cached(&g, red), 0, "Red hands its tiles to the layer above");
+
+    // An edit of Red keeps the backdrop under it, and still nothing above.
+    let g1 = with_red_at(0.3);
+    assert_identical(
+        &r.render_canvas(&g1, &blobs),
+        &plain.render_canvas(&g1, &blobs),
+        canvas,
+    );
+    assert_eq!(cached(&g1, background), 4, "the backdrop under the edit");
+    assert_eq!(cached(&g1, red), 0);
+    assert_eq!(cached(&g1, shadowed), 0, "one reader, tile by tile");
+
+    // The next tick of the drag reads that backdrop from the cache. What
+    // it computes and keeps: the output, the clip chain under the
+    // pass-through group (two readers: the group and its first layer) and
+    // the hidden layer under the blur (read over an area): three nodes.
+    let before = r.cache.stats();
+    let g2 = with_red_at(0.2);
+    assert_identical(
+        &r.render_canvas(&g2, &blobs),
+        &plain.render_canvas(&g2, &blobs),
+        canvas,
+    );
+    let after = r.cache.stats();
+    assert_eq!(after.misses - before.misses, 3 * 4);
+    assert!(
+        after.bytes * 3 < plain.cache.stats().bytes * 2,
+        "{} bytes kept, {} keeping everything",
+        after.bytes,
+        plain.cache.stats().bytes
+    );
+
+    // Undo: the first version's image is still cached.
+    let before = r.cache.stats();
+    r.render_canvas(&g, &blobs);
+    assert_eq!(r.cache.stats().misses, before.misses, "undo recomputes nothing");
+}

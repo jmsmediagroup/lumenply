@@ -47,10 +47,13 @@ cache/<key>/<x>_<y>    one render-hint tile (optional)
   keys, so a stale hint is never used; saving drops hints no node's key
   matches. They are exact (f32 as rendered), so a hinted render is
   bit-identical to a fresh one.
-- **Pattern overlays.** `PatternRef` keeps an effect's pattern pixels as
-  derived state that the graph JSON leaves out; the manifest's `patterns`
-  table stores them as blobs and loading puts them back. (Fill and shape
-  ops already name their pattern blobs, `pattern_pixels`.)
+- **Pattern overlays.** A `layer` or `clip-group` op names its Pattern
+  Overlay's pixels as a blob (`pattern_pixels` in its settings), as fill
+  and shape ops name theirs, so the content key covers them and they are
+  saved like any other blob; the effect's own `PatternRef` carries none in
+  a lowered graph. (Stage 3b; before it, `PatternRef` kept them as derived
+  state the JSON leaves out and the manifest's `patterns` table stored
+  them. Loading still reads that table and puts the pixels back.)
 - **Atomic, parallel I/O.** Saving writes a sibling temp file and renames
   it (as version 1 does). Tiles are deflated in parallel, each into a
   one-entry zip in memory that is raw-copied into the archive; loading

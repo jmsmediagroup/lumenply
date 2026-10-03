@@ -169,3 +169,55 @@ fn history_versions_carry_payloads_squash_and_roll_back() {
     h.commit_with(Graph::new(9, 9), "more", 9);
     assert_eq!(h.versions().len(), 2);
 }
+
+#[test]
+fn a_pattern_overlay_is_stored_once_and_its_node_kept_across_edits() {
+    // A layer under a Pattern Overlay, and another layer to edit.
+    let mut doc = Document::new(64, 64);
+    let mut image = Raster::new(4, 4);
+    image.set(1, 1, Rgba::from_straight(1.0, 0.0, 0.0, 1.0));
+    doc.patterns
+        .push(lumenply_doc::Pattern::new("dots", "Dots", image.clone()));
+    let id = doc.add_pixel_layer("Patterned");
+    let l = doc.layer_mut(id).unwrap();
+    *l.pixels_mut().unwrap() = TileStore::from_raster(&Raster::filled(32, 32, Rgba::WHITE), 0, 0);
+    l.effects.pattern_overlay = Some(lumenply_doc::PatternOverlayFx::new(lumenply_doc::PatternRef {
+        id: "dots".into(),
+        name: "Dots".into(),
+        image: None,
+    }));
+    let other = doc.add_pixel_layer("Other");
+    assert!(doc.resolve_patterns());
+    let r = Renderer::new();
+    let mut blobs = BlobStore::new();
+    let (g1, s1) = sync(None, &doc, &mut blobs, &r.hasher);
+    let node = s1.layer(id).unwrap().node;
+    let Some(Op::Layer { props }) = g1.node(node).map(|n| &n.op) else {
+        panic!("a layer op")
+    };
+    let pixels = props.pattern_pixels.expect("named by blob");
+    assert_eq!(pixels.image(&blobs).unwrap(), image);
+    assert_eq!(blobs.len(), 2, "the layer's pixels and the pattern");
+    assert_same(
+        &r.render_canvas(&g1, &blobs),
+        &lumenply_render::composite(&doc),
+        doc.canvas(),
+    );
+
+    // Editing the other layer keeps the patterned layer's node itself (so
+    // its key and cached tiles), and the pattern is not stored again.
+    let mut next = doc.clone();
+    next.layer_mut(other).unwrap().opacity = 0.5;
+    let base = Base {
+        graph: &g1,
+        state: &s1,
+        doc: &doc,
+    };
+    let (g2, s2) = sync(Some(base), &next, &mut blobs, &r.hasher);
+    assert_eq!(s2.layer(id).unwrap().node, node);
+    assert!(Arc::ptr_eq(
+        g1.node_arc(node).unwrap(),
+        g2.node_arc(node).unwrap()
+    ));
+    assert_eq!(blobs.len(), 2);
+}

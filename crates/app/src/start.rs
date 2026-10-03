@@ -126,7 +126,6 @@ impl App {
         self.path = None;
         self.saved_rev = self.editor.history().len();
         self.hist_thumbs.clear();
-        self.below = lumenply_render::BelowCache::new();
         self.active = None;
         self.selected.clear();
         self.editing_mask = false;
@@ -164,10 +163,10 @@ impl App {
         let backups = session::autosave_backups();
         let (mut ok, mut failed) = (0, Vec::new());
         for (file, source) in backups {
-            match project::load(&file) {
-                Ok(doc) => {
+            match crate::project_io::open_project(&file) {
+                Ok(opened) => {
                     let had_path = source.is_some();
-                    self.open_in_new_tab(Editor::new(doc), source);
+                    self.open_in_new_tab(opened.editor, source);
                     if !had_path {
                         self.untitled = "Recovered".into();
                     }
@@ -175,7 +174,7 @@ impl App {
                     self.saved_rev = usize::MAX;
                     ok += 1;
                 }
-                Err(e) => failed.push(e.to_string()),
+                Err(e) => failed.push(e),
             }
         }
         self.status = match (ok, failed.is_empty()) {

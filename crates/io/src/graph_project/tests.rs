@@ -471,9 +471,9 @@ fn saves_are_atomic_and_refuse_broken_graphs() {
     let _ = std::fs::remove_file(&path);
 }
 
-#[test]
-fn pattern_overlays_keep_their_pattern_pixels() {
-    // A 3×2 pattern: red, green, blue over half-transparent grey.
+/// A 64 × 48 document with one layer under a Pattern Overlay of a 3 × 2
+/// pattern (red, green, blue over half-transparent grey), and the pattern.
+fn patterned_document() -> (Document, lumenply_tiles::Raster) {
     let mut image = lumenply_tiles::Raster::new(3, 2);
     for (i, c) in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
         .iter()
@@ -506,48 +506,24 @@ fn pattern_overlays_keep_their_pattern_pixels() {
     doc.add_layer(l);
     doc.patterns.push(pattern);
     assert!(doc.resolve_patterns());
+    (doc, image)
+}
 
-    let p = document_to_graph(&doc, 1);
-    let path = temp("pattern.lumen");
-    let stats = save_graph_project(&path, &p.graph, &p.blobs, &p.meta, None).unwrap();
-    assert_eq!(
-        (stats.blobs, stats.blob_tiles),
-        (2, 2),
-        "the layer and the pattern"
-    );
-    let back = load_graph_project(&path).unwrap();
-    assert!(back.warnings.is_empty(), "{:?}", back.warnings);
-    // The pattern's pixels live on the overlay again; the meta keeps the
-    // document's pattern list too, under the same blob.
-    assert_eq!(back.blobs.len(), 2, "the layer and the pattern");
-    let listed: Vec<BlobId> = serde_json::from_value(back.meta["blobs"].clone()).unwrap();
-    assert_eq!(listed.len(), 1);
-    assert_eq!(back.meta["patterns"][0]["pixels"]["blob"], listed[0].to_hex());
-    let (_, node) = back
-        .graph
+/// The patterned layer's op settings in `graph`.
+fn patterned_props(graph: &Graph) -> lumenply_graph::LayerProps {
+    let (_, node) = graph
         .nodes()
         .find(|(_, n)| n.name.as_deref() == Some("Patterned"))
         .unwrap();
     let Op::Layer { props } = &node.op else {
         panic!("{:?}", node.op)
     };
-    let got = props
-        .effects
-        .pattern_overlay
-        .as_ref()
-        .unwrap()
-        .pattern
-        .image
-        .as_ref()
-        .unwrap();
-    assert_eq!(**got, image);
-    assert_eq!(got.get(1, 0), Rgba::from_straight(0.0, 1.0, 0.0, 1.0));
+    props.clone()
+}
 
-    let ours = Renderer::new().render_canvas(&back.graph, &back.blobs);
-    let before = Renderer::new().render_canvas(&p.graph, &p.blobs);
-    assert_same_bits(&ours, &before, doc.canvas());
-    // The overlay tiles the pattern from the canvas origin at 80% over the
-    // layer's 0.2 grey: x = 9 is its red column, x = 10 its green one.
+/// The overlay tiles the pattern from the canvas origin at 80% over the
+/// layer's 0.2 grey: x = 9 is its red column, x = 10 its green one.
+fn assert_overlay_pixels(ours: &TileStore) {
     let close = |p: Rgba, q: [f32; 4]| {
         [(p.r, q[0]), (p.g, q[1]), (p.b, q[2]), (p.a, q[3])]
             .iter()
@@ -563,6 +539,117 @@ fn pattern_overlays_keep_their_pattern_pixels() {
         "{:?}",
         ours.get_pixel(10, 8)
     );
+}
+
+#[test]
+fn pattern_overlays_name_their_pattern_pixels_as_a_blob() {
+    let (doc, image) = patterned_document();
+    let p = document_to_graph(&doc, 1);
+    // The op names the pixels by blob (in its JSON, so in its content key);
+    // the effect's own reference carries none.
+    let props = patterned_props(&p.graph);
+    let pixels = props.pattern_pixels.expect("the overlay's pixels as a blob");
+    assert_eq!(pixels.size, [3, 2]);
+    assert_eq!(pixels.image(&p.blobs).unwrap(), image);
+    let po = props.effects.pattern_overlay.as_ref().unwrap();
+    assert!(po.pattern.image.is_none());
+    assert!(p.graph.to_json().contains(&pixels.blob.to_hex()));
+
+    let path = temp("pattern.lumen");
+    let stats = save_graph_project(&path, &p.graph, &p.blobs, &p.meta, None).unwrap();
+    assert_eq!(
+        (stats.blobs, stats.blob_tiles),
+        (2, 2),
+        "the layer and the pattern"
+    );
+    let raw = {
+        let mut zip = ZipArchive::new(File::open(&path).unwrap()).unwrap();
+        let mut s = String::new();
+        zip.by_name("manifest.json")
+            .unwrap()
+            .read_to_string(&mut s)
+            .unwrap();
+        serde_json::from_str::<Value>(&s).unwrap()
+    };
+    assert!(
+        raw.get("patterns").is_none(),
+        "no pattern table: the graph names the blob"
+    );
+    let back = load_graph_project(&path).unwrap();
+    assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+    assert_eq!(back.graph, p.graph);
+    // The meta keeps the document's pattern list under the same blob.
+    assert_eq!(back.blobs.len(), 2, "the layer and the pattern");
+    let listed: Vec<BlobId> = serde_json::from_value(back.meta["blobs"].clone()).unwrap();
+    assert_eq!(listed, vec![pixels.blob]);
+    assert_eq!(back.meta["patterns"][0]["pixels"]["blob"], pixels.blob.to_hex());
+
+    let ours = Renderer::new().render_canvas(&back.graph, &back.blobs);
+    assert_same_bits(&ours, &lumenply_render::composite(&doc), doc.canvas());
+    assert_overlay_pixels(&ours);
+
+    // Other pixels under the same pattern id and name are other content.
+    let mut other = doc.clone();
+    let mut changed = image.clone();
+    changed.set(0, 0, Rgba::from_straight(1.0, 1.0, 0.0, 1.0));
+    other.patterns[0].image = std::sync::Arc::new(changed);
+    other.layers_mut()[0]
+        .effects
+        .pattern_overlay
+        .as_mut()
+        .unwrap()
+        .pattern
+        .image = None;
+    assert!(other.resolve_patterns());
+    let q = document_to_graph(&other, 1);
+    let key = |g: &Graph| Renderer::new().keys(g, g.output.unwrap())[&g.output.unwrap()];
+    assert_ne!(key(&q.graph), key(&p.graph));
+    assert_eq!(key(&document_to_graph(&doc, 1).graph), key(&p.graph));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn files_with_a_pattern_table_still_open() {
+    // Earlier format 3 files left the pixels on the overlay's reference
+    // (in memory only) and stored them in the manifest's `patterns` table.
+    let (doc, image) = patterned_document();
+    let p = document_to_graph(&doc, 1);
+    let mut old = p.graph.clone();
+    let id = old
+        .nodes()
+        .find(|(_, n)| n.name.as_deref() == Some("Patterned"))
+        .unwrap()
+        .0;
+    old.update(id, |n| {
+        if let Op::Layer { props } = &mut n.op {
+            props.pattern_pixels = None;
+            props.effects.pattern_overlay.as_mut().unwrap().pattern.image =
+                Some(std::sync::Arc::new(image.clone()));
+        }
+    })
+    .unwrap();
+    let path = temp("pattern-table.lumen");
+    save_graph_project(&path, &old, &p.blobs, &p.meta, None).unwrap();
+    let raw = {
+        let mut zip = ZipArchive::new(File::open(&path).unwrap()).unwrap();
+        let mut s = String::new();
+        zip.by_name("manifest.json")
+            .unwrap()
+            .read_to_string(&mut s)
+            .unwrap();
+        serde_json::from_str::<Value>(&s).unwrap()
+    };
+    assert_eq!(raw["patterns"][0]["id"], "pat-1");
+
+    let back = load_graph_project(&path).unwrap();
+    assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+    let props = patterned_props(&back.graph);
+    assert!(props.pattern_pixels.is_none());
+    let got = props.effects.pattern_overlay.unwrap().pattern.image.unwrap();
+    assert_eq!(*got, image);
+    let ours = Renderer::new().render_canvas(&back.graph, &back.blobs);
+    assert_same_bits(&ours, &lumenply_render::composite(&doc), doc.canvas());
+    assert_overlay_pixels(&ours);
     let _ = std::fs::remove_file(&path);
 }
 

@@ -129,6 +129,22 @@ impl TileCache {
         )
     }
 
+    /// The cached tile for `(key, coord)` if it is ready (counts as a use
+    /// and a hit); `None` when it isn't cached.
+    pub fn get(&self, key: Key, coord: TileCoord) -> Option<Option<Arc<Tile>>> {
+        let now = self.clock.fetch_add(1, Ordering::Relaxed);
+        let mut inner = self.inner.lock().unwrap();
+        let slot = inner.slots.get_mut(&(key, coord))?;
+        let State::Ready(t) = &slot.state else {
+            return None;
+        };
+        slot.last_use = now;
+        let t = t.clone();
+        drop(inner);
+        self.hits.fetch_add(1, Ordering::Relaxed);
+        Some(t)
+    }
+
     /// The cached tile for `(key, coord)`, computing it with `f` first if
     /// needed. Never blocks on another thread's computation.
     pub fn get_or_compute(
