@@ -1,4 +1,5 @@
 use super::*;
+use crate::soft_proof::display_image;
 
 /// Outlines longer than this animate as a static texture instead.
 const ANTS_MAX: usize = 20_000;
@@ -174,6 +175,7 @@ impl App {
     // ---- rendering ---------------------------------------------------------------------
 
     pub(crate) fn refresh(&mut self, ctx: &egui::Context) {
+        let proof = self.proof_view();
         let mut below = std::mem::take(&mut self.below);
         let doc = self.editor.doc();
         let canvas = doc.canvas();
@@ -197,7 +199,7 @@ impl App {
                     if let Some(tex) = self.canvas_tex.as_mut() {
                         tex.set_partial(
                             [r.x as usize, r.y as usize],
-                            raster_to_image(&patch),
+                            display_image(&patch, proof),
                             nearest_when_zoomed(),
                         );
                     }
@@ -216,7 +218,7 @@ impl App {
             }
             _ => {
                 let flat = below.composite_rect(doc, canvas).to_raster(canvas);
-                let img = raster_to_image(&flat);
+                let img = display_image(&flat, proof);
                 self.last_flat = Some(flat);
                 upload(&mut self.canvas_tex, ctx, "canvas", img, nearest_when_zoomed());
                 if self.quick_mask {
@@ -344,6 +346,7 @@ impl App {
         let area = lumenply_core::smart_filter_cmds::widen_affected(doc, area);
         // Previews change only the active layer, so the cached backdrop
         // below it applies to the preview document too.
+        let proof = self.proof_view();
         let mut below = std::mem::take(&mut self.below);
         below.note_change(doc, self.active);
         match (area, self.canvas_tex.as_mut()) {
@@ -353,7 +356,7 @@ impl App {
                     let patch = below.composite_rect(doc, r).to_raster(r);
                     tex.set_partial(
                         [r.x as usize, r.y as usize],
-                        raster_to_image(&patch),
+                        display_image(&patch, proof),
                         nearest_when_zoomed(),
                     );
                     self.panels.preview_patch(r, &patch);
@@ -361,7 +364,7 @@ impl App {
             }
             _ => {
                 let canvas = doc.canvas();
-                let img = raster_to_image(&below.composite_rect(doc, canvas).to_raster(canvas));
+                let img = display_image(&below.composite_rect(doc, canvas).to_raster(canvas), proof);
                 upload(&mut self.canvas_tex, ctx, "canvas", img, nearest_when_zoomed());
             }
         }

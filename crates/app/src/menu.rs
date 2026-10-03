@@ -654,6 +654,10 @@ impl App {
     }
 
     fn view_menu(&mut self, ui: &mut egui::Ui) {
+        let (proof, warn) = (self.proof_colors, self.gamut_warning);
+        self.act_check(ui, "Proof colors", crate::soft_proof::PROOF_COLORS, proof);
+        self.act_check(ui, "Gamut warning", crate::soft_proof::GAMUT_WARNING, warn);
+        menu_separator(ui);
         self.act(ui, "Zoom in", "zoom-in");
         self.act(ui, "Zoom out", "zoom-out");
         self.act(ui, "Fit on screen", "fit");
