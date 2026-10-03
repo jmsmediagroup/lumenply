@@ -324,13 +324,19 @@ impl ProofLut {
         std::array::from_fn(|c| w[0] * p0[c] + w[1] * p1[c] + w[2] * p2[c] + w[3] * p3[c])
     }
 
-    /// Proof an 8-bit gamma-encoded colour. With `warn`, colours further
-    /// than [`GAMUT_DE`] from their print show as Photoshop's gamut
-    /// warning grey instead.
-    pub fn apply(&self, rgb: [u8; 3], warn: bool) -> [u8; 3] {
+    /// An 8-bit gamma-encoded colour as the view shows it: proofed with
+    /// `colors` (else as it is), and with `warn` Photoshop's gamut warning
+    /// grey when it lies further than [`GAMUT_DE`] from its print.
+    pub fn apply(&self, rgb: [u8; 3], colors: bool, warn: bool) -> [u8; 3] {
+        if !colors && !warn {
+            return rgb;
+        }
         let s = self.sample(rgb.map(|v| v as f32 / 255.0));
         if warn && s[3] > GAMUT_DE {
             return [128, 128, 128];
+        }
+        if !colors {
+            return rgb;
         }
         [s[0], s[1], s[2]].map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
     }
@@ -460,18 +466,22 @@ mod tests {
         }
         assert!(sum / (n as f64) < 0.3, "mean {}", sum / n as f64);
         // 8-bit apply: greys and the skin tone pass through.
-        assert_eq!(lut.apply([128, 128, 128], false), [128, 128, 128]);
-        assert_eq!(lut.apply([255, 255, 255], true), [255, 255, 255]);
-        let skin = lut.apply([224, 172, 140], true);
+        assert_eq!(lut.apply([128, 128, 128], true, false), [128, 128, 128]);
+        assert_eq!(lut.apply([255, 255, 255], true, true), [255, 255, 255]);
+        let skin = lut.apply([224, 172, 140], true, true);
         assert!(
             skin.iter()
                 .zip([224, 172, 140])
                 .all(|(a, b)| (*a as i32 - b).abs() <= 2),
             "{skin:?}"
         );
-        // Gamut warning greys pure blue.
-        assert_eq!(lut.apply([0, 0, 255], true), [128, 128, 128]);
-        let blue = lut.apply([0, 0, 255], false);
+        // Gamut warning greys pure blue, with or without the proof; alone
+        // it leaves printable colours exactly as they are.
+        assert_eq!(lut.apply([0, 0, 255], true, true), [128, 128, 128]);
+        assert_eq!(lut.apply([0, 0, 255], false, true), [128, 128, 128]);
+        assert_eq!(lut.apply([224, 172, 140], false, true), [224, 172, 140]);
+        assert_eq!(lut.apply([0, 0, 255], false, false), [0, 0, 255]);
+        let blue = lut.apply([0, 0, 255], true, false);
         assert!(
             (blue[0] as i32 - 35).abs() <= 1 && (blue[2] as i32 - 165).abs() <= 1,
             "{blue:?}"
