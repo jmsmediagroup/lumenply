@@ -244,8 +244,9 @@ pub(crate) fn drag_frame(
             f.angle = ang;
             // A frame that sat inside the canvas shrinks (about its centre)
             // to stay inside while it turns, so straightening never adds
-            // transparent corners. One reaching past the edges on purpose
-            // keeps its size.
+            // transparent corners: a pixel clear of the edge once turned,
+            // or the corner pixels come out part transparent. One reaching
+            // past the edges on purpose keeps its size.
             let (cw, ch) = (start.canvas.0 as f32, start.canvas.1 as f32);
             let inside = |fr: &Frame| {
                 fr.corners()
@@ -253,7 +254,8 @@ pub(crate) fn drag_frame(
                     .all(|&(x, y)| (-0.01..=cw + 0.01).contains(&x) && (-0.01..=ch + 0.01).contains(&y))
             };
             if inside(start) {
-                let s = fit_scale(&f, cw, ch);
+                let margin = if f.commit_angle() == 0.0 { 0.0 } else { 1.0 };
+                let s = fit_scale(&f, cw, ch, margin);
                 f.w = (start.w * s).max(1.0);
                 f.h = (start.h * s).max(1.0);
             }
@@ -297,8 +299,9 @@ pub(crate) fn drag_frame(
 }
 
 /// The largest scale (at most 1) of frame `f`, about its centre, whose
-/// turned corners all lie inside a `cw` × `ch` canvas.
-pub(crate) fn fit_scale(f: &Frame, cw: f32, ch: f32) -> f32 {
+/// turned corners all lie inside a `cw` × `ch` canvas, at least `margin`
+/// pixels in from its edges.
+pub(crate) fn fit_scale(f: &Frame, cw: f32, ch: f32, margin: f32) -> f32 {
     let mut s: f32 = 1.0;
     let (sin, cos) = f.angle.sin_cos();
     for (hx, hy) in [(f.w / 2.0, f.h / 2.0), (f.w / 2.0, -f.h / 2.0)] {
@@ -306,8 +309,8 @@ pub(crate) fn fit_scale(f: &Frame, cw: f32, ch: f32) -> f32 {
         let (ux, uy) = (hx * cos - hy * sin, hx * sin + hy * cos);
         for (u, c, size) in [(ux, f.cx, cw), (uy, f.cy, ch)] {
             if u.abs() > 1e-6 {
-                // c ± s·|u| must stay within [0, size].
-                s = s.min(c / u.abs()).min((size - c) / u.abs());
+                // c ± s·|u| must stay within [margin, size − margin].
+                s = s.min((c - margin) / u.abs()).min((size - margin - c) / u.abs());
             }
         }
     }
@@ -861,14 +864,13 @@ impl App {
         {
             self.cancel_crop();
         }
-        if ui
-            .add(
-                primary_button("Crop")
-                    .shortcut_text(RichText::new("Enter").color(ACCENT_INK.gamma_multiply(0.7))),
-            )
-            .on_hover_text("Crop to the frame (Enter)")
-            .clicked()
-        {
+        let r = ui.add(
+            primary_button("Crop")
+                .shortcut_text(RichText::new("Enter").color(ACCENT_INK.gamma_multiply(0.7))),
+        );
+        // Not just "Crop": the tool on the rail has that name.
+        a11y_name(&r, "Crop to frame");
+        if r.on_hover_text("Crop to the frame (Enter)").clicked() {
             self.commit_crop();
         }
     }
@@ -1048,7 +1050,7 @@ mod tests {
         f.pristine = false;
         // 10° clockwise about (100, 50): the corner (100, 50) from the
         // centre turns to (89.80, 66.61), so the height limits the scale to
-        // 50 / 66.61 = 0.7507.
+        // (50 − 1) / 66.61 = 0.7356, keeping a pixel clear of the edge.
         let a = 10f32.to_radians();
         let g = drag_frame(
             &f,
@@ -1059,7 +1061,7 @@ mod tests {
         );
         assert!((g.angle - a).abs() < 1e-5);
         assert!(
-            (g.w - 150.14).abs() < 0.02 && (g.h - 75.07).abs() < 0.02,
+            (g.w - 147.13).abs() < 0.02 && (g.h - 73.56).abs() < 0.02,
             "{} × {}",
             g.w,
             g.h
@@ -1067,7 +1069,7 @@ mod tests {
         assert!(g
             .corners()
             .iter()
-            .all(|&(x, y)| (-0.01..=200.01).contains(&x) && (-0.01..=100.01).contains(&y)));
+            .all(|&(x, y)| (0.99..=199.01).contains(&x) && (0.99..=99.01).contains(&y)));
         // Turning back to level restores nothing beyond the start: the
         // start frame of a new drag is the shrunk one.
         let h = drag_frame(&g, Grip::Rotate, (300.0, 50.0), (300.0, 50.0), None);
@@ -1082,6 +1084,44 @@ mod tests {
             None,
         );
         assert_eq!((k.w, k.h), (260.0, 100.0));
+    }
+
+    #[test]
+    fn a_straightened_crop_has_no_see_through_corners() {
+        let mut d = Document::new(200, 100);
+        let id = d.add_pixel_layer("Background");
+        d.layer_mut(id).unwrap().content = LayerContent::Pixel(lumenply_tiles::TileStore::from_raster(
+            &lumenply_tiles::Raster::filled(200, 100, lumenply_tiles::Rgba::new(1.0, 1.0, 1.0, 1.0)),
+            0,
+            0,
+        ));
+        let mut app = App::launch(&[]);
+        app.open_in_new_tab(Editor::new(d), None);
+        app.dialog = None;
+        app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
+        app.tool = Tool::Crop;
+        app.crop_sync();
+        app.crop.delete_cropped = true;
+        let f = app.crop.frame.unwrap();
+        for deg in [10.0f32, -3.0, 25.0] {
+            let a = deg.to_radians();
+            let g = drag_frame(
+                &f,
+                Grip::Rotate,
+                (300.0, 50.0),
+                (100.0 + 200.0 * a.cos(), 50.0 + 200.0 * a.sin()),
+                None,
+            );
+            app.crop.frame = Some(g);
+            app.commit_crop();
+            let flat = lumenply_render::composite_raster(app.editor.doc());
+            let (w, h) = (flat.width, flat.height);
+            for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+                assert_eq!(flat.get(x, y).a, 1.0, "corner ({x}, {y}) of {w} × {h} at {deg}°");
+            }
+            app.run_menu_action("undo");
+            assert_eq!((app.editor.doc().width, app.editor.doc().height), (200, 100));
+        }
     }
 
     #[test]

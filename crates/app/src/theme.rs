@@ -535,7 +535,22 @@ pub(crate) fn install_popups(style: &mut egui::Style) {
 /// a sensible minimum width, the shared item height, padding and
 /// colours. The helpers below call it; a `ComboBox::show_ui` closure
 /// calls it first thing.
+const POPUP_FRAME: &str = "theme:popup-open-frame";
+
+/// Whether a menu or popup was open on the previous frame (or is on this
+/// one): Esc then closes it and must do nothing else.
+pub(crate) fn popup_was_open(ctx: &egui::Context) -> bool {
+    let last: Option<u64> = ctx.data(|d| d.get_temp(egui::Id::new(POPUP_FRAME)));
+    last.is_some_and(|f| f + 2 >= ctx.cumulative_pass_nr())
+}
+
 pub(crate) fn popup_style(ui: &mut egui::Ui) {
+    // Every menu and popup passes here while open: remember the frame, so
+    // keys handled before the menus are drawn (Esc deselects) can leave a
+    // key meant for the popup alone.
+    let frame = ui.ctx().cumulative_pass_nr();
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(egui::Id::new(POPUP_FRAME), frame));
     let s = ui.style_mut();
     s.wrap_mode = Some(egui::TextWrapMode::Extend);
     s.spacing.button_padding = egui::vec2(MENU_PAD_X, 3.0);
@@ -697,25 +712,17 @@ pub(crate) fn menu_separator(ui: &mut egui::Ui) {
 
 /// A menu-bar menu, or a submenu inside another menu.
 pub(crate) fn menu<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
-    // A menu taller than the window scrolls instead of running off it
-    // (egui slides it up, over the menu bar and beyond): the Edit menu in
-    // a 900 × 600 window lost Undo at the top or Preferences at the
-    // bottom. A menu-bar menu gets the room below the bar; a submenu,
-    // which egui moves up to fit, the window's height.
-    let screen = ui.ctx().screen_rect();
-    let margins = ui.style().spacing.menu_margin.sum().y + 12.0;
-    let top = if ui.layer_id().order == egui::Order::Foreground {
-        screen.top()
-    } else {
-        ui.max_rect().bottom() + ui.style().spacing.menu_spacing
-    };
-    let room = (screen.bottom() - top - margins).max(120.0);
     let r = ui.menu_button(title, |ui| {
         popup_style(ui);
+        // A menu taller than the window (Edit on a 600-point screen)
+        // scrolls instead of running off the bottom with its last items.
+        // (The popup's own size from the frame before would cap it lower.)
+        let room = (ui.ctx().screen_rect().bottom() - ui.next_widget_position().y - 12.0).max(120.0);
         let mut area = egui::ScrollArea::vertical()
-            .id_salt("menu-scroll")
-            .max_height(room);
-        // Each time it opens, from the top.
+            .id_salt(title)
+            .max_height(room)
+            .min_scrolled_height(room);
+        // Each time it opens, from the top (not where it was last left).
         if !ui.ctx().memory(|m| m.areas().visible_last_frame(&ui.layer_id())) {
             area = area.vertical_scroll_offset(0.0);
         }

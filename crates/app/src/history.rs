@@ -231,7 +231,9 @@ impl App {
         } else {
             "step"
         };
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+        // Named with its number, so a step called "Select" or "Open" is
+        // never mistaken for the menu of that name.
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, card_name(i, label)));
         let src = if source {
             "\nThe history brush paints from here"
         } else {
@@ -273,6 +275,17 @@ impl App {
         let tex = ctx.load_texture(format!("hist-{cur}"), img, egui::TextureOptions::LINEAR);
         self.hist_thumbs.push((cur, tex));
     }
+}
+
+/// The accessible name of history card `i` (0 is the opened state):
+/// "History step 3: Select".
+pub(crate) fn card_name(i: usize, label: &str) -> String {
+    format!("History step {i}: {label}")
+}
+
+/// The accessible name of a snapshot's card: "History snapshot: Snapshot 1".
+pub(crate) fn snapshot_name(name: &str) -> String {
+    format!("History snapshot: {name}")
 }
 
 /// The strip's title block: a disclosure chevron, HISTORY and the step
@@ -365,12 +378,52 @@ fn snapshot_card(ui: &mut egui::Ui, name: &str) -> egui::Response {
     p.circle_stroke(c, 3.5, Stroke::new(1.5, ACCENT));
     let (galley, _) = elided(ui, name, FontId::proportional(10.5), TEXT, CARD.x);
     p.galley(egui::pos2(rect.min.x, rect.min.y + WELL_H + 2.0), galley, TEXT);
-    // Say it is a snapshot once: "Snapshot 1", not "Snapshot Snapshot 1".
-    let spoken = if name.starts_with("Snapshot") {
-        name.to_string()
-    } else {
-        format!("Snapshot {name}")
-    };
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &spoken));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, snapshot_name(name)));
     resp.on_hover_text(format!("{name}: click to go back to it (one undo step)"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::a11y_tests::{ctx, launch};
+
+    /// The buttons on screen after a few frames, by accessible name.
+    fn button_names(app: &mut App, ctx: &egui::Context) -> Vec<String> {
+        let mut names = Vec::new();
+        for _ in 0..3 {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            let out = ctx.run(raw, |ctx| app.frame(ctx));
+            let update = out.platform_output.accesskit_update.expect("accesskit is on");
+            names = update
+                .nodes
+                .iter()
+                .filter(|(_, n)| n.role() == egui::accesskit::Role::Button)
+                .filter_map(|(_, n)| n.name().map(str::to_string))
+                .collect();
+        }
+        names
+    }
+
+    #[test]
+    fn history_cards_are_named_by_number_and_never_like_a_menu() {
+        let mut app = launch(&["--demo".to_string()]);
+        let ctx = ctx();
+        app.run_menu_action("select-all");
+        app.new_snapshot(None);
+        let names = button_names(&mut app, &ctx);
+        let count = |n: &str| names.iter().filter(|x| x.as_str() == n).count();
+        assert_eq!(app.editor.history(), vec!["Select"]);
+        assert_eq!(count("History step 0: Open"), 1);
+        assert_eq!(count("History step 1: Select"), 1);
+        assert_eq!(count("History snapshot: Snapshot 1"), 1);
+        // "Select" is the menu alone; no card is called "Open".
+        assert_eq!(count("Select"), 1);
+        assert_eq!(count("Open"), 0);
+    }
 }

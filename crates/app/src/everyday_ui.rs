@@ -112,7 +112,9 @@ impl App {
                 (Key::ArrowUp, (0, -1)),
                 (Key::ArrowDown, (0, 1)),
             ] {
-                for (m, step) in [(M::NONE, 1), (M::SHIFT, 10)] {
+                // Shift first: `consume_key` ignores an extra Shift, so a
+                // plain-arrow match would eat Shift+arrow as a 1 px nudge.
+                for (m, step) in [(M::SHIFT, 10), (M::NONE, 1)] {
                     while i.consume_key(m, key) {
                         dx += x * step;
                         dy += y * step;
@@ -427,6 +429,31 @@ mod nudge_tests {
         assert_eq!(px.get_pixel(16, 4).a, 1.0);
         assert_eq!(px.get_pixel(5, 5).a, 0.0);
         assert_eq!(app.editor.history().len(), steps + 1, "one undo step");
+        // Keys: Shift+arrow is ten pixels, a plain arrow one.
+        let ctx = egui::Context::default();
+        let key = |key: egui::Key, shift: bool| {
+            let modifiers = if shift {
+                egui::Modifiers::SHIFT
+            } else {
+                egui::Modifiers::NONE
+            };
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                modifiers,
+                ..Default::default()
+            }
+        };
+        let _ = ctx.run(key(egui::Key::ArrowDown, true), |ctx| app.nudge_keys(ctx));
+        let _ = ctx.run(key(egui::Key::ArrowLeft, false), |ctx| app.nudge_keys(ctx));
+        let px = app.editor.doc().layer(id).unwrap().pixels().unwrap();
+        assert_eq!(px.get_pixel(15, 14).a, 1.0, "Shift+Down 10 px, Left 1 px");
+        assert_eq!(px.get_pixel(16, 4).a, 0.0);
         // A selection tool nudges the outline instead.
         app.run(&SetSelection {
             selection: Some(Selection::rect(Rect::new(2, 2, 4, 4))),
@@ -442,7 +469,7 @@ mod nudge_tests {
                 .unwrap()
                 .pixels()
                 .unwrap()
-                .get_pixel(16, 4)
+                .get_pixel(15, 14)
                 .a,
             1.0
         );
@@ -548,7 +575,9 @@ mod pick_tests {
         frame(&mut app, &ctx, vec![egui::Event::PointerMoved(p)], false);
         let (z0, under) = (app.zoom, app.cursor_doc.unwrap());
         click(&mut app, &ctx, p, egui::Modifiers::NONE);
-        assert!((app.zoom - 2.0 * z0).abs() < 1e-4, "{} vs {}", app.zoom, z0);
+        // One step up Photoshop's zoom levels (canvas::ZOOM_LEVELS).
+        let z1 = crate::canvas::zoom_step(z0, true);
+        assert!((app.zoom - z1).abs() < 1e-4, "{} vs {}", app.zoom, z1);
         frame(&mut app, &ctx, vec![egui::Event::PointerMoved(p)], false);
         assert_eq!(
             app.cursor_doc.unwrap(),
@@ -556,7 +585,8 @@ mod pick_tests {
             "the point under the pointer stays put"
         );
         click(&mut app, &ctx, p, egui::Modifiers::ALT);
-        assert!((app.zoom - z0).abs() < 1e-4);
+        let z2 = crate::canvas::zoom_step(z1, false);
+        assert!((app.zoom - z2).abs() < 1e-4, "{} vs {}", app.zoom, z2);
     }
 
     #[test]
@@ -619,13 +649,18 @@ mod pick_tests {
             );
         }
         let x = app.xform.as_ref().expect("transforming");
-        // Width 80 → 120 about the centre (100): right edge 180, so sx = 2;
-        // height unchanged.
+        // Width 80 → 120 from the opposite corner (the left edge stays at
+        // 60): right edge 180, so sx = 1.5; height unchanged.
         assert!(
-            (x.sx - 2.0).abs() < 0.05 && (x.sy - 1.0).abs() < 0.05,
+            (x.sx - 1.5).abs() < 0.05 && (x.sy - 1.0).abs() < 0.05,
             "{} {}",
             x.sx,
             x.sy
+        );
+        let left = x.corners()[0];
+        assert!(
+            (left.0 - 60.0).abs() < 0.5 && (left.1 - 40.0).abs() < 0.5,
+            "{left:?}"
         );
     }
 

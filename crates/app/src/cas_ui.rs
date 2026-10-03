@@ -4,7 +4,7 @@
 //! W/H percentages) rescales the layer live at preview resolution with
 //! seam carving, a drag inside the box moves it. The side panel holds
 //! Amount, Protect (none, the selection or a saved channel) and Protect
-//! skin tones, as Photoshop's options bar does. Commit (Enter) runs one
+//! skin tones, as Photoshop's options bar does. Apply (Enter) runs one
 //! `ContentAwareScale` at full size: one undo step. Esc cancels.
 
 use super::*;
@@ -166,7 +166,7 @@ impl CasState {
         ]
     }
 
-    /// The command Commit runs, or `None` when the box is unchanged.
+    /// The command Apply runs, or `None` when the box is unchanged.
     fn command(&self, doc: &Document) -> Option<ContentAwareScale> {
         let (ox, oy, w, h) = self.target();
         let s = self.src_rect;
@@ -537,7 +537,7 @@ impl App {
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Max), |ui| {
                     ui.horizontal(|ui| {
                         if ui
-                            .add(primary_button("Commit"))
+                            .add(primary_button("Apply"))
                             .on_hover_text("Apply at full size (Enter)")
                             .clicked()
                         {

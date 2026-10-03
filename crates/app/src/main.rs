@@ -61,8 +61,11 @@ mod liquify;
 mod lut_ui;
 mod macos_open;
 mod menu;
+mod move_tool;
 mod navigator;
 mod options_bar;
+#[cfg(test)]
+mod paint_ux_tests;
 mod palette;
 mod panels;
 mod paths_panel;
@@ -378,6 +381,8 @@ struct App {
     zoom: f32,
     pan: Vec2,
     view_cmd: Option<ViewCmd>,
+    /// The canvas, zoom and pan of the last Fit, while the view stays so.
+    fitted: Option<(egui::Rect, f32, Vec2)>,
     canvas_tex: Option<TextureHandle>,
     /// View ▸ Proof Colors / Gamut Warning (soft_proof.rs): display only.
     proof_colors: bool,
@@ -400,6 +405,7 @@ struct App {
     curve_drag: Option<usize>,
     cursor_doc: Option<(i32, i32)>,
     move_offset: (i32, i32),
+    mover: move_tool::MoveState,
     renaming: Option<(LayerId, String)>,
     xform: Option<Xform>,
     xform_scale: f32,
@@ -591,6 +597,7 @@ impl App {
             zoom: 1.0,
             pan: Vec2::ZERO,
             view_cmd: Some(ViewCmd::Fit),
+            fitted: None,
             canvas_tex: None,
             proof_colors: false,
             gamut_warning: false,
@@ -608,6 +615,7 @@ impl App {
             curve_drag: None,
             cursor_doc: None,
             move_offset: (0, 0),
+            mover: Default::default(),
             renaming: None,
             xform: None,
             xform_scale: 100.0,
@@ -1201,6 +1209,7 @@ impl App {
         // free transform consume it first for their own cancel).
         if self.editor.doc().selection.is_some()
             && !color_picker::is_open(ctx)
+            && !theme::popup_was_open(ctx)
             && !self.gradient.open
             && ctx.input_mut(|i| i.consume_key(M::NONE, Key::Escape))
         {
@@ -1232,11 +1241,11 @@ impl App {
             if i.consume_key(M::COMMAND | M::SHIFT, Key::OpenBracket) {
                 fired.push("layer-back");
             }
-            for (id, ..) in session::SHORTCUTS {
-                if let Some((m, k)) = session::resolve_chord(&self.prefs, id) {
-                    if i.consume_key(m, k) {
-                        fired.push(id);
-                    }
+            // Ungroup, clip, move up/down: before Cmd+G and the brush keys.
+            layer_actions::layer_chords(i, &mut fired);
+            for (id, m, k) in session::chords_in_dispatch_order(&self.prefs) {
+                if i.consume_key(m, k) {
+                    fired.push(id);
                 }
             }
             if i.consume_key(M::COMMAND, Key::Y) {
@@ -1389,6 +1398,8 @@ impl App {
             let shift = ctx.input(|i| i.modifiers.shift);
             self.select_tool_key(t, shift);
         }
+        // O / Shift+O and Y: the toning tools and the History Brush.
+        self.brush_mode_keys(ctx);
         let quick = self.tool == Tool::Wand && self.quick.on;
         // Shift+[ / Shift+] step the brush hardness by 25%, as in Photoshop.
         let hardness_keys = !quick && ctx.input(|i| i.modifiers.shift);
@@ -1460,7 +1471,13 @@ impl App {
                 let layers_want = ctx
                     .data_mut(|d| d.get_persisted::<f32>(split_id))
                     .map_or(layers_auto, |h| h.clamp(layers_min, layers_max));
-                let props_max = (avail - quick_h - layers_want - 24.0).max(72.0);
+                // The divider, separator and spacing between the sections,
+                // as measured last frame (a fixed guess left Layers 16 pt
+                // short, half hiding its last row).
+                let chrome_id = egui::Id::new("dock-chrome-h");
+                let chrome = ctx.data(|d| d.get_temp::<f32>(chrome_id)).unwrap_or(40.0);
+                let props_max = (avail - quick_h - layers_want - chrome).max(72.0);
+                let props_top = ui.cursor().top();
                 let scroll_out = egui::ScrollArea::vertical()
                     .id_salt("props")
                     .max_height(props_max)
@@ -1506,6 +1523,11 @@ impl App {
                 let h = ui.cursor().top() - top;
                 ctx.data_mut(|d| d.insert_temp(quick_id, h));
                 ui.separator();
+                let used = ui.cursor().top() - props_top - scroll_out.inner_rect.height() - h;
+                if (used - chrome).abs() > 0.5 {
+                    ctx.data_mut(|d| d.insert_temp(chrome_id, used));
+                    ctx.request_repaint();
+                }
                 self.dock_tabs_ui(ui);
             });
     }
@@ -1534,6 +1556,7 @@ impl eframe::App for App {
 impl App {
     /// One UI frame; `update` without the eframe window, so tests can run it.
     fn frame(&mut self, ctx: &egui::Context) {
+        self.settle_status(ctx);
         if self.liquify.is_some() {
             self.liquify_ui(ctx);
             self.debug_screenshot(ctx);

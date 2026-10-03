@@ -75,7 +75,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Free transform", "xform"),
     ("Perspective transform", "perspective"),
     ("Warp", "warp"),
-    ("Fill with brush colour", "fill"),
+    ("Fill with foreground colour", "fill"),
     ("Clear", "clear"),
     ("Preferences...", "prefs"),
     ("Select all", "select-all"),
@@ -94,8 +94,12 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Move layer up", "layer-up"),
     ("Move layer down", "layer-down"),
     ("Add layer mask", "add-mask"),
-    ("Remove layer mask", "rm-mask"),
+    ("Delete layer mask", "rm-mask"),
     ("Disable / enable layer mask", "mask-toggle"),
+    ("Layer mask: reveal all", "mask-reveal-all"),
+    ("Layer mask: hide all", "mask-hide-all"),
+    ("Layer mask: hide selection", "mask-hide-sel"),
+    ("Apply layer mask", "mask-apply"),
     ("Clip layer to the one below", "clip"),
     ("Release layer clip", "unclip"),
     ("Convert to smart object", "smart-object"),
@@ -116,7 +120,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Zoom in", "zoom-in"),
     ("Zoom out", "zoom-out"),
     ("Fit on screen", "fit"),
-    ("Actual pixels", "actual"),
+    ("Actual pixels (100%)", "actual"),
     ("Print size (approximate)", "print-size"),
     ("Show or hide the history strip", "toggle-history"),
     ("About Lumenply", "about"),
@@ -187,6 +191,10 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Blur tool (Brush ▸ Blur)", "tool-blur"),
     ("Sharpen tool (Brush ▸ Sharpen)", "tool-sharpen"),
     ("History Brush (Brush ▸ History)", "tool-history-brush"),
+    ("Dodge tool (Brush ▸ Dodge)", "tool-dodge"),
+    ("Burn tool (Brush ▸ Burn)", "tool-burn"),
+    ("Sponge tool (Brush ▸ Saturate / Desaturate)", "tool-sponge"),
+    ("Smudge tool (Brush ▸ Smudge)", "tool-smudge"),
     ("Background Eraser (Eraser ▸ Background)", "tool-bg-eraser"),
     ("Magic Eraser (Eraser ▸ Magic)", "tool-magic-eraser"),
     ("Layers panel", "panel-layers"),
@@ -198,6 +206,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("View the blue channel alone", "channel-blue"),
     ("Show or hide the Navigator", "navigator"),
     ("Show or hide the Info panel", "info-panel"),
+    ("Show or hide the Histogram", "histogram-panel"),
     ("Make work path from selection", "make-work-path"),
     ("Puppet Warp", "puppet-warp"),
     ("Camera Raw Filter...", crate::camera_raw_filter::CRF_ACTION),
@@ -303,8 +312,10 @@ impl App {
                     };
                     row(ui, t.name(), &keys);
                 }
+                row(ui, "Zoom", "Z");
                 row(ui, "Wand ▸ Quick ▸ Object selection", "Shift+W");
                 section_title(ui, "COMMANDS");
+                row(ui, "Search commands...", &self.action_keys(&ctx, "palette"));
                 for (label, id) in ACTIONS {
                     let keys = self.action_keys(&ctx, id);
                     if !keys.is_empty() {
@@ -763,6 +774,8 @@ impl App {
             "paste" => (M::COMMAND, Key::V),
             "paste-in-place" => (M::COMMAND | M::SHIFT, Key::V),
             "fill-dialog" => (M::SHIFT, Key::Backspace),
+            "tool-dodge" => (M::NONE, Key::O),
+            "tool-history-brush" => (M::NONE, Key::Y),
             "clear" => return "Delete".into(),
             // egui spells these keys "Equals"/"Minus"; show the symbols.
             "zoom-in" | "zoom-out" => {
@@ -770,8 +783,10 @@ impl App {
                 let sym = if id == "zoom-in" { "=" } else { "−" };
                 return format!("{}{sym}", base.trim_end_matches('A'));
             }
-            "fit" => (M::NONE, Key::Num0),
-            "actual" => (M::NONE, Key::Num1),
+            // Photoshop's chords; the bare 0 and 1 work too.
+            "fit" => (M::COMMAND, Key::Num0),
+            "actual" => (M::COMMAND, Key::Num1),
+            "prefs" => (M::COMMAND, Key::Comma),
             "quick-mask" => (M::NONE, Key::Q),
             "palette" => (M::COMMAND, Key::K),
             "select-mask" => (M::COMMAND | M::ALT, Key::R),
@@ -1030,8 +1045,9 @@ impl App {
             }
             "fill-dialog" | "content-aware" => {
                 // Content-aware needs something to fill; the dialog
-                // offers it whenever there is a selection.
-                let aware = self.editor.doc().selection.is_some();
+                // offers it whenever there is a selection, and opens on it
+                // only from Content-Aware Fill (Fill... means a colour).
+                let aware = id == "content-aware" && self.editor.doc().selection.is_some();
                 let margin = self.content_aware_margin();
                 self.dialog = Some(Dialog::Fill(aware, margin, 0));
             }
@@ -1064,7 +1080,21 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 193); // + Select subject, Remove background, Object Selection, AI models
+        assert_eq!(n, 202); // + AI (4); Dodge, Burn, Sponge, Smudge; layer masks (4); Histogram
+    }
+
+    #[test]
+    fn view_and_preferences_keys_read_as_photoshop_writes_them() {
+        let app = crate::a11y_tests::launch(&["--demo".to_string()]);
+        let ctx = crate::a11y_tests::ctx();
+        let _ = ctx.run(Default::default(), |_| {});
+        let cmd = |k: Key| shortcut_text(&ctx, egui::Modifiers::COMMAND, k);
+        assert_eq!(app.action_keys(&ctx, "fit"), cmd(Key::Num0));
+        assert_eq!(app.action_keys(&ctx, "actual"), cmd(Key::Num1));
+        assert_eq!(app.action_keys(&ctx, "prefs"), cmd(Key::Comma));
+        // "100" finds Actual pixels in the palette.
+        assert!(ACTIONS.contains(&("Actual pixels (100%)", "actual")));
+        assert!(ACTIONS.contains(&("Show or hide the Histogram", "histogram-panel")));
     }
 
     #[test]

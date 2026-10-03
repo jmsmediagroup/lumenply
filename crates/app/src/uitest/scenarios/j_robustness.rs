@@ -316,7 +316,7 @@ fn history_limit(s: &mut Session) -> UiResult {
     s.screenshot("history strip at the limit");
     // The oldest card now shows three strokes: calling it "Open" would
     // promise the opened document.
-    let open_card = s.has_node("Open");
+    let open_card = s.has_node("History step 0: Open");
     s.check_eq("no card claims to be the opened document", open_card, false)?;
     for i in (3..8).rev() {
         s.describe("Undo with Cmd+Z");
@@ -773,7 +773,7 @@ fn undo_selection_and_mask(s: &mut Session) -> UiResult {
 /// The `i`-th card of the History strip (0 is "Open"), clicked by where it
 /// sits: cards are 58 points wide with 8 between them.
 fn click_history_card(s: &mut Session, i: usize) -> UiResult {
-    let open = s.point_in("Open", 0.5, 0.5)?;
+    let open = s.point_in("History step 0: *", 0.5, 0.5)?;
     s.click_at(open + vec2(66.0 * i as f32, 0.0), &format!("history card {i}"))
 }
 
@@ -840,7 +840,7 @@ fn history_jump_and_branch(s: &mut Session) -> UiResult {
     s.check_eq("the diagonal stroke is back", now, branched.clone())?;
 
     s.describe("Right-click the current card to keep it as a snapshot");
-    s.right_click("Paint stroke")?;
+    s.right_click("History step 3: Paint stroke")?;
     s.describe("Choose New snapshot");
     s.click("New snapshot")?;
     s.wait_idle()?;
@@ -849,7 +849,7 @@ fn history_jump_and_branch(s: &mut Session) -> UiResult {
     s.wait_idle()?;
     let painted = snap(s)?;
     s.describe("Click the snapshot card to go back to it");
-    s.click("Snapshot 1")?;
+    s.click("History snapshot: Snapshot 1")?;
     s.wait_idle()?;
     let now = snap(s)?;
     s.check_eq("the snapshot's document is back", now, branched.clone())?;

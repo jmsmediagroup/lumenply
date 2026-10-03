@@ -23,7 +23,11 @@ impl App {
 
     pub(crate) fn fill_active(&mut self) {
         if let Some(layer) = self.active {
-            let color = self.make_brush().color;
+            // Full strength, as Photoshop's Alt+Backspace: the brush's
+            // Opacity belongs to the brush, not to Fill (and Cmd+Backspace
+            // fills the background colour at full strength too).
+            let mut color = self.make_brush().color;
+            color[3] = 1.0;
             self.run(&Fill { layer, color });
         }
     }
@@ -296,6 +300,8 @@ impl App {
                                     .stroke(Stroke::new(1.0, LINE))
                                     .min_size(egui::vec2(w, 26.0)),
                             );
+                            // One name however short the label gets.
+                            a11y_name(&r, "Search tools, filters and commands");
                             if r.on_hover_text(format!("Search tools, filters and commands ({keys})"))
                                 .clicked()
                             {
@@ -412,7 +418,7 @@ impl App {
         self.act(ui, "Puppet Warp", "puppet-warp");
         self.act(ui, "Content-Aware Scale", "content-aware-scale");
         menu_separator(ui);
-        self.act(ui, "Fill with brush colour", "fill");
+        self.act(ui, "Fill with foreground colour", "fill");
         self.act(ui, "Fill with background colour", "fill-bg");
         self.act(ui, "Fill...", "fill-dialog");
         self.act(ui, "Stroke...", "stroke-selection");
@@ -545,21 +551,7 @@ impl App {
         self.align_menus(ui);
         self.lock_menu(ui);
         layer_actions::column_separator(ui);
-        let mask = self
-            .active_layer()
-            .and_then(|l| l.mask.as_ref())
-            .map(|m| m.enabled);
-        if mask.is_some() {
-            self.act(ui, "Remove mask", "rm-mask");
-            let label = if mask == Some(true) {
-                "Disable mask"
-            } else {
-                "Enable mask"
-            };
-            self.act(ui, label, "mask-toggle");
-        } else {
-            self.act(ui, "Add mask", "add-mask");
-        }
+        self.layer_mask_menu(ui);
         self.act(ui, "Remove background", crate::ai_ui::REMOVE_BG);
         if self.active_layer().is_some_and(|l| l.clip) {
             self.act(ui, "Release clip", "unclip");
@@ -601,7 +593,8 @@ impl App {
         }
         match mask {
             Some(on) => {
-                self.act(ui, "Remove mask", "rm-mask");
+                self.act(ui, "Delete mask", "rm-mask");
+                self.act(ui, "Apply mask", "mask-apply");
                 self.act(ui, if on { "Disable mask" } else { "Enable mask" }, "mask-toggle");
             }
             None => self.act(ui, "Add mask", "add-mask"),
