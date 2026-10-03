@@ -19,6 +19,7 @@ use lumenply_tiles::{Raster, Rect, TileStore};
 
 use crate::{linear_to_srgb, IoError};
 
+mod artboards;
 mod color_modes;
 mod effects;
 mod engine_data;
@@ -1516,6 +1517,8 @@ struct RawLayer {
     fill: Option<lumenply_doc::Fill>,
     /// A shape layer: a fill with a readable vector mask (and stroke).
     shape: Option<lumenply_doc::ShapeLayer>,
+    /// A group that is a Photoshop artboard.
+    artboard: Option<artboards::Artboard>,
     /// Colour planes of a 32-bit file, as floats (`channels` keeps the
     /// transparency).
     float_channels: Vec<(i16, Vec<f32>)>,
@@ -1662,6 +1665,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let mut is_adjustment = false;
                 let mut adjustment = None;
                 let mut locks = LayerLocks::NONE;
+                let mut artboard = None;
                 let mut fill = None;
                 let (mut vector_mask, mut pattern) = (false, false);
                 let (mut vmsk, mut vstk): (Option<Vec<u8>>, Option<Vec<u8>>) = (None, None);
@@ -1718,6 +1722,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                                 key = data[8..12].to_vec();
                             }
                         }
+                        b"artb" | b"artd" | b"abdd" => artboard = artboards::parse(data),
                         b"lspf" => {
                             let mut d = Rd::new(data);
                             locks = locks_from_flags(d.u32()?);
@@ -1825,6 +1830,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         text: text_layer,
                         fill,
                         shape: shape_layer,
+                        artboard,
                         float_channels: Vec::new(),
                         effects: fx,
                         fill_opacity,
@@ -1938,6 +1944,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 g.mask = build_mask(&rl, width, height);
                 g.locks = rl.locks;
                 rl.style(&mut g);
+                if let Some(a) = &rl.artboard {
+                    artboards::apply(&mut g, a, &mut doc);
+                }
                 if !rl.blend_known {
                     warnings.push(format!(
                         "group '{}': unsupported blend mode, using normal",

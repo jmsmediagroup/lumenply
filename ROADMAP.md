@@ -186,7 +186,9 @@ None of these could be tested in the container.
       colour/gradient overlay with full gradients, stroke inside/centre/
       outside, bevel; blend modes, spread/choke, global light, shadow
       knockout; psd-tools-verified; layer_effects 108.6 → 5.1) and Fill
-      opacity (iOpa) both ways. Still open: PSB export, live filters as
+      opacity (iOpa) both ways. Artboards come in as groups clipped to
+      their rectangle over an editable background fill (artboard-bgcolor
+      66.8 → 0.02). Still open: PSB export, live filters as
       smart filters, knockout, satin, pattern overlay, gradient/pattern
       strokes
 - [x] PSD import of every colour mode and depth: Grayscale (embedded gray
