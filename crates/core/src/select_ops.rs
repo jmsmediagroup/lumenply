@@ -279,4 +279,28 @@ mod tests {
         ed.undo();
         assert_eq!(selected_columns(&ed), (20..30).collect::<Vec<_>>());
     }
+
+    #[test]
+    fn modify_edge_feather_softens_as_one_named_step() {
+        let (mut ed, _) = bands();
+        let rect = Selection::rect(Rect::new(15, 0, 30, 20)); // x 15..45
+        ed.execute(&crate::commands::SetSelection {
+            selection: Some(rect),
+        })
+        .unwrap();
+        ed.execute(&ModifySelectionEdge {
+            op: EdgeOp::Feather(3.0),
+        })
+        .unwrap();
+        assert_eq!(ed.history().last().copied(), Some("Feather selection 3 px"));
+        let s = ed.doc().selection.as_ref().unwrap();
+        // Half on the old edge, nothing far out, all of the middle.
+        let edge = (s.value(14, 10) + s.value(15, 10)) / 2.0;
+        assert!((edge - 0.5).abs() < 0.05, "{edge}");
+        assert_eq!(s.value(2, 10), 0.0);
+        assert!(s.value(30, 10) > 0.99);
+        ed.undo();
+        let s = ed.doc().selection.as_ref().unwrap();
+        assert_eq!((s.value(14, 10), s.value(15, 10)), (0.0, 1.0), "undo: hard again");
+    }
 }
