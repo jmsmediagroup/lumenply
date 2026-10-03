@@ -60,8 +60,15 @@ downstream, and of nothing else. The render cache is keyed by
 Rendering pulls tiles: the output node is asked for the tiles in view, and
 each op asks its inputs for the tiles it needs (a blur pads by its radius,
 a transform maps the tile back through its inverse, a whole-image op such
-as Equalize asks for everything once). Tiles are evaluated in parallel; a
-tile being computed by one thread is waited for, never computed twice. An
+as Equalize asks for everything once). Tiles are evaluated in parallel,
+and nothing ever waits for another thread's computation: a thread that
+wants a tile someone else is computing computes it too, and the first
+result is kept. Waiting deadlocks under rayon, whose threads run other
+queued jobs while they wait, so a thread can end up waiting for a tile its
+own stack is still computing. The duplicate work this allows is small (up
+to 3% of tiles on the corpus); `Renderer::plan` trades it for a
+node-by-node schedule that never duplicates but renders cold documents
+30–50% slower. An
 op whose effect doesn't reach a tile (a brush stroke elsewhere) returns its
 input tile unchanged, sharing the same `Arc`, so long chains cost neither
 time nor memory outside the area they touch.

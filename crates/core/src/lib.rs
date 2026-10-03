@@ -243,6 +243,8 @@ pub struct Editor {
     last_affected: Option<lumenply_tiles::Rect>,
     /// Layer targeted by the last successful edit (see [`Command::target_layer`]).
     last_target: Option<LayerId>,
+    /// Time the last edit spent on the graph (see [`Editor::last_sync_time`]).
+    last_sync: std::time::Duration,
 }
 
 /// The next version of a document: the document itself and its graph
@@ -251,6 +253,8 @@ struct Prepared {
     doc: Document,
     graph: Graph,
     state: DocState,
+    /// Time spent on the graph so far (a native edit, the sync).
+    graph_time: std::time::Duration,
 }
 
 impl Editor {
@@ -269,7 +273,16 @@ impl Editor {
             coalesce_key: None,
             last_affected: None,
             last_target: None,
+            last_sync: std::time::Duration::ZERO,
         }
+    }
+
+    /// Time the last successful edit spent keeping the graph in step: a
+    /// native graph edit, syncing the document into the new version,
+    /// memory accounting and dropping unused blobs. What the graph history
+    /// costs on top of running the command itself.
+    pub fn last_sync_time(&self) -> std::time::Duration {
+        self.last_sync
     }
 
     /// Canvas area touched by the most recent change (see [`Command::affected`]).
@@ -330,9 +343,11 @@ impl Editor {
             state: &self.history.current_version().payload.state,
             doc: &self.doc,
         };
+        let started = std::time::Instant::now();
         let edited = cmd
             .graph_edit(&self.doc)
             .and_then(|e| graph_sync::content_edit(current, &e, fold, &mut self.blobs, &self.renderer));
+        let mut graph_time = started.elapsed();
         let mut next = match &edited {
             Some(e) => e.doc.clone(),
             None => {
@@ -346,11 +361,14 @@ impl Editor {
         lumenply_render::fill::refresh_stale(&mut next);
         compact_storage(&mut next);
         let base = edited.as_ref().map_or(current, |e| e.base());
+        let started = std::time::Instant::now();
         let (graph, state) = graph_sync::sync(Some(base), &next, &mut self.blobs, &self.renderer.hasher);
+        graph_time += started.elapsed();
         Ok(Prepared {
             doc: next,
             graph,
             state,
+            graph_time,
         })
     }
 
@@ -393,6 +411,7 @@ impl Editor {
             let next = self.prepare(cmd, true)?;
             self.last_affected = smart_filter_cmds::widen_affected(&next.doc, cmd.affected(&self.doc));
             self.last_target = cmd.target_layer();
+            let started = std::time::Instant::now();
             // The whole drag undoes in one go, so its undo step covers
             // every tick so far, and its memory estimate follows the
             // moving document.
@@ -410,8 +429,9 @@ impl Editor {
             let v = self.history.current_version_mut();
             v.graph = Arc::new(next.graph);
             v.payload = Step::new(next.state, affected, bytes);
-            self.doc = next.doc;
             self.collect_garbage();
+            self.last_sync = next.graph_time + started.elapsed();
+            self.doc = next.doc;
             Ok(())
         } else {
             self.push_command(cmd)?;
@@ -453,6 +473,7 @@ impl Editor {
         let next = self.prepare(cmd, false)?;
         self.last_affected = smart_filter_cmds::widen_affected(&next.doc, cmd.affected(&self.doc));
         self.last_target = cmd.target_layer();
+        let started = std::time::Instant::now();
         let bytes = self.released(self.history.cursor(), (&next.graph, &next.state));
         let before = self.history.versions().len();
         self.history.limit = self.history_limit;
@@ -464,12 +485,13 @@ impl Editor {
         while self.history.cursor() > 1 && self.history_bytes() > self.history_memory_limit {
             self.history.drop_oldest();
         }
-        self.doc = next.doc;
         // Anything but a plain append (redo steps or old steps dropped)
         // may leave blobs unused.
         if self.history.versions().len() != before + 1 {
             self.collect_garbage();
         }
+        self.last_sync = next.graph_time + started.elapsed();
+        self.doc = next.doc;
         Ok(())
     }
 

@@ -389,6 +389,90 @@ fn content_area(ctx: &Ctx, content: crate::NodeId, fx: &LayerEffects, coord: Til
     near
 }
 
+/// The input areas `eval_tile` reads to produce `coord`: the plan a render
+/// follows to compute inputs before their consumers (see
+/// [`crate::Renderer::render_node`]). Reading more than declared stays
+/// correct (the tile is computed on the spot); declaring what is read keeps
+/// threads from computing the same tile twice.
+pub(crate) fn input_needs(ctx: &Ctx, node: &Node, coord: TileCoord) -> Vec<(crate::NodeId, Rect)> {
+    let tile = coord.rect();
+    let at = |i: usize, r: Rect| node.input(i).map(|n| (n, r));
+    let mut out = Vec::new();
+    match &node.op {
+        Op::Empty | Op::Image { .. } | Op::Mask { .. } => {}
+        Op::Layer { props } => {
+            out.extend(at(0, tile));
+            if props.visible && props.opacity > 0.0 {
+                if let Some(c) = node.input(1) {
+                    out.push((c, content_area(ctx, c, &props.effects, coord)));
+                }
+                out.extend(at(2, padded(coord, fx_pad(&props.effects))));
+            }
+        }
+        Op::Adjustment { visible, opacity, .. } => {
+            out.extend(at(0, tile));
+            if *visible && *opacity > 0.0 {
+                out.extend(at(1, tile));
+            }
+        }
+        Op::FilterLayer {
+            filter,
+            visible,
+            opacity,
+        } => {
+            if *visible && *opacity > 0.0 {
+                out.extend(at(
+                    0,
+                    padded(coord, filter.pad()).intersect(&ctx.canvas).union(&tile),
+                ));
+                out.extend(at(1, tile));
+            } else {
+                out.extend(at(0, tile));
+            }
+        }
+        Op::PassThrough { visible, opacity } => {
+            out.extend(at(0, tile));
+            if *visible && *opacity > 0.0 {
+                out.extend(at(1, tile));
+                out.extend(at(2, tile));
+            }
+        }
+        Op::ClipGroup { base, members } => {
+            out.extend(at(0, tile));
+            if base.visible && base.opacity > 0.0 {
+                let pad = std::iter::once(&base.effects)
+                    .chain(members.iter().filter_map(|m| match m {
+                        ClipMember::Layer { props } => Some(&props.effects),
+                        ClipMember::Adjustment { .. } => None,
+                    }))
+                    .map(fx_pad)
+                    .max()
+                    .unwrap_or(0);
+                let area = padded(coord, pad);
+                if let Some(b) = node.input(1) {
+                    out.push((b, content_area(ctx, b, &base.effects, coord).union(&area)));
+                }
+                out.extend(at(2, area));
+                for (i, m) in members.iter().enumerate() {
+                    if let (ClipMember::Layer { props }, Some(c)) = (m, node.input(3 + 2 * i)) {
+                        out.push((c, content_area(ctx, c, &props.effects, coord).union(&area)));
+                    }
+                    out.extend(at(4 + 2 * i, area));
+                }
+            }
+        }
+        // Computed whole before any tile is pulled (see `ops_content::prepare`).
+        Op::Text { .. }
+        | Op::Fill { .. }
+        | Op::Shape { .. }
+        | Op::Transform { .. }
+        | Op::SmartFilter { .. } => {}
+        Op::Translate { dx, dy } => out.extend(at(0, crate::pixel_ops::shift(tile, -dx, -dy))),
+        Op::Compact => out.extend(at(0, tile)),
+    }
+    out
+}
+
 /// Evaluate one output tile of `node` (whose id is `id`). `None` means
 /// fully transparent.
 pub(crate) fn eval_tile(ctx: &Ctx, id: crate::NodeId, node: &Node, coord: TileCoord) -> Option<Arc<Tile>> {

@@ -292,4 +292,49 @@ mod tests {
         let edge = vignette_alpha(0, 300, 1000, 600);
         assert!(edge > 0.2 && edge < 0.6, "edge midpoints are half dark: {edge}");
     }
+
+    /// What keeping the edit graph in step costs per edit on the demo
+    /// (`Editor::last_sync_time`), for brush strokes on the photo and
+    /// opacity changes, past the 100-step history limit.
+    #[test]
+    #[ignore = "timing: cargo test --release -p lumenply-app demo_sync -- --ignored --nocapture"]
+    fn demo_sync_overhead() {
+        use lumenply_core::commands::{Brush, PaintStroke, SetOpacity, StrokePoint};
+        let mut ed = build().unwrap();
+        let photo = ed.doc().layers()[0].id;
+        let ids: Vec<LayerId> = ed.doc().layers().iter().map(|l| l.id).collect();
+        let (mut stroke, mut opacity) = (Vec::new(), Vec::new());
+        for i in 0..150u32 {
+            let (x, y) = ((i * 97 % 1600) as f32 + 50.0, (i * 61 % 1000) as f32 + 50.0);
+            ed.execute(&PaintStroke {
+                layer: photo,
+                brush: Brush {
+                    radius: 20.0,
+                    color: [0.8, 0.3, 0.1, 1.0],
+                    ..Brush::default()
+                },
+                points: (0..8)
+                    .map(|k| StrokePoint::new(x + k as f32 * 8.0, y + k as f32 * 4.0, 1.0))
+                    .collect(),
+            })
+            .unwrap();
+            stroke.push(ed.last_sync_time());
+            ed.execute(&SetOpacity {
+                layer: ids[i as usize % ids.len()],
+                opacity: 0.5 + (i % 5) as f32 * 0.1,
+            })
+            .unwrap();
+            opacity.push(ed.last_sync_time());
+        }
+        for (what, mut v) in [("brush stroke", stroke), ("opacity", opacity)] {
+            v.sort();
+            let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+            eprintln!(
+                "demo {what}: sync median {:.3}, p90 {:.3}, worst {:.3} ms",
+                ms(v[v.len() / 2]),
+                ms(v[v.len() * 9 / 10]),
+                ms(v[v.len() - 1])
+            );
+        }
+    }
 }

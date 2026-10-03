@@ -292,23 +292,75 @@ fn identical_pixels_are_one_blob_and_unchanged_tiles_are_hashed_once() {
 }
 
 #[test]
-fn concurrent_requests_for_one_tile_compute_it_once() {
+fn a_tile_being_computed_elsewhere_never_makes_a_caller_wait() {
     let cache = TileCache::default();
     let key = Hash([7; 32]);
     let c = lumenply_tiles::TileCoord::new(0, 0);
-    let runs = std::sync::atomic::AtomicUsize::new(0);
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let shared = &cache;
     std::thread::scope(|s| {
-        for _ in 0..8 {
-            s.spawn(|| {
-                cache.get_or_compute(key, c, || {
-                    runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                    Some(Arc::new(lumenply_tiles::Tile::new()))
-                })
-            });
-        }
+        let slow = s.spawn(move || {
+            shared.get_or_compute(key, c, || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Some(Arc::new(lumenply_tiles::Tile::new()))
+            })
+        });
+        started_rx.recv().unwrap();
+        // The first computation is still running: this one doesn't wait
+        // for it (waiting can deadlock under rayon) but computes its own.
+        let mine = cache.get_or_compute(key, c, || {
+            Some(Arc::new(lumenply_tiles::Tile::filled(Rgba::WHITE)))
+        });
+        assert_eq!(mine.unwrap().get(0, 0), Rgba::WHITE);
+        assert_eq!(cache.stats().duplicates, 1);
+        release_tx.send(()).unwrap();
+        slow.join().unwrap();
     });
-    assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+    // The first result is the one kept.
+    let kept = cache.get_or_compute(key, c, || unreachable!("cached"));
+    assert_eq!(kept.unwrap().get(0, 0), Rgba::TRANSPARENT);
+}
+
+#[test]
+fn a_planned_render_computes_every_tile_once() {
+    let doc = busy_document();
+    let mut r = Renderer::new();
+    r.plan = true;
+    let mut blobs = BlobStore::new();
+    let g = lower(&doc, &mut blobs, &r.hasher).graph;
+    let out = r.render_canvas(&g, &blobs);
+    assert_eq!(
+        r.cache.stats().duplicates,
+        0,
+        "inputs are ready before their consumers run"
+    );
+    assert_same(&out, &lumenply_render::composite(&doc), doc.canvas());
+}
+
+#[test]
+fn concurrent_renders_of_filters_and_effects_never_hang() {
+    // Many renders at once, each with a cold cache: the case that used to
+    // deadlock (a thread waiting for a tile its own stack was computing).
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let doc = busy_document();
+        let reference = lumenply_render::composite(&doc);
+        use rayon::prelude::*;
+        (0..48).into_par_iter().for_each(|_| {
+            let r = Renderer::new();
+            let mut blobs = BlobStore::new();
+            let g = lower(&doc, &mut blobs, &r.hasher).graph;
+            // Ask for the canvas without planning first, from several
+            // threads at once, to stress the cache directly.
+            let out = r.render_node(&g, &blobs, g.output.unwrap(), doc.canvas());
+            assert_same(&out, &reference, doc.canvas());
+        });
+        tx.send(()).unwrap();
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(120))
+        .expect("renders finished (no deadlock)");
 }
 
 #[test]

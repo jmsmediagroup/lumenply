@@ -872,3 +872,126 @@ fn the_graph_renders_the_document_through_a_long_random_edit_sequence() {
         assert!(done.get(k).copied().unwrap_or(0) >= 5, "{k}: {done:?}");
     }
 }
+
+/// Median, 90th percentile and worst of some durations, as text in ms.
+fn spread(mut v: Vec<std::time::Duration>) -> String {
+    v.sort();
+    let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+    format!(
+        "median {:.3}, p90 {:.3}, worst {:.3} ms",
+        ms(v[v.len() / 2]),
+        ms(v[v.len() * 9 / 10]),
+        ms(*v.last().unwrap())
+    )
+}
+
+/// Brush strokes and opacity changes on random layers, `rounds` of each:
+/// the graph's share of each edit ([`Editor::last_sync_time`]) and the
+/// whole edit, median and worst. Runs past the history limit, so dropping
+/// old versions and their blobs is included.
+pub(crate) fn sync_timings(ed: &mut Editor, name: &str, rounds: usize) {
+    let pixel = all_ids(ed.doc(), |l| {
+        matches!(l.content, LayerContent::Pixel(_)) && l.smart_filters.filters.is_empty()
+    });
+    let any = all_ids(ed.doc(), |_| true);
+    let (w, h) = (ed.doc().width as f32, ed.doc().height as f32);
+    let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+    let (mut stroke, mut stroke_all, mut opacity, mut opacity_all) = (vec![], vec![], vec![], vec![]);
+    for _ in 0..rounds {
+        let layer = pixel[rng.below(pixel.len())];
+        let (x, y) = (rng.unit() * (w - 100.0), rng.unit() * (h - 100.0));
+        let cmd = PaintStroke {
+            layer,
+            brush: Brush {
+                radius: 20.0,
+                color: [rng.unit(), rng.unit(), rng.unit(), 1.0],
+                ..Brush::default()
+            },
+            points: (0..8)
+                .map(|i| StrokePoint::new(x + i as f32 * 8.0, y + i as f32 * 4.0, 1.0))
+                .collect(),
+        };
+        let t = std::time::Instant::now();
+        ed.execute(&cmd).unwrap();
+        stroke_all.push(t.elapsed());
+        stroke.push(ed.last_sync_time());
+
+        let layer = any[rng.below(any.len())];
+        let t = std::time::Instant::now();
+        ed.execute(&SetOpacity {
+            layer,
+            opacity: 0.3 + rng.unit() * 0.7,
+        })
+        .unwrap();
+        opacity_all.push(t.elapsed());
+        opacity.push(ed.last_sync_time());
+    }
+    let show = |what: &str, sync: Vec<std::time::Duration>, all: Vec<std::time::Duration>| {
+        eprintln!(
+            "{name}: {what}: sync {}; whole edit {}",
+            spread(sync),
+            spread(all)
+        );
+    };
+    show("brush stroke", stroke, stroke_all);
+    show("opacity", opacity, opacity_all);
+    // Of which dropping unused blobs and memoised hashes, once the history
+    // is full (every edit then drops the oldest version).
+    let gc: Vec<_> = (0..50)
+        .map(|_| {
+            let t = std::time::Instant::now();
+            ed.collect_garbage();
+            t.elapsed()
+        })
+        .collect();
+    eprintln!("{name}: garbage collection alone: {}", spread(gc));
+}
+
+/// `layers` full-canvas pixel layers of distinct content, at rest.
+fn big_document(layers: usize, w: u32, h: u32) -> Document {
+    use rayon::prelude::*;
+    let mut doc = Document::new(w, h);
+    for i in 0..layers {
+        let id = doc.alloc_id();
+        let mut l = Layer::pixel(id, format!("Layer {i}"));
+        let tiles: Vec<_> = doc
+            .canvas()
+            .tiles()
+            .into_par_iter()
+            .map(|c| {
+                let mut t = lumenply_tiles::Tile::new();
+                let (ox, oy) = c.origin();
+                for (k, p) in t.pixels_mut().iter_mut().enumerate() {
+                    let (x, y) = (ox + (k % 256) as i32, oy + (k / 256) as i32);
+                    let v = ((x * 3 + y * 5 + i as i32 * 17) & 255) as f32 / 255.0;
+                    *p = Rgba::from_straight(v, 1.0 - v, 0.5, 0.9);
+                }
+                t.compact();
+                (c, Arc::new(t))
+            })
+            .collect();
+        let store = l.pixels_mut().unwrap();
+        for (c, t) in tiles {
+            store.insert(c, t);
+        }
+        l.opacity = if i == 0 { 1.0 } else { 0.8 };
+        doc.add_layer(l);
+    }
+    doc
+}
+
+#[test]
+#[ignore = "timing: cargo test --release -p lumenply-core sync_overhead -- --ignored --nocapture"]
+fn sync_overhead_per_edit() {
+    let mut ed = crate::demo::build(1600, 1200).unwrap();
+    sync_timings(&mut ed, "core demo 1600×1200", 150);
+
+    let doc = big_document(30, 4000, 3000);
+    let t = std::time::Instant::now();
+    let mut ed = Editor::new(doc);
+    eprintln!(
+        "30 × 4000×3000: opening (lowering every layer, hashing every tile) {:.0} ms",
+        t.elapsed().as_secs_f64() * 1e3
+    );
+    sync_timings(&mut ed, "30 × 4000×3000", 150);
+}
