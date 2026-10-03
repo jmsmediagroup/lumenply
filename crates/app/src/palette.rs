@@ -196,6 +196,10 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Make work path from selection", "make-work-path"),
     ("Puppet Warp", "puppet-warp"),
     ("Content-Aware Scale", "content-aware-scale"),
+    (
+        "Perspective Crop tool (Crop ▸ Perspective)",
+        "tool-perspective-crop",
+    ),
 ];
 
 impl App {
@@ -858,6 +862,7 @@ impl App {
             "liquify" => self.open_liquify(),
             "puppet-warp" => self.open_puppet(),
             "content-aware-scale" => self.open_cas(),
+            "tool-perspective-crop" => self.pick_perspective_crop(),
             "export-as" => self.open_export_as(),
             "smart-edit" => self.edit_smart_contents(),
             "save-selection" => {
@@ -939,7 +944,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 143); // + content-aware scale
+        assert_eq!(n, 144); // + content-aware scale, perspective crop
     }
 
     #[test]

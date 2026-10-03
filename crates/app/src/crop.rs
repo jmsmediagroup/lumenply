@@ -130,6 +130,8 @@ pub(crate) struct CropTool {
     pub(crate) delete_cropped: bool,
     drag: Option<CropDrag>,
     hover: Option<Grip>,
+    /// Crop ▸ Perspective (see `perspective_crop_ui`).
+    pub(crate) persp: perspective_crop_ui::PerspCrop,
 }
 
 impl Default for CropTool {
@@ -143,6 +145,7 @@ impl Default for CropTool {
             delete_cropped: false,
             drag: None,
             hover: None,
+            persp: Default::default(),
         }
     }
 }
@@ -371,7 +374,7 @@ fn ray_exit(poly: &[Pos2; 4], c: Pos2, ang: f32) -> Pos2 {
 
 /// A mesh filling the ring between the convex quads `outer` and `inner`
 /// (both around `c`): swept by angle, so it is exact for any turn.
-fn ring_mesh(outer: &[Pos2; 4], inner: &[Pos2; 4], c: Pos2, color: Color32) -> egui::Mesh {
+pub(crate) fn ring_mesh(outer: &[Pos2; 4], inner: &[Pos2; 4], c: Pos2, color: Color32) -> egui::Mesh {
     let mut angles: Vec<f32> = outer
         .iter()
         .chain(inner.iter())
@@ -438,6 +441,9 @@ impl App {
     /// Enter commits and Esc resets while the Crop tool is up (before Esc
     /// can drop the selection instead).
     pub(crate) fn crop_keys(&mut self, ctx: &egui::Context) {
+        if self.crop.persp.on {
+            return self.pcrop_keys(ctx);
+        }
         if self.tool != Tool::Crop || self.crop.frame.is_none() || ctx.wants_keyboard_input() {
             return;
         }
@@ -521,6 +527,9 @@ impl App {
         resp: &egui::Response,
         to_doc: impl Fn(Pos2) -> (f32, f32),
     ) {
+        if self.crop.persp.on {
+            return self.pcrop_input(ctx, resp, to_doc);
+        }
         let Some(frame) = self.crop.frame else { return };
         let primary = egui::PointerButton::Primary;
         let zoom = self.zoom;
@@ -639,6 +648,9 @@ impl App {
     /// The frame on the canvas: dimmed surround, checker where the crop
     /// adds canvas, border, thirds while dragging, handles, size pill.
     pub(crate) fn paint_crop(&self, ctx: &egui::Context, painter: &egui::Painter, resp: &egui::Response) {
+        if self.crop.persp.on {
+            return self.paint_pcrop(ctx, painter, resp);
+        }
         let Some(f) = self.crop.frame else { return };
         let origin = resp.rect.min + self.pan;
         let zoom = self.zoom;
@@ -759,6 +771,9 @@ impl App {
     /// The Crop tool's options bar: ratio, W:H, swap, delete cropped,
     /// size, Cancel and Crop.
     pub(crate) fn crop_options_bar(&mut self, ui: &mut egui::Ui, tier: options_bar::Tier) {
+        if self.pcrop_mode_switch(ui, tier) {
+            return;
+        }
         let canvas = (self.editor.doc().width, self.editor.doc().height);
         let original = reduced(canvas.0, canvas.1);
         let label = match self.crop.ratio {

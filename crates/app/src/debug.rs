@@ -28,6 +28,7 @@ impl App {
             || self.debug_panels(ctx, tok)
             || self.debug_puppet(tok)
             || self.debug_cas(tok)
+            || self.debug_pcrop(tok)
     }
 
     /// Selections and what acts on them (`select:...`):

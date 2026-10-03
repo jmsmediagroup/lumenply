@@ -53,6 +53,7 @@ mod palette;
 mod panels;
 mod paths_panel;
 mod pen;
+mod perspective_crop_ui;
 mod properties;
 mod puppet_ui;
 mod quick_select_tool;
