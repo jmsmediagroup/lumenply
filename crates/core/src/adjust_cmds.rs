@@ -12,7 +12,7 @@ use lumenply_tiles::{Rect, Rgba, TileStore};
 
 use crate::{Command, EditError, EditResult};
 
-pub use lumenply_render::adjust_more::{LabStats as MatchStats, ToneZone};
+pub use lumenply_render::adjust_more::ToneZone;
 
 #[inline]
 fn lerp(o: Rgba, f: Rgba, k: f32) -> Rgba {
@@ -162,7 +162,9 @@ impl Command for Equalize {
 
     fn apply(&self, doc: &mut Document) -> EditResult {
         let Some(curve) = self.curve(doc)? else {
-            return Ok(()); // a single tone: nothing to spread
+            return Err(EditError::Invalid(
+                "Equalize: there is only one tone to spread".into(),
+            ));
         };
         if self.entire_layer {
             let sel = doc.selection.take();
@@ -321,7 +323,7 @@ mod tests {
     use super::*;
     use crate::Editor;
     use lumenply_doc::adjust::{srgb_decode, srgb_encode};
-    use lumenply_doc::{LayerLocks, Mask};
+    use lumenply_doc::LayerLocks;
 
     fn grey(g: f32) -> Rgba {
         let v = srgb_decode(g);
@@ -429,6 +431,16 @@ mod tests {
         .unwrap();
         assert!(close(gamma(px(&ed, id, 12, 0))[0], 1.0, 1e-3));
         assert!(ed.doc().selection.is_some(), "the selection stays");
+        // A single tone has nothing to spread: refused, no step.
+        let (mut flat, fid) = doc_with(4, 4, |_, _| grey(0.5));
+        let n = flat.history().len();
+        assert!(flat
+            .execute(&Equalize {
+                layer: fid,
+                entire_layer: false,
+            })
+            .is_err());
+        assert_eq!(flat.history().len(), n);
     }
 
     #[test]
@@ -571,6 +583,5 @@ mod tests {
         let adj = ed.doc().layers().last().unwrap().id;
         assert!(ed.execute(&Desaturate { layer: adj }).is_err());
         assert!(ed.execute(&Desaturate { layer: id }).is_ok());
-        let _ = Mask::hide_all();
     }
 }
