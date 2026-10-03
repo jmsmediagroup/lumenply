@@ -61,6 +61,7 @@ mod liquify;
 mod lut_ui;
 mod macos_open;
 mod menu;
+mod move_tool;
 mod navigator;
 mod options_bar;
 mod palette;
@@ -399,6 +400,7 @@ struct App {
     curve_drag: Option<usize>,
     cursor_doc: Option<(i32, i32)>,
     move_offset: (i32, i32),
+    mover: move_tool::MoveState,
     renaming: Option<(LayerId, String)>,
     xform: Option<Xform>,
     xform_scale: f32,
@@ -606,6 +608,7 @@ impl App {
             curve_drag: None,
             cursor_doc: None,
             move_offset: (0, 0),
+            mover: Default::default(),
             renaming: None,
             xform: None,
             xform_scale: 100.0,

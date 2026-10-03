@@ -58,6 +58,12 @@ struct GuideDrag {
     pos: f32,
 }
 
+/// Grid line colour: a mid grey, so the lines read over white paper as
+/// well as over dark or saturated pixels (a light grey vanished on white).
+pub(crate) fn grid_ink(major: bool) -> Color32 {
+    Color32::from_rgba_unmultiplied(128, 128, 128, if major { 150 } else { 70 })
+}
+
 /// Ruler tick spacing for a zoom: the major step in document pixels (1, 2
 /// or 5 × 10ⁿ, at least 64 screen pixels apart) and minor ticks per major.
 pub(crate) fn ruler_steps(zoom: f32) -> (f32, u32) {
@@ -211,11 +217,7 @@ impl App {
             if step * zoom >= 4.0 && area.width() > 0.0 && area.height() > 0.0 {
                 let line = |k: i64| {
                     let major_line = (k % subs as i64) == 0 || step == major;
-                    if major_line {
-                        Stroke::new(1.0, Color32::from_rgba_unmultiplied(150, 160, 175, 96))
-                    } else {
-                        Stroke::new(1.0, Color32::from_rgba_unmultiplied(150, 160, 175, 34))
-                    }
+                    Stroke::new(1.0, grid_ink(major_line))
                 };
                 let k0 = ((area.min.x - origin.x) / zoom / step).ceil() as i64;
                 let k1 = ((area.max.x - origin.x) / zoom / step).floor() as i64;
@@ -674,6 +676,20 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grid_lines_show_on_white_and_on_black() {
+        // The line blended over a backdrop grey level (alpha over).
+        let over = |c: Color32, bg: f32| {
+            let a = c.a() as f32 / 255.0;
+            let [r, ..] = c.to_srgba_unmultiplied();
+            (r as f32 * a + bg * (1.0 - a)).round()
+        };
+        assert_eq!(over(grid_ink(true), 255.0), 180.0, "major on white");
+        assert_eq!(over(grid_ink(false), 255.0), 220.0, "minor on white");
+        assert_eq!(over(grid_ink(true), 0.0), 75.0, "major on black");
+        assert_eq!(over(grid_ink(false), 0.0), 35.0, "minor on black");
+    }
 
     #[test]
     fn ruler_ticks_stay_readable_at_every_zoom() {
