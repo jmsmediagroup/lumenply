@@ -1087,7 +1087,11 @@ impl Session {
             repeat: false,
             modifiers: mods,
         });
-        self.frame()?;
+        // A chord that opens a system file panel (Cmd+S, Cmd+O) parks the
+        // app inside it: the release reaches it once the panel is answered.
+        if self.dialog.is_none() {
+            self.frame()?;
+        }
         self.modifiers = Modifiers::NONE;
         Ok(())
     }
