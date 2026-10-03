@@ -296,6 +296,8 @@ impl App {
                                     .stroke(Stroke::new(1.0, LINE))
                                     .min_size(egui::vec2(w, 26.0)),
                             );
+                            // One name however short the label gets.
+                            a11y_name(&r, "Search tools, filters and commands");
                             if r.on_hover_text(format!("Search tools, filters and commands ({keys})"))
                                 .clicked()
                             {

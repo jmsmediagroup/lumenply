@@ -111,6 +111,15 @@ const ACCENT_HOVER: Color32 = Color32::from_rgb(0xFF, 0xC4, 0x6E);
 const LEFT_W: f32 = 300.0;
 const COL_GAP: f32 = 36.0;
 
+/// The demo card's photo height in a window `screen_h` points tall: the
+/// whole photo from 700 points up, a letterbox below (110 at 600), so the
+/// card and its caption fit without scrolling.
+fn demo_image_height(screen_h: f32, full_h: f32) -> f32 {
+    (full_h - (700.0 - screen_h).max(0.0) * 0.9)
+        .clamp(110.0, full_h)
+        .round()
+}
+
 #[derive(Clone, Copy)]
 enum Glyph {
     New,
@@ -409,7 +418,11 @@ impl App {
                 ));
             }
         }
-        let img_h = (LEFT_W * 1205.0 / 1800.0).round();
+        let full_h = (LEFT_W * 1205.0 / 1800.0).round();
+        // On a short window (900 × 600) a letterbox of the photo keeps the
+        // whole card, caption and all, on screen.
+        let img_h = demo_image_height(ui.ctx().screen_rect().height(), full_h);
+        let crop = (1.0 - img_h / full_h) / 2.0;
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(LEFT_W, img_h + 58.0), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Open the demo photo"));
         let p = ui.painter();
@@ -418,6 +431,10 @@ impl App {
         let img_rect = egui::Rect::from_min_size(rect.min, egui::vec2(LEFT_W, img_h));
         if let Some(tex) = &self.start_thumb {
             egui::Image::new((tex.id(), img_rect.size()))
+                .uv(egui::Rect::from_min_max(
+                    egui::pos2(0.0, crop),
+                    egui::pos2(1.0, 1.0 - crop),
+                ))
                 .rounding(egui::Rounding {
                     nw: 10.0,
                     ne: 10.0,
@@ -863,6 +880,15 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn the_demo_card_letterboxes_on_short_windows() {
+        assert_eq!(demo_image_height(900.0, 201.0), 201.0);
+        assert_eq!(demo_image_height(700.0, 201.0), 201.0);
+        assert_eq!(demo_image_height(650.0, 201.0), 156.0);
+        assert_eq!(demo_image_height(600.0, 201.0), 111.0);
+        assert_eq!(demo_image_height(400.0, 201.0), 110.0);
     }
 
     #[test]

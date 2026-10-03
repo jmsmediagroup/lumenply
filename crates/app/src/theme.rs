@@ -699,7 +699,16 @@ pub(crate) fn menu_separator(ui: &mut egui::Ui) {
 pub(crate) fn menu<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
     let r = ui.menu_button(title, |ui| {
         popup_style(ui);
-        add(ui)
+        // A menu taller than the window (Edit on a 600-point screen)
+        // scrolls instead of running off the bottom with its last items.
+        // (The popup's own size from the frame before would cap it lower.)
+        let room = (ui.ctx().screen_rect().bottom() - ui.next_widget_position().y - 12.0).max(120.0);
+        egui::ScrollArea::vertical()
+            .id_salt(title)
+            .max_height(room)
+            .min_scrolled_height(room)
+            .show(ui, add)
+            .inner
     });
     note_target(ui.ctx(), title, r.response.rect);
     r.inner

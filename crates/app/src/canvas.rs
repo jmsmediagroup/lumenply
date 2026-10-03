@@ -21,6 +21,33 @@ const ANTS_MAX: usize = 20_000;
 /// Warp mesh resolution: cells per side (so (n+1)² control points).
 pub(crate) const WARP_CELLS: usize = 3;
 
+/// Photoshop's zoom levels, as fractions: Zoom in and out step from one
+/// to the next, so they always land on 100% and on the even levels that
+/// keep pixels crisp. (Scrolling and pinching zoom smoothly in between.)
+pub(crate) const ZOOM_LEVELS: [f32; 21] = [
+    0.05, 0.0625, 0.0833, 0.125, 0.1667, 0.25, 0.3333, 0.5, 0.6667, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0,
+    8.0, 12.0, 16.0, 32.0,
+];
+
+/// The next zoom level above `z` (`inward`) or below it, from wherever
+/// `z` is (a fitted view sits between levels).
+pub(crate) fn zoom_step(z: f32, inward: bool) -> f32 {
+    if inward {
+        ZOOM_LEVELS
+            .iter()
+            .copied()
+            .find(|&l| l > z * 1.001)
+            .unwrap_or(32.0)
+    } else {
+        ZOOM_LEVELS
+            .iter()
+            .rev()
+            .copied()
+            .find(|&l| l < z / 1.001)
+            .unwrap_or(0.05)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ViewCmd {
     Fit,
@@ -475,6 +502,14 @@ impl App {
 
     // ---- canvas ---------------------------------------------------------------------
 
+    /// One step along the zoom ladder about point `p` (in on `inward`),
+    /// as View ▸ Zoom in / out, the zoom pill, the Navigator's buttons
+    /// and the Zoom mode's clicks all do.
+    pub(crate) fn zoom_step_at(&mut self, rect: egui::Rect, p: Pos2, inward: bool) {
+        let to = zoom_step(self.zoom, inward);
+        self.zoom_at(rect, p, to / self.zoom);
+    }
+
     pub(crate) fn zoom_at(&mut self, rect: egui::Rect, p: Pos2, factor: f32) {
         let old = self.zoom;
         let new = (old * factor).clamp(0.05, 32.0);
@@ -485,10 +520,20 @@ impl App {
     }
 
     pub(crate) fn apply_view_cmd(&mut self, rect: egui::Rect) {
+        // A fitted view stays fitted while the canvas settles or resizes
+        // (the dock finds its width a frame after a document opens),
+        // until the user zooms or pans.
+        if let Some((r, z, p)) = self.fitted {
+            if (z, p) != (self.zoom, self.pan) {
+                self.fitted = None;
+            } else if r != rect && self.view_cmd.is_none() {
+                self.view_cmd = Some(ViewCmd::Fit);
+            }
+        }
         let Some(cmd) = self.view_cmd.take() else { return };
         match cmd {
-            ViewCmd::ZoomIn => return self.zoom_at(rect, rect.center(), 1.25),
-            ViewCmd::ZoomOut => return self.zoom_at(rect, rect.center(), 1.0 / 1.25),
+            ViewCmd::ZoomIn => return self.zoom_step_at(rect, rect.center(), true),
+            ViewCmd::ZoomOut => return self.zoom_step_at(rect, rect.center(), false),
             ViewCmd::Fit | ViewCmd::Actual | ViewCmd::PrintSize => {}
         }
         let doc = self.editor.doc();
@@ -502,6 +547,7 @@ impl App {
             ViewCmd::ZoomIn | ViewCmd::ZoomOut => return,
         };
         self.pan = (rect.size() - size * self.zoom) / 2.0;
+        self.fitted = (cmd == ViewCmd::Fit).then_some((rect, self.zoom, self.pan));
     }
 
     pub(crate) fn canvas(&mut self, ctx: &egui::Context) {
@@ -550,7 +596,7 @@ impl App {
                 {
                     if let Some(p) = resp.interact_pointer_pos() {
                         let out = ctx.input(|i| i.modifiers.alt);
-                        self.zoom_at(rect, p, if out { 0.5 } else { 2.0 });
+                        self.zoom_step_at(rect, p, !out);
                     }
                 }
 
@@ -645,8 +691,9 @@ impl App {
                             ui.spacing_mut().item_spacing.x = 4.0;
                             let out = ui.add(egui::Button::new("−").frame(false));
                             a11y_name(&out, "Zoom out");
-                            if out.clicked() {
-                                self.zoom_at(clip, clip.center(), 1.0 / 1.25);
+                            let tip = format!("Zoom out ({})", self.action_keys(ctx, "zoom-out"));
+                            if out.on_hover_text(tip).clicked() {
+                                self.zoom_step_at(clip, clip.center(), false);
                             }
                             ui.add_sized(
                                 [52.0, 18.0],
@@ -658,12 +705,15 @@ impl App {
                             );
                             let zin = ui.add(egui::Button::new("+").frame(false));
                             a11y_name(&zin, "Zoom in");
-                            if zin.clicked() {
-                                self.zoom_at(clip, clip.center(), 1.25);
+                            let tip = format!("Zoom in ({})", self.action_keys(ctx, "zoom-in"));
+                            if zin.on_hover_text(tip).clicked() {
+                                self.zoom_step_at(clip, clip.center(), true);
                             }
                             ui.separator();
+                            let tip = format!("Fit on screen ({})", self.action_keys(ctx, "fit"));
                             if ui
                                 .add(egui::Button::new(RichText::new("Fit").color(MUTED)).frame(false))
+                                .on_hover_text(tip)
                                 .clicked()
                             {
                                 self.view_cmd = Some(ViewCmd::Fit);
@@ -2267,5 +2317,57 @@ mod tests {
         assert!(mesh
             .iter()
             .all(|p| b.contains(p.0.floor() as i32, p.1.floor() as i32)));
+    }
+
+    #[test]
+    fn zoom_steps_follow_photoshops_levels_and_reach_100_percent() {
+        // From a fitted 52.83% view: 66.67%, then exactly 100%.
+        assert_eq!(zoom_step(0.5283, true), 0.6667);
+        assert_eq!(zoom_step(0.6667, true), 1.0);
+        assert_eq!(zoom_step(1.0, true), 1.5);
+        assert_eq!(zoom_step(1.0, false), 0.6667);
+        assert_eq!(zoom_step(0.5283, false), 0.5);
+        // The ends hold.
+        assert_eq!(zoom_step(32.0, true), 32.0);
+        assert_eq!(zoom_step(0.05, false), 0.05);
+        // A level a hair off (float noise) still steps to the next one.
+        assert_eq!(zoom_step(0.99999, true), 1.5);
+    }
+
+    #[test]
+    fn a_fitted_view_stays_fitted_while_the_canvas_settles() {
+        let mut app = crate::a11y_tests::launch(&["--demo".to_string()]);
+        let first = egui::Rect::from_min_size(egui::pos2(89.0, 82.0), Vec2::new(491.0, 428.0));
+        let settled = egui::Rect::from_min_size(egui::pos2(89.0, 82.0), Vec2::new(481.0, 428.0));
+        app.view_cmd = Some(ViewCmd::Fit);
+        app.apply_view_cmd(first);
+        assert!((app.zoom - 411.0 / 1800.0).abs() < 1e-6, "{}", app.zoom);
+        // The dock takes 10 points more on the next frame: fit again.
+        app.apply_view_cmd(settled);
+        assert!((app.zoom - 401.0 / 1800.0).abs() < 1e-6, "{}", app.zoom);
+        assert_eq!(app.pan.x, 40.0);
+        // Once the user zooms, a resize leaves the view alone.
+        app.zoom_step_at(settled, settled.center(), true);
+        let z = app.zoom;
+        app.apply_view_cmd(first);
+        assert_eq!(app.zoom, z);
+    }
+
+    #[test]
+    fn a_zoom_step_keeps_the_point_under_the_pointer() {
+        let mut app = crate::a11y_tests::launch(&["--demo".to_string()]);
+        let rect = egui::Rect::from_min_size(egui::pos2(90.0, 80.0), Vec2::new(1000.0, 700.0));
+        app.zoom = 0.5283;
+        app.pan = Vec2::new(40.0, 45.0);
+        let p = egui::pos2(500.0, 300.0);
+        let doc_at = |a: &App| (p - rect.min - a.pan) / a.zoom;
+        let before = doc_at(&app);
+        app.zoom_step_at(rect, p, true);
+        assert!((app.zoom - 0.6667).abs() < 1e-6, "{}", app.zoom);
+        assert!((doc_at(&app) - before).length() < 1e-3);
+        // Out from 66.67% is 50%, below the 52.83% it started from.
+        app.zoom_step_at(rect, p, false);
+        assert!((app.zoom - 0.5).abs() < 1e-6, "{}", app.zoom);
+        assert!((doc_at(&app) - before).length() < 1e-3);
     }
 }

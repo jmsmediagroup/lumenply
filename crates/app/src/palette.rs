@@ -115,7 +115,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Zoom in", "zoom-in"),
     ("Zoom out", "zoom-out"),
     ("Fit on screen", "fit"),
-    ("Actual pixels", "actual"),
+    ("Actual pixels (100%)", "actual"),
     ("Print size (approximate)", "print-size"),
     ("Show or hide the history strip", "toggle-history"),
     ("About Lumenply", "about"),
@@ -197,6 +197,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("View the blue channel alone", "channel-blue"),
     ("Show or hide the Navigator", "navigator"),
     ("Show or hide the Info panel", "info-panel"),
+    ("Show or hide the Histogram", "histogram-panel"),
     ("Make work path from selection", "make-work-path"),
     ("Puppet Warp", "puppet-warp"),
     ("Camera Raw Filter...", crate::camera_raw_filter::CRF_ACTION),
@@ -302,8 +303,10 @@ impl App {
                     };
                     row(ui, t.name(), &keys);
                 }
+                row(ui, "Zoom", "Z");
                 row(ui, "Wand ▸ Quick ▸ Object selection", "Shift+W");
                 section_title(ui, "COMMANDS");
+                row(ui, "Search commands...", &self.action_keys(&ctx, "palette"));
                 for (label, id) in ACTIONS {
                     let keys = self.action_keys(&ctx, id);
                     if !keys.is_empty() {
@@ -769,8 +772,10 @@ impl App {
                 let sym = if id == "zoom-in" { "=" } else { "−" };
                 return format!("{}{sym}", base.trim_end_matches('A'));
             }
-            "fit" => (M::NONE, Key::Num0),
-            "actual" => (M::NONE, Key::Num1),
+            // Photoshop's chords; the bare 0 and 1 work too.
+            "fit" => (M::COMMAND, Key::Num0),
+            "actual" => (M::COMMAND, Key::Num1),
+            "prefs" => (M::COMMAND, Key::Comma),
             "quick-mask" => (M::NONE, Key::Q),
             "palette" => (M::COMMAND, Key::K),
             "select-mask" => (M::COMMAND | M::ALT, Key::R),
@@ -1056,7 +1061,21 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 193); // + Select subject, Remove background, Object Selection, AI models
+        assert_eq!(n, 194); // + Select subject, Remove background, Object Selection, AI models, Histogram
+    }
+
+    #[test]
+    fn view_and_preferences_keys_read_as_photoshop_writes_them() {
+        let app = crate::a11y_tests::launch(&["--demo".to_string()]);
+        let ctx = crate::a11y_tests::ctx();
+        let _ = ctx.run(Default::default(), |_| {});
+        let cmd = |k: Key| shortcut_text(&ctx, egui::Modifiers::COMMAND, k);
+        assert_eq!(app.action_keys(&ctx, "fit"), cmd(Key::Num0));
+        assert_eq!(app.action_keys(&ctx, "actual"), cmd(Key::Num1));
+        assert_eq!(app.action_keys(&ctx, "prefs"), cmd(Key::Comma));
+        // "100" finds Actual pixels in the palette.
+        assert!(ACTIONS.contains(&("Actual pixels (100%)", "actual")));
+        assert!(ACTIONS.contains(&("Show or hide the Histogram", "histogram-panel")));
     }
 
     #[test]

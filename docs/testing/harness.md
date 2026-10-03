@@ -104,7 +104,8 @@ given. `--tree` and `s.dump_tree("label")` list them.
   When the same kind appears twice, the one drawn last (on top) is used;
   `s.within("Properties", |s| s.drag_slider("Opacity", 0.5))` limits the search to
   one panel.
-- Layer rows are `"Layer <name>"`, history steps are their labels, tools are their
+- Layer rows are `"Layer <name>"`, history steps are
+  `"History step <n>: <label>"` (0 is the opened state, `"History step 0: Open"`), tools are their
   names ("Brush", "Rectangular Marquee").
 - A control must look the same for two frames before it is used (a menu's first frame
   is an invisible sizing pass), and the harness waits up to a dozen frames for one to

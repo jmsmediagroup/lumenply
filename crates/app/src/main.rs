@@ -377,6 +377,8 @@ struct App {
     zoom: f32,
     pan: Vec2,
     view_cmd: Option<ViewCmd>,
+    /// The canvas, zoom and pan of the last Fit, while the view stays so.
+    fitted: Option<(egui::Rect, f32, Vec2)>,
     canvas_tex: Option<TextureHandle>,
     /// View ▸ Proof Colors / Gamut Warning (soft_proof.rs): display only.
     proof_colors: bool,
@@ -410,6 +412,8 @@ struct App {
     dialog: Option<Dialog>,
     filter_previewed: bool,
     status: String,
+    /// When `status` was set, so it clears once out of date (status.rs).
+    status_age: status::StatusAge,
     /// History length at the last save, for the unsaved-changes dot.
     saved_rev: usize,
     /// One thumbnail per history step (step 0 is the opened state).
@@ -589,6 +593,7 @@ impl App {
             zoom: 1.0,
             pan: Vec2::ZERO,
             view_cmd: Some(ViewCmd::Fit),
+            fitted: None,
             canvas_tex: None,
             proof_colors: false,
             gamut_warning: false,
@@ -657,6 +662,7 @@ impl App {
                 .unwrap_or_default(),
             filter_previewed: false,
             status: String::from("Ready"),
+            status_age: Default::default(),
             tabs: Vec::new(),
             cur_tab: 0,
             untitled: String::new(),
@@ -1223,11 +1229,9 @@ impl App {
             if i.consume_key(M::COMMAND | M::SHIFT, Key::OpenBracket) {
                 fired.push("layer-back");
             }
-            for (id, ..) in session::SHORTCUTS {
-                if let Some((m, k)) = session::resolve_chord(&self.prefs, id) {
-                    if i.consume_key(m, k) {
-                        fired.push(id);
-                    }
+            for (id, m, k) in session::chords_in_dispatch_order(&self.prefs) {
+                if i.consume_key(m, k) {
+                    fired.push(id);
                 }
             }
             if i.consume_key(M::COMMAND, Key::Y) {
@@ -1525,6 +1529,7 @@ impl eframe::App for App {
 impl App {
     /// One UI frame; `update` without the eframe window, so tests can run it.
     fn frame(&mut self, ctx: &egui::Context) {
+        self.expire_status();
         if self.liquify.is_some() {
             self.liquify_ui(ctx);
             self.debug_screenshot(ctx);

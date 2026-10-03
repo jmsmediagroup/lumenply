@@ -1,6 +1,66 @@
 use super::*;
 
+/// When the status bar's message was set: which message (its text's
+/// buffer, length and contents) and the document version at the time.
+///
+/// A message tells what just happened ("Undid Paint stroke", "Saved
+/// x.lumen", "Select a pixel layer first"). It stays until it is out of
+/// date: the moment the document moves on (a new history step, undo,
+/// redo, a jump, a tab switch) without the same frame saying something
+/// new, the message is cleared. Code sets a message by assigning
+/// `self.status` anywhere; [`App::expire_status`] runs at the start of
+/// every frame and needs nothing else from it. Assigning a new `String`
+/// allocates while the old one still lives, so a new message always has a
+/// new buffer, even when it repeats the last one's words.
+#[derive(Default)]
+pub(crate) struct StatusAge {
+    message: (usize, usize, u64),
+    doc: DocVersion,
+}
+
+/// The live document's version: tab, history position and edit graph.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(crate) struct DocVersion {
+    tab: u64,
+    steps: usize,
+    redo: usize,
+    graph: usize,
+}
+
+fn message_id(s: &str) -> (usize, usize, u64) {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    (s.as_ptr() as usize, s.len(), h.finish())
+}
+
 impl App {
+    fn doc_version(&self) -> DocVersion {
+        DocVersion {
+            tab: self.doc_key,
+            steps: self.editor.history().len(),
+            redo: self.editor.redo_history().len(),
+            graph: self.editor.graph() as *const _ as usize,
+        }
+    }
+
+    /// Start of a frame: note a message set since the last frame (with the
+    /// document version it describes), or clear the message when the
+    /// document has moved on since it was set. See [`StatusAge`].
+    pub(crate) fn expire_status(&mut self) {
+        let doc = self.doc_version();
+        let id = message_id(&self.status);
+        if id != self.status_age.message {
+            self.status_age = StatusAge { message: id, doc };
+        } else if doc != self.status_age.doc {
+            self.status.clear();
+            self.status_age = StatusAge {
+                message: message_id(&self.status),
+                doc,
+            };
+        }
+    }
+
     /// The status bar: document facts on the left (numbers in mono), the
     /// last message on the right, elided rather than run under the facts.
     pub(crate) fn status_bar(&mut self, ctx: &egui::Context) {
@@ -93,4 +153,79 @@ impl App {
 pub(crate) fn render_cache_label(editor: &Editor) -> String {
     let mb = crate::session::render_cache_bytes(editor) as f64 / (1u64 << 20) as f64;
     format!("Cache {mb:.0} MB")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(app: &mut App, ctx: &egui::Context) {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| app.frame(ctx));
+    }
+
+    #[test]
+    fn a_message_clears_once_the_document_moves_on() {
+        let mut app = App::launch(&["--demo".to_string()]);
+        app.dialog = None;
+        app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        frame(&mut app, &ctx);
+        frame(&mut app, &ctx);
+        assert!(app.status.starts_with("Opened the demo"), "{}", app.status);
+
+        // The next edit leaves the opening message out of date.
+        app.add_pixel_layer();
+        frame(&mut app, &ctx);
+        assert_eq!(app.status, "");
+
+        // Undo says what it undid; adding a layer after that clears it.
+        app.undo();
+        frame(&mut app, &ctx);
+        let undid = app.status.clone();
+        assert!(undid.starts_with("Undid Add layer"), "{undid}");
+        frame(&mut app, &ctx);
+        assert_eq!(app.status, undid);
+        app.add_pixel_layer();
+        frame(&mut app, &ctx);
+        assert_eq!(app.status, "");
+
+        // A message set together with its edit describes that edit: it stays.
+        app.add_pixel_layer();
+        app.status = "Added a layer".into();
+        frame(&mut app, &ctx);
+        frame(&mut app, &ctx);
+        assert_eq!(app.status, "Added a layer");
+
+        // The same words again after another edit are a new message.
+        app.add_pixel_layer();
+        app.status = "Added a layer".into();
+        frame(&mut app, &ctx);
+        frame(&mut app, &ctx);
+        assert_eq!(app.status, "Added a layer");
+
+        // Undo then redo: each message stands until the document moves on.
+        app.undo();
+        frame(&mut app, &ctx);
+        assert!(app.status.starts_with("Undid Add layer"), "{}", app.status);
+        app.redo();
+        frame(&mut app, &ctx);
+        assert!(app.status.starts_with("Redid Add layer"), "{}", app.status);
+        // A view change is not an edit: the message stays.
+        app.view_cmd = Some(ViewCmd::ZoomIn);
+        frame(&mut app, &ctx);
+        frame(&mut app, &ctx);
+        assert!(app.status.starts_with("Redid Add layer"), "{}", app.status);
+        // Neither is a message with no edit after it.
+        app.status = "Select a pixel layer first".into();
+        for _ in 0..3 {
+            frame(&mut app, &ctx);
+        }
+        assert_eq!(app.status, "Select a pixel layer first");
+        app.undo();
+        frame(&mut app, &ctx);
+        app.add_pixel_layer();
+        frame(&mut app, &ctx);
+        assert_eq!(app.status, "");
+    }
 }

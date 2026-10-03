@@ -14,6 +14,9 @@ const RECENT_MAX: usize = 10;
 pub(crate) struct Chord {
     pub cmd: bool,
     pub shift: bool,
+    /// Option (Alt); absent in prefs saved before it was recorded.
+    #[serde(default)]
+    pub alt: bool,
     pub key: String,
 }
 
@@ -67,17 +70,101 @@ pub(crate) const SHORTCUTS: &[(&str, &str, bool, bool, &str)] = &[
 /// else the built-in default.
 pub(crate) fn resolve_chord(prefs: &Prefs, id: &str) -> Option<(egui::Modifiers, egui::Key)> {
     let (_, _, dc, ds, dk) = SHORTCUTS.iter().find(|(i, ..)| *i == id)?;
-    let (cmd, shift, key) = match prefs.shortcuts.get(id) {
-        Some(c) => (c.cmd, c.shift, egui::Key::from_name(&c.key)),
-        None => (*dc, *ds, egui::Key::from_name(dk)),
+    let (cmd, shift, alt, key) = match prefs.shortcuts.get(id) {
+        Some(c) => (c.cmd, c.shift, c.alt, egui::Key::from_name(&c.key)),
+        None => (*dc, *ds, false, egui::Key::from_name(dk)),
     };
     let key = key.or_else(|| egui::Key::from_name(dk))?;
     let m = egui::Modifiers {
         command: cmd,
         shift,
+        alt,
         ..egui::Modifiers::NONE
     };
     Some((m, key))
+}
+
+/// The rebindable chords in the order the keyboard handler must try
+/// them: a chord matches whenever its own keys are down, even with more
+/// modifiers held, so the ones with more modifiers go first (Shift+Cmd+Z
+/// before Cmd+Z, Option+Cmd+G before Cmd+G). Ties keep `SHORTCUTS` order.
+pub(crate) fn chords_in_dispatch_order(prefs: &Prefs) -> Vec<(&'static str, egui::Modifiers, egui::Key)> {
+    let mut v: Vec<_> = SHORTCUTS
+        .iter()
+        .filter_map(|(id, ..)| resolve_chord(prefs, id).map(|(m, k)| (*id, m, k)))
+        .collect();
+    v.sort_by_key(|(_, m, _)| std::cmp::Reverse(m.shift as u8 + m.alt as u8));
+    v
+}
+
+/// Chords the app keeps for commands that can't be rebound, with what
+/// they do (see `App::shortcuts` and `App::action_keys`).
+const FIXED_CHORDS: &[(bool, bool, bool, egui::Key, &str)] = &[
+    (true, false, false, egui::Key::K, "Search commands"),
+    (true, false, false, egui::Key::Comma, "Preferences"),
+    (true, false, false, egui::Key::C, "Copy"),
+    (true, false, false, egui::Key::X, "Cut"),
+    (true, false, false, egui::Key::V, "Paste"),
+    (true, true, false, egui::Key::C, "Copy merged"),
+    (true, true, false, egui::Key::V, "Paste in place"),
+    (true, false, false, egui::Key::Equals, "Zoom in"),
+    (true, false, false, egui::Key::Plus, "Zoom in"),
+    (true, false, false, egui::Key::Minus, "Zoom out"),
+    (true, false, false, egui::Key::Num0, "Fit on screen"),
+    (true, false, false, egui::Key::Num1, "Actual pixels"),
+    (true, false, false, egui::Key::Num2, "View the RGB composite"),
+    (true, false, false, egui::Key::Num3, "View the red channel"),
+    (true, false, false, egui::Key::Num4, "View the green channel"),
+    (true, false, false, egui::Key::Num5, "View the blue channel"),
+    (true, true, true, egui::Key::E, "Stamp visible"),
+    (true, true, true, egui::Key::C, "Content-Aware Scale"),
+    (true, false, true, egui::Key::R, "Select and Mask"),
+    (true, true, false, egui::Key::CloseBracket, "Bring layer to front"),
+    (true, true, false, egui::Key::OpenBracket, "Send layer to back"),
+    (
+        true,
+        false,
+        false,
+        egui::Key::Backspace,
+        "Fill with the background colour",
+    ),
+];
+
+/// Why `id` can't take the chord `c` (in the bindings `prefs` would
+/// have): it is another command's shortcut, or a key on its own (those
+/// pick tools). `None` when it is free.
+pub(crate) fn chord_conflict(ctx: &egui::Context, prefs: &Prefs, id: &str, c: &Chord) -> Option<String> {
+    let key = egui::Key::from_name(&c.key)?;
+    let m = egui::Modifiers {
+        command: c.cmd,
+        shift: c.shift,
+        alt: c.alt,
+        ..egui::Modifiers::NONE
+    };
+    let text = crate::theme::shortcut_text(ctx, m, key);
+    let f_key = key.name().len() > 1 && key.name().starts_with('F');
+    if !c.cmd && !f_key {
+        return Some(format!(
+            "{text} on its own picks tools and types; add Cmd (or use an F key)"
+        ));
+    }
+    let same = |cmd: bool, shift: bool, alt: bool, k: egui::Key| {
+        (cmd, shift, alt, k) == (c.cmd, c.shift, c.alt, key)
+    };
+    for (other, label, ..) in SHORTCUTS {
+        if *other == id {
+            continue;
+        }
+        if let Some((om, ok)) = resolve_chord(prefs, other) {
+            if same(om.command, om.shift, om.alt, ok) {
+                return Some(format!("{text} is already the shortcut for {label}"));
+            }
+        }
+    }
+    FIXED_CHORDS
+        .iter()
+        .find(|(cmd, shift, alt, k, _)| same(*cmd, *shift, *alt, *k))
+        .map(|(.., what)| format!("{text} is already the shortcut for {what}"))
 }
 
 /// Human-readable form of an action's effective chord, written the way
@@ -478,6 +565,67 @@ fn push_recent_in(dir: &Path, path: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn chord(cmd: bool, shift: bool, alt: bool, key: &str) -> Chord {
+        Chord {
+            cmd,
+            shift,
+            alt,
+            key: key.into(),
+        }
+    }
+
+    #[test]
+    fn a_rebound_chord_keeps_option_and_survives_old_prefs() {
+        let mut prefs = Prefs::default();
+        prefs
+            .shortcuts
+            .insert("gamut-warning".into(), chord(true, false, true, "G"));
+        let (m, k) = resolve_chord(&prefs, "gamut-warning").unwrap();
+        assert_eq!((m.command, m.shift, m.alt, k), (true, false, true, egui::Key::G));
+        // Prefs written before Option was recorded load with it off.
+        let old: Chord = serde_json::from_str(r#"{"cmd":true,"shift":true,"key":"P"}"#).unwrap();
+        assert!(old == chord(true, true, false, "P"));
+        // Option+Cmd+G is tried before Group layers' Cmd+G, which would
+        // otherwise match it too.
+        let order: Vec<&str> = chords_in_dispatch_order(&prefs)
+            .iter()
+            .map(|(id, ..)| *id)
+            .collect();
+        let at = |id: &str| order.iter().position(|x| *x == id).unwrap();
+        assert!(at("gamut-warning") < at("group"));
+        assert!(at("redo") < at("undo"));
+        assert!(at("reselect") < at("deselect"));
+        assert_eq!(order.len(), SHORTCUTS.len());
+    }
+
+    #[test]
+    fn a_chord_another_command_holds_is_refused_with_its_name() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |_| {});
+        let prefs = Prefs::default();
+        let why = |c: Chord| chord_conflict(&ctx, &prefs, "proof-colors", &c);
+        let save = shortcut_text_for(&ctx, egui::Modifiers::COMMAND, egui::Key::S);
+        assert_eq!(
+            why(chord(true, false, false, "S")),
+            Some(format!("{save} is already the shortcut for Save"))
+        );
+        let k = shortcut_text_for(&ctx, egui::Modifiers::COMMAND, egui::Key::K);
+        assert_eq!(
+            why(chord(true, false, false, "K")),
+            Some(format!("{k} is already the shortcut for Search commands"))
+        );
+        assert!(why(chord(false, false, false, "P")).is_some_and(|w| w.contains("on its own")));
+        // Free chords, its own chord and F keys are fine.
+        assert_eq!(why(chord(true, true, false, "P")), None);
+        assert_eq!(why(chord(true, false, false, "Y")), None);
+        assert_eq!(why(chord(false, false, false, "F7")), None);
+        assert_eq!(why(chord(true, false, true, "G")), None);
+    }
+
+    fn shortcut_text_for(ctx: &egui::Context, m: egui::Modifiers, k: egui::Key) -> String {
+        crate::theme::shortcut_text(ctx, m, k)
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join("nge-session-test").join(name);
