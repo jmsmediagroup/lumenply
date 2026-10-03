@@ -34,7 +34,8 @@ impl App {
             )
             .show(ctx, |ui| {
                 let current = self.editor.history().len();
-                let labels: Vec<String> = std::iter::once("Open".to_string())
+                let revisions = self.editor.revisions();
+                let labels: Vec<String> = std::iter::once(self.editor.base_label().to_string())
                     .chain(self.editor.history().iter().map(|s| s.to_string()))
                     .chain(self.editor.redo_history().iter().map(|s| s.to_string()))
                     .collect();
@@ -89,7 +90,8 @@ impl App {
                             let seen_id = ui.id().with("seen-current");
                             let seen = ui.data(|d| d.get_temp::<usize>(seen_id));
                             for (i, label) in labels.iter().enumerate() {
-                                let resp = self.history_card(ui, i, label, current);
+                                let resp =
+                                    self.history_card(ui, i, label, current, revisions.get(i).copied());
                                 if i == current && seen != Some(current) {
                                     resp.scroll_to_me(Some(egui::Align::Max));
                                 }
@@ -158,7 +160,14 @@ impl App {
         self.snapshots.push((self.doc_key, name, doc));
     }
 
-    fn history_card(&self, ui: &mut egui::Ui, i: usize, label: &str, current: usize) -> egui::Response {
+    fn history_card(
+        &self,
+        ui: &mut egui::Ui,
+        i: usize,
+        label: &str,
+        current: usize,
+        revision: Option<u64>,
+    ) -> egui::Response {
         // Clickable but kept out of the Tab order: stepping through dozens
         // of cards would stand between the options bar and the tools, and
         // Undo/Redo already walk history from the keyboard.
@@ -171,7 +180,8 @@ impl App {
         let p = ui.painter();
         let well = egui::Rect::from_min_size(rect.min, egui::vec2(CARD.x, WELL_H));
         p.rect_filled(well, 4.0, RAISED);
-        if let Some(tex) = self.hist_thumbs.get(i) {
+        let thumb = self.hist_thumbs.iter().find(|(r, _)| Some(*r) == revision);
+        if let Some((_, tex)) = thumb {
             let size = tex.size_vec2();
             let scale = ((well.width() - 4.0) / size.x).min((well.height() - 4.0) / size.y);
             let draw = egui::Rect::from_center_size(well.center(), size * scale);
@@ -231,14 +241,16 @@ impl App {
     }
 
     /// Record a thumbnail for the current history step from the composited
-    /// canvas. Called at the end of every refresh; steps already captured
-    /// (undo, jumps) are left alone, and a new edit that destroys the redo
-    /// branch drops the stale thumbnails with it.
+    /// canvas. Called at the end of every refresh. Thumbnails belong to
+    /// the document state they show (its revision), not to a position in
+    /// the strip: a new edit after undoing, a slider tick and a step
+    /// dropped at the history limit all leave every card with its own
+    /// picture.
     pub(crate) fn capture_history_thumb(&mut self, ctx: &egui::Context) {
-        let cur = self.editor.history().len();
-        let total = cur + self.editor.redo_history().len();
-        self.hist_thumbs.truncate(total + 1);
-        if self.hist_thumbs.len() > cur {
+        let revisions = self.editor.revisions();
+        self.hist_thumbs.retain(|(r, _)| revisions.contains(r));
+        let cur = self.editor.revision();
+        if self.hist_thumbs.iter().any(|(r, _)| *r == cur) {
             return;
         }
         let Some(flat) = self.last_flat.as_ref() else {
@@ -258,14 +270,8 @@ impl App {
                 img.pixels[y * tw + x] = to_color32(px);
             }
         }
-        while self.hist_thumbs.len() <= cur {
-            let tex = ctx.load_texture(
-                format!("hist-{}", self.hist_thumbs.len()),
-                img.clone(),
-                egui::TextureOptions::LINEAR,
-            );
-            self.hist_thumbs.push(tex);
-        }
+        let tex = ctx.load_texture(format!("hist-{cur}"), img, egui::TextureOptions::LINEAR);
+        self.hist_thumbs.push((cur, tex));
     }
 }
 
@@ -359,8 +365,12 @@ fn snapshot_card(ui: &mut egui::Ui, name: &str) -> egui::Response {
     p.circle_stroke(c, 3.5, Stroke::new(1.5, ACCENT));
     let (galley, _) = elided(ui, name, FontId::proportional(10.5), TEXT, CARD.x);
     p.galley(egui::pos2(rect.min.x, rect.min.y + WELL_H + 2.0), galley, TEXT);
-    resp.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Snapshot {name}"))
-    });
+    // Say it is a snapshot once: "Snapshot 1", not "Snapshot Snapshot 1".
+    let spoken = if name.starts_with("Snapshot") {
+        name.to_string()
+    } else {
+        format!("Snapshot {name}")
+    };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &spoken));
     resp.on_hover_text(format!("{name}: click to go back to it (one undo step)"))
 }

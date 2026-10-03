@@ -407,7 +407,7 @@ impl App {
         match crate::project_io::ProjectSnapshot::of(&self.editor).save(std::path::Path::new(path)) {
             Ok(_) => {
                 self.path = Some(PathBuf::from(path));
-                self.saved_rev = self.editor.history().len();
+                self.saved_rev = self.editor.revision();
                 self.recent = session::push_recent(path);
                 if self.any_unsaved() {
                     // Other documents still need their backups: rewrite
@@ -997,7 +997,7 @@ impl App {
                             footer(ui, |ui| {
                                 if ui.add(primary_button("Save and quit")).clicked() || enter {
                                     self.save_live();
-                                    if self.editor.history().len() == self.saved_rev {
+                                    if self.editor.revision() == self.saved_rev {
                                         self.allow_close = true;
                                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                     }
@@ -1024,7 +1024,7 @@ impl App {
                             footer(ui, |ui| {
                                 if ui.add(primary_button("Save and close")).clicked() || enter {
                                     self.save_live();
-                                    if self.editor.history().len() == self.saved_rev {
+                                    if self.editor.revision() == self.saved_rev {
                                         self.force_close_tab(i);
                                     }
                                     keep = false;

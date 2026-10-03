@@ -360,7 +360,7 @@ impl App {
             frame: t.frame,
         };
         let started = std::time::Instant::now();
-        let before = self.editor.history().len();
+        let before = self.editor.revision();
         match (t.edit, t.apply) {
             (CrfEdit::New, CrfApply::Pixels) => {
                 if st.dev.is_neutral() {
@@ -413,7 +413,7 @@ impl App {
                 }
             }
         }
-        if self.editor.history().len() > before {
+        if self.editor.revision() != before {
             let how = t.apply.title().to_lowercase();
             self.status = if t.apply == CrfApply::LiveLayer {
                 // A live layer renders as the canvas draws: no time to report.

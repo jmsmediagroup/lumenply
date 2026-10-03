@@ -384,10 +384,10 @@ impl App {
             self.status = "Content-Aware Scale: nothing changed".into();
             return;
         };
-        let before = self.editor.history().len();
+        let before = self.editor.revision();
         let t = std::time::Instant::now();
         self.run(&cmd);
-        if self.editor.history().len() > before {
+        if self.editor.revision() != before {
             self.status = format!(
                 "Content-Aware Scale to {} × {} px in {:.0} ms",
                 cmd.new_w,

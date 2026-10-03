@@ -410,10 +410,11 @@ struct App {
     dialog: Option<Dialog>,
     filter_previewed: bool,
     status: String,
-    /// History length at the last save, for the unsaved-changes dot.
-    saved_rev: usize,
-    /// One thumbnail per history step (step 0 is the opened state).
-    hist_thumbs: Vec<egui::TextureHandle>,
+    /// [`Editor::revision`] at the last save (or open), for the
+    /// unsaved-changes dot and the close prompts.
+    saved_rev: u64,
+    /// History thumbnails by the [`Editor::revision`] of the step they show.
+    hist_thumbs: Vec<(u64, egui::TextureHandle)>,
     /// Open command palette (Ctrl+K).
     palette: Option<Palette>,
     /// Set once the user confirms quitting with unsaved changes.
@@ -505,11 +506,11 @@ struct DocTab {
     smart_link: Option<smart_contents::SmartLink>,
     editor: Editor,
     path: Option<PathBuf>,
-    saved_rev: usize,
+    saved_rev: u64,
     zoom: f32,
     pan: Vec2,
     active: Option<LayerId>,
-    hist_thumbs: Vec<egui::TextureHandle>,
+    hist_thumbs: Vec<(u64, egui::TextureHandle)>,
     untitled: String,
 }
 
@@ -522,7 +523,7 @@ impl DocTab {
     }
 
     fn unsaved(&self) -> bool {
-        self.editor.history().len() != self.saved_rev
+        self.editor.revision() != self.saved_rev
     }
 }
 
@@ -678,6 +679,8 @@ impl App {
             actions: actions_panel::ActionsState::load(),
             ai: ai_ui::AiState::new(),
         };
+        // The placeholder editor counts as saved: nothing to lose.
+        app.saved_rev = app.editor.revision();
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
         if launch.demo {
@@ -802,7 +805,7 @@ impl App {
         self.editor = editor;
         self.prefs.apply(&mut self.editor);
         self.path = path;
-        self.saved_rev = self.editor.history().len();
+        self.saved_rev = self.editor.revision();
         self.hist_thumbs.clear();
         self.cancel_interaction();
         self.select_top();
@@ -861,7 +864,7 @@ impl App {
             .as_ref()
             .map(|p| file_name(&p.to_string_lossy()))
             .unwrap_or_else(|| self.untitled.clone());
-        let live_unsaved = self.editor.history().len() != self.saved_rev;
+        let live_unsaved = self.editor.revision() != self.saved_rev;
         let mut out: Vec<(String, bool)> = Vec::with_capacity(self.tabs.len() + 1);
         for (i, t) in self.tabs.iter().enumerate() {
             if i == self.cur_tab {
@@ -936,7 +939,7 @@ impl App {
     /// Close a tab by display index; asks about unsaved changes first.
     pub(crate) fn close_tab(&mut self, i: usize) {
         let unsaved = if i == self.cur_tab {
-            self.editor.history().len() != self.saved_rev
+            self.editor.revision() != self.saved_rev
         } else {
             let idx = if i < self.cur_tab { i } else { i - 1 };
             self.tabs.get(idx).is_some_and(|t| t.unsaved())
@@ -979,7 +982,7 @@ impl App {
     /// with where it came from: what an autosave backs up.
     fn unsaved_docs(&self) -> Vec<(project_io::ProjectSnapshot, Option<PathBuf>)> {
         let mut out = Vec::new();
-        if self.editor.history().len() != self.saved_rev {
+        if self.editor.revision() != self.saved_rev {
             out.push((project_io::ProjectSnapshot::of(&self.editor), self.path.clone()));
         }
         for t in self.tabs.iter().filter(|t| t.unsaved()) {
@@ -989,7 +992,7 @@ impl App {
     }
 
     fn any_unsaved(&self) -> bool {
-        self.editor.history().len() != self.saved_rev || self.tabs.iter().any(|t| t.unsaved())
+        self.editor.revision() != self.saved_rev || self.tabs.iter().any(|t| t.unsaved())
     }
 
     fn active_layer(&self) -> Option<&Layer> {
@@ -1614,7 +1617,7 @@ impl App {
             .as_ref()
             .map(|p| file_name(&p.to_string_lossy()))
             .unwrap_or_else(|| self.untitled.clone());
-        let unsaved = if self.editor.history().len() != self.saved_rev {
+        let unsaved = if self.editor.revision() != self.saved_rev {
             " •"
         } else {
             ""

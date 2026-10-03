@@ -129,13 +129,13 @@ impl App {
             return;
         }
         let raster = PerspectiveCrop::rasterized_layers(self.editor.doc()).len();
-        let before = self.editor.history().len();
+        let before = self.editor.revision();
         self.run(&PerspectiveCrop {
             quad,
             width: w,
             height: h,
         });
-        if self.editor.history().len() > before {
+        if self.editor.revision() != before {
             self.crop.persp.quad = None;
             self.crop.persp.drag = None;
             self.crop_sync();

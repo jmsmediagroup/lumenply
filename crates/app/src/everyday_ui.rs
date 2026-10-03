@@ -74,7 +74,7 @@ impl App {
                 self.open_in_new_tab(Editor::new(doc), None);
                 self.untitled = name;
                 // A duplicate is new work, never saved anywhere yet.
-                self.saved_rev = usize::MAX;
+                self.saved_rev = u64::MAX;
                 self.status = "Duplicated the document".into();
             }
             _ => return false,
