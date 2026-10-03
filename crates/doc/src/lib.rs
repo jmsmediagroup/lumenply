@@ -1065,6 +1065,9 @@ pub struct Document {
     /// Saved selections (alpha channels); covered by undo, saved with
     /// projects.
     pub saved_selections: Vec<SavedSelection>,
+    /// The selection most recently cleared, for Select ▸ Reselect; covered
+    /// by undo, never saved.
+    pub last_selection: Option<Selection>,
     /// Bottom-to-top.
     layers: Vec<Layer>,
     next_id: LayerId,
@@ -1164,6 +1167,7 @@ impl Document {
             float_mode: false,
             guides: Vec::new(),
             saved_selections: Vec::new(),
+            last_selection: None,
             layers: Vec::new(),
             next_id: 1,
         }
@@ -1180,6 +1184,7 @@ impl Document {
             float_mode: false,
             guides: Vec::new(),
             saved_selections: Vec::new(),
+            last_selection: None,
             layers,
             next_id,
         }

@@ -416,7 +416,14 @@ impl Command for SetSelection {
     }
 
     fn apply(&self, doc: &mut Document) -> EditResult {
-        doc.selection = self.selection.clone().filter(|s| !s.is_empty());
+        let next = self.selection.clone().filter(|s| !s.is_empty());
+        // Deselecting keeps the old selection for Select ▸ Reselect.
+        if next.is_none() {
+            if let Some(old) = doc.selection.take() {
+                doc.last_selection = Some(old);
+            }
+        }
+        doc.selection = next;
         Ok(())
     }
 }

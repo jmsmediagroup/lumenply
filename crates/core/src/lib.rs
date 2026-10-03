@@ -15,6 +15,7 @@ mod content_aware;
 pub mod crop;
 pub mod demo;
 mod erasers;
+pub mod everyday;
 pub mod fill_cmds;
 pub mod fill_opacity;
 pub mod gradient_tool;
