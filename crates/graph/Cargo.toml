@@ -17,3 +17,5 @@ serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 blake3.workspace = true
 thiserror.workspace = true
+wgpu.workspace = true
+pollster.workspace = true

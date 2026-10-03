@@ -475,7 +475,7 @@ fn editing_text_or_a_fill_colour_changes_only_downstream_keys() {
 }
 
 /// One document with every content op.
-fn every_content_op() -> Document {
+pub(crate) fn every_content_op() -> Document {
     let mut doc = filtered_smart();
     let p = ramp();
     doc.patterns.push(p.clone());

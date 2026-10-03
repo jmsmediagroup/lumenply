@@ -81,6 +81,10 @@ enum Cmd {
         /// Store tiles 16-bit before lowering, as the editor keeps them at rest.
         #[arg(long)]
         compact: bool,
+        /// Also render the graph on the GPU and compare it with the CPU
+        /// evaluator (implies --check; skipped without a GPU adapter).
+        #[arg(long)]
+        gpu: bool,
     },
     /// Time the compositor on a synthetic document (the Phase 1 gate).
     Bench {
@@ -93,6 +97,14 @@ enum Cmd {
         /// Blend every layer with Normal instead of cycling all modes.
         #[arg(long, default_value_t = false)]
         normal: bool,
+        /// Time the edit graph instead (cpu, gpu or both): a cold and a
+        /// warm render, an opacity edit and a one-tile paint edit on the
+        /// second layer from the top.
+        #[arg(long, value_name = "cpu|gpu|both")]
+        graph: Option<String>,
+        /// Tile cache budget in MB for --graph, CPU and GPU alike.
+        #[arg(long, default_value_t = 8192)]
+        budget_mb: usize,
     },
     /// Write a project (or the demo) as a layered Photoshop PSD.
     ExportPsd {
@@ -219,13 +231,15 @@ fn main() -> Result<()> {
             save,
             hints,
             compact,
+            gpu,
         } => {
             let opts = GraphOpts {
                 out,
-                check,
+                check: check || gpu,
                 save,
                 hints,
                 compact,
+                gpu,
             };
             if is_graph_project(&project) {
                 graph_project_cmd(&project, &opts)
@@ -254,7 +268,17 @@ fn main() -> Result<()> {
             layers,
             runs,
             normal,
+            graph: None,
+            ..
         } => bench(size, layers, runs, normal),
+        Cmd::Bench {
+            size,
+            layers,
+            runs,
+            normal,
+            graph: Some(side),
+            budget_mb,
+        } => bench_graph(size, layers, runs, normal, &side, budget_mb),
         Cmd::Blends => {
             for (i, group) in BlendMode::GROUPS.iter().enumerate() {
                 if i > 0 {
@@ -275,6 +299,7 @@ struct GraphOpts {
     save: Option<PathBuf>,
     hints: bool,
     compact: bool,
+    gpu: bool,
 }
 
 fn is_graph_project(path: &std::path::Path) -> bool {
@@ -395,6 +420,9 @@ fn graph_cmd(path: &PathBuf, o: &GraphOpts) -> Result<()> {
         if worst > 1e-5 || !same_warm {
             anyhow::bail!("the graph renders differently from the layer tree (max difference {worst})");
         }
+        if o.gpu {
+            gpu_check(graph, blobs, &first)?;
+        }
         cold = Some(first);
     }
     if let Some(save) = &o.save {
@@ -419,6 +447,76 @@ fn graph_cmd(path: &PathBuf, o: &GraphOpts) -> Result<()> {
             }
             println!("loaded back in {load_ms:.1} ms: renders identically");
         }
+    }
+    Ok(())
+}
+
+/// Render `graph` on the GPU and compare it with the CPU evaluator's
+/// `reference` (tolerance 1e-4); a warm render must do no work.
+fn gpu_check(
+    graph: &lumenply_graph::Graph,
+    blobs: &lumenply_graph::BlobStore,
+    reference: &lumenply_tiles::TileStore,
+) -> Result<()> {
+    let Some(mut gpu) = lumenply_graph::GpuRenderer::new() else {
+        println!("gpu: no GPU adapter available; skipping the GPU comparison");
+        return Ok(());
+    };
+    let canvas = graph.canvas();
+    let (cold_ms, image) = timed(|| {
+        let image = gpu.render_gpu(graph, blobs, canvas);
+        gpu.finish();
+        image
+    });
+    let (read_ms, back) = timed(|| gpu.read_back(&image));
+    let s = gpu.stats();
+    gpu.reset_stats();
+    let (warm_ms, _) = timed(|| {
+        gpu.render_gpu(graph, blobs, canvas);
+        gpu.finish();
+    });
+    let w = gpu.stats();
+    let warm_work = w.dispatches + w.cpu_tiles() + w.uploaded_tiles;
+    // The readback API takes its own route for the output node.
+    let store = gpu.render_canvas_to_store(graph, blobs);
+    let mut worst = 0f32;
+    let mut at = (0, 0);
+    for y in canvas.y..canvas.bottom() {
+        for x in canvas.x..canvas.right() {
+            let p = reference.get_pixel(x, y);
+            for q in [back.get_pixel(x, y), store.get_pixel(x, y)] {
+                for (a, b) in [(p.r, q.r), (p.g, q.g), (p.b, q.b), (p.a, q.a)] {
+                    if (a - b).abs() > worst {
+                        worst = (a - b).abs();
+                        at = (x, y);
+                    }
+                }
+            }
+        }
+    }
+    let fallback: Vec<String> = s
+        .fallback_tiles
+        .iter()
+        .map(|(op, n)| format!("{n} {op}"))
+        .collect();
+    println!(
+        "gpu cold {cold_ms:.1} ms + readback {read_ms:.1} ms, warm {warm_ms:.2} ms; gpu max difference {worst:.2e}; \
+         {} dispatches, {} CPU-fallback tiles ({}), uploaded {:.1} MB, read back {:.1} MB",
+        s.dispatches,
+        s.cpu_tiles(),
+        if fallback.is_empty() {
+            "none".to_string()
+        } else {
+            fallback.join(", ")
+        },
+        s.uploaded_bytes as f64 / 1048576.0,
+        s.read_back_bytes as f64 / 1048576.0,
+    );
+    if worst > 1e-4 {
+        bail!("the GPU renders the graph differently from the CPU (max difference {worst} at {at:?})");
+    }
+    if warm_work > 0 {
+        bail!("a warm GPU render did {warm_work} tiles of work; expected none");
     }
     Ok(())
 }
@@ -466,6 +564,9 @@ fn graph_project_cmd(path: &PathBuf, o: &GraphOpts) -> Result<()> {
         println!("render digest {}", digest(&cold));
         if !p.warnings.is_empty() {
             bail!("{} warnings while loading", p.warnings.len());
+        }
+        if o.gpu {
+            gpu_check(&p.graph, &p.blobs, &cold)?;
         }
     }
     if let Some(save) = &o.save {
@@ -694,7 +795,9 @@ fn paint(out: PathBuf, width: u32, height: u32, save: Option<PathBuf>) -> Result
     Ok(())
 }
 
-fn bench(size: u32, layers: u32, runs: u32, normal: bool) -> Result<()> {
+/// The benchmark document: `layers` full-canvas layers, cycling every
+/// blend mode (or all Normal), stored compactly as the editor stores them.
+fn synthetic_stack(size: u32, layers: u32, normal: bool) -> Document {
     let mut doc = Document::new(size, size);
     for i in 0..layers {
         let id = doc.add_pixel_layer(format!("L{i}"));
@@ -709,6 +812,152 @@ fn bench(size: u32, layers: u32, runs: u32, normal: bool) -> Result<()> {
         *layer.pixels_mut().unwrap() = lumenply_tiles::TileStore::from_raster(&fill, 0, 0);
     }
     lumenply_core::compact_storage(&mut doc);
+    doc
+}
+
+/// Milliseconds `f` takes, and what it returned.
+fn timed<T>(f: impl FnOnce() -> T) -> (f64, T) {
+    let t = Instant::now();
+    let out = f();
+    (t.elapsed().as_secs_f64() * 1e3, out)
+}
+
+/// Time the edit graph on the synthetic stack: the CPU evaluator and the
+/// GPU executor, cold, warm, and after edits to the second layer from the
+/// top (its opacity; one painted pixel, a new blob sharing every other
+/// tile). GPU times wait for the GPU to finish; "resident" leaves the
+/// result on the GPU, "+ readback" includes copying it back.
+fn bench_graph(size: u32, layers: u32, runs: u32, normal: bool, side: &str, budget_mb: usize) -> Result<()> {
+    use lumenply_graph::{BlobStore, GpuRenderer, Op, Renderer, TileHasher};
+    let (cpu, gpu) = match side {
+        "cpu" => (true, false),
+        "gpu" => (false, true),
+        "both" => (true, true),
+        _ => bail!("--graph takes cpu, gpu or both"),
+    };
+    if layers < 2 {
+        bail!("--graph needs at least two layers");
+    }
+    let doc = synthetic_stack(size, layers, normal);
+    let hasher = TileHasher::default();
+    let mut blobs = BlobStore::new();
+    let (lower_ms, low) = timed(|| lumenply_graph::lower(&doc, &mut blobs, &hasher));
+    let graph = low.graph;
+    let canvas = graph.canvas();
+    let edited = &doc.layers()[layers as usize - 2];
+    let target = low.layer_nodes[&edited.id];
+    let content = graph
+        .node(target)
+        .and_then(|n| n.input(1))
+        .context("edited layer has content")?;
+    let with_opacity = |o: f32| {
+        let mut g = graph.clone();
+        g.update(target, |n| {
+            if let Op::Layer { props } = &mut n.op {
+                props.opacity = o;
+            }
+        })
+        .expect("node exists");
+        g
+    };
+    let (edit1, edit2) = (with_opacity(0.5), with_opacity(0.4));
+    let LayerContent::Pixel(store) = &edited.content else {
+        bail!("the edited layer is a pixel layer")
+    };
+    let mut repainted = store.clone();
+    repainted.set_pixel(size as i32 / 2, size as i32 / 2, Rgba::WHITE);
+    repainted.compact();
+    let blob = blobs.insert(&hasher, repainted);
+    let mut paint = graph.clone();
+    paint
+        .update(content, |n| n.op = Op::Image { blob })
+        .expect("node exists");
+    let budget = budget_mb << 20;
+    println!(
+        "{layers} full {size}x{size} layers, {} blend modes, {} threads; lowered in {lower_ms:.0} ms; \
+         cache budget {budget_mb} MB",
+        if normal { "Normal" } else { "mixed" },
+        rayon_threads(),
+    );
+    let mut table: Vec<(String, f64)> = Vec::new();
+    let mut note = |name: &str, ms: f64| match table.iter_mut().find(|(n, _)| n == name) {
+        Some((_, best)) => *best = best.min(ms),
+        None => table.push((name.to_string(), ms)),
+    };
+    for run in 1..=runs {
+        if cpu {
+            let r = Renderer::with_budget(budget);
+            let (cold, _) = timed(|| r.render_canvas(&graph, &blobs));
+            let (warm, _) = timed(|| r.render_canvas(&graph, &blobs));
+            let (edit, _) = timed(|| r.render_canvas(&edit1, &blobs));
+            let (painted, _) = timed(|| r.render_canvas(&paint, &blobs));
+            println!("run {run} cpu: cold {cold:.1}, warm {warm:.2}, opacity edit {edit:.1}, paint edit {painted:.1} ms");
+            note("cpu cold", cold);
+            note("cpu warm", warm);
+            note("cpu opacity edit", edit);
+            note("cpu paint edit", painted);
+        }
+        if gpu {
+            let mut g = GpuRenderer::new().context("no GPU adapter available")?;
+            g.set_budget(budget);
+            g.set_cpu_budget(budget);
+            let (cold, img) = timed(|| {
+                let img = g.render_gpu(&graph, &blobs, canvas);
+                g.finish();
+                img
+            });
+            let s = g.stats();
+            let (readback, _) = timed(|| g.read_back(&img));
+            drop(img);
+            let (warm, _) = timed(|| {
+                g.render_gpu(&graph, &blobs, canvas);
+                g.finish();
+            });
+            g.reset_stats();
+            let (edit, _) = timed(|| {
+                g.render_gpu(&edit1, &blobs, canvas);
+                g.finish();
+            });
+            let es = g.stats();
+            let (edit_back, _) = timed(|| g.render_to_store(&edit2, &blobs, canvas));
+            g.reset_stats();
+            let (painted, _) = timed(|| {
+                g.render_gpu(&paint, &blobs, canvas);
+                g.finish();
+            });
+            let ps = g.stats();
+            println!(
+                "run {run} gpu: cold {cold:.1} (+ readback {readback:.1}), warm {warm:.2}, opacity edit {edit:.1} \
+                 ({edit_back:.1} with readback), paint edit {painted:.1} ms"
+            );
+            println!(
+                "    cold: {} dispatches, uploaded {:.0} MB, {} CPU-fallback tiles, read back {:.0} MB; \
+                 edit: {} dispatches; paint: {} dispatches, uploaded {:.1} MB",
+                s.dispatches,
+                s.uploaded_bytes as f64 / 1048576.0,
+                s.cpu_tiles(),
+                s.read_back_bytes as f64 / 1048576.0,
+                es.dispatches,
+                ps.dispatches,
+                ps.uploaded_bytes as f64 / 1048576.0,
+            );
+            note("gpu cold (resident)", cold);
+            note("gpu readback of the canvas", readback);
+            note("gpu warm (resident)", warm);
+            note("gpu opacity edit (resident)", edit);
+            note("gpu opacity edit + readback", edit_back);
+            note("gpu paint edit (resident)", painted);
+        }
+    }
+    println!("best of {runs}:");
+    for (name, ms) in &table {
+        println!("  {name:<30} {ms:>9.2} ms");
+    }
+    Ok(())
+}
+
+fn bench(size: u32, layers: u32, runs: u32, normal: bool) -> Result<()> {
+    let doc = synthetic_stack(size, layers, normal);
     let mp = (size as f64 * size as f64) / 1e6;
     println!(
         "{layers} full {size}x{size} layers ({mp:.1} MP), mixed blend modes, {} threads, {:.0} MB of layer pixels",

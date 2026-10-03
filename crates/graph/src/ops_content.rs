@@ -84,7 +84,7 @@ fn passes_through(op: &Op) -> bool {
 }
 
 /// Ops whose output is made in one piece (see [`Ctx::whole`]).
-fn is_whole(op: &Op) -> bool {
+pub(crate) fn is_whole(op: &Op) -> bool {
     match op {
         Op::Text { .. } | Op::Fill { .. } | Op::Shape { .. } | Op::Transform { .. } => true,
         Op::SmartFilter { .. } => !passes_through(op),
