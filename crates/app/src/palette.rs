@@ -93,8 +93,12 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Move layer up", "layer-up"),
     ("Move layer down", "layer-down"),
     ("Add layer mask", "add-mask"),
-    ("Remove layer mask", "rm-mask"),
+    ("Delete layer mask", "rm-mask"),
     ("Disable / enable layer mask", "mask-toggle"),
+    ("Layer mask: reveal all", "mask-reveal-all"),
+    ("Layer mask: hide all", "mask-hide-all"),
+    ("Layer mask: hide selection", "mask-hide-sel"),
+    ("Apply layer mask", "mask-apply"),
     ("Clip layer to the one below", "clip"),
     ("Release layer clip", "unclip"),
     ("Convert to smart object", "smart-object"),
@@ -1056,7 +1060,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 193); // + Select subject, Remove background, Object Selection, AI models
+        assert_eq!(n, 197); // + Select subject, Remove background, Object Selection, AI models; layer masks
     }
 
     #[test]

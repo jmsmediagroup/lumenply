@@ -352,7 +352,9 @@ impl App {
         let before = fill.clone();
         let mut finished = false;
         ui.horizontal(|ui| {
-            row_label(ui, "Fill", LABEL_W);
+            // "Type", not "Fill": the Fill (opacity) slider sits just above,
+            // and "Solid color" pushed the dock wider than its 320 pt.
+            row_label(ui, "Type", LABEL_W);
             // 0 solid, 1 gradient, 2 pattern.
             let kind = |f: &Fill| match f {
                 Fill::Solid { .. } => 0u8,
@@ -360,7 +362,7 @@ impl App {
                 Fill::Pattern { .. } => 2,
             };
             let mut k = kind(&fill);
-            if segmented(ui, &mut k, &[(0, "Solid color"), (1, "Gradient"), (2, "Pattern")]) {
+            if segmented(ui, &mut k, &[(0, "Solid"), (1, "Gradient"), (2, "Pattern")]) {
                 let first = match &fill {
                     Fill::Solid { color } => *color,
                     Fill::Gradient { gradient, .. } => gradient.sorted()[0].color,
