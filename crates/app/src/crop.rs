@@ -836,7 +836,9 @@ impl App {
             "On: pixels outside the frame are removed. Off: layers keep them beyond the \
              canvas edge, so a later canvas enlargement brings them back",
         );
-        if let Some(f) = self.crop.frame {
+        // Tight bars (with the Crop / Perspective switch) leave the size
+        // to the on-canvas pill.
+        if let (Some(f), false) = (self.crop.frame, tier == options_bar::Tier::Tight) {
             ui.separator();
             let r = f.rect();
             let mut text = format!("{} × {} px", r.w, r.h);

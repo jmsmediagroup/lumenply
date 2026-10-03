@@ -335,11 +335,6 @@ impl App {
         let src = liquify::downscale(store, src_rect, scale);
         let below = composite_below(doc, id, canvas);
         let backdrop = liquify::downscale(&below, canvas, scale);
-        let protect = if doc.selection.is_some() {
-            Protect::Selection
-        } else {
-            Protect::None
-        };
         let r = src_rect;
         self.cas = Some(Box::new(CasState {
             layer: id,
@@ -347,7 +342,9 @@ impl App {
             src_rect,
             bx: [r.x as f32, r.y as f32, r.right() as f32, r.bottom() as f32],
             amount: 100.0,
-            protect,
+            // Nothing protected until the user picks something, as in
+            // Photoshop (the selection is offered in the menu).
+            protect: Protect::None,
             skin: false,
             src,
             backdrop,
@@ -845,10 +842,14 @@ mod tests {
         });
         app.run_menu_action("content-aware-scale");
         let st = app.cas.as_mut().unwrap();
-        assert_eq!(st.protect, Protect::Selection, "a selection protects by default");
+        assert_eq!(st.protect, Protect::None, "nothing is protected until picked");
         st.set_percent(80.0, 100.0);
+        assert!(st.command(app.editor.doc()).unwrap().protect.is_none());
+        assert!(app.debug_cas("cas:protect=selection"));
+        let st = app.cas.as_mut().unwrap();
         let cmd = st.command(app.editor.doc()).unwrap();
-        assert!(cmd.protect.is_some());
+        let m = cmd.protect.as_ref().expect("the selection protects");
+        assert_eq!(m.to_dense(Rect::new(29, 10, 2, 1)), vec![1.0, 0.0]);
         assert_eq!((cmd.new_w, cmd.new_h, cmd.origin), (96, 60, Some((12, 0))));
         assert!(app.debug_cas("cas:protect=none"));
         assert_eq!(app.cas.as_ref().unwrap().protect, Protect::None);

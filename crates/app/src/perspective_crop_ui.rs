@@ -298,7 +298,12 @@ impl App {
     /// true when perspective mode drew the rest of the bar.
     pub(crate) fn pcrop_mode_switch(&mut self, ui: &mut egui::Ui, tier: options_bar::Tier) -> bool {
         let mut on = self.crop.persp.on;
-        segmented(ui, &mut on, &[(false, "Crop"), (true, "Perspective")]);
+        let persp = if tier == options_bar::Tier::Tight {
+            "Persp."
+        } else {
+            "Perspective"
+        };
+        segmented(ui, &mut on, &[(false, "Crop"), (true, persp)]);
         if on != self.crop.persp.on {
             self.crop.persp.on = on;
             self.crop.persp.drag = None;
@@ -348,19 +353,24 @@ impl App {
         {
             self.crop.persp.size = (0, 0);
         }
-        if let Some((ow, oh)) = self.crop.persp.out_size() {
+        let tight = tier == options_bar::Tier::Tight;
+        if let (Some((ow, oh)), false) = (self.crop.persp.out_size(), tight) {
             ui.separator();
             ui.label(RichText::new(format!("{ow} × {oh} px")).monospace().color(TEXT))
                 .on_hover_text("Size of the rectified canvas");
         }
         let raster = PerspectiveCrop::rasterized_layers(self.editor.doc()).len();
         if raster > 0 {
-            ui.label(RichText::new(format!("rasterizes {raster} text/vector layer(s)")).color(ACCENT))
-                .on_hover_text(
-                    "Text, shapes and smart objects cannot follow a perspective change; \
-                     the crop turns them into pixels (one undo step)",
-                );
-        } else if tier != options_bar::Tier::Tight && self.crop.persp.quad.is_some() {
+            let text = if tier == options_bar::Tier::Wide {
+                format!("rasterizes {raster} text/vector layer(s)")
+            } else {
+                format!("rasterizes {raster}")
+            };
+            ui.label(RichText::new(text).color(ACCENT)).on_hover_text(format!(
+                "{raster} text, shape or smart-object layer(s) cannot follow a perspective \
+                 change; the crop turns them into pixels (one undo step)"
+            ));
+        } else if tier == options_bar::Tier::Wide && self.crop.persp.quad.is_some() {
             ui.label(RichText::new("Drag corners onto edges that should be straight").weak());
         }
         ui.separator();
