@@ -22,6 +22,7 @@ use lumenply_doc::{
 use lumenply_io::project;
 use lumenply_tiles::{Affine, Raster, Rect};
 
+mod actions_panel;
 mod adjust_ui;
 mod blend_ui;
 mod brand;
@@ -458,6 +459,8 @@ struct App {
     panels: panels::PanelState,
     /// Pattern library and picker (pattern_ui.rs).
     patterns: pattern_ui::PatternLibrary,
+    /// Window ▸ Actions: recorded actions and the recorder (actions_panel.rs).
+    actions: actions_panel::ActionsState,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -632,6 +635,7 @@ impl App {
             solo: None,
             panels: Default::default(),
             patterns: Default::default(),
+            actions: actions_panel::ActionsState::load(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -726,7 +730,10 @@ impl App {
                 self.mark(r);
                 self.fix_active();
             }
-            Err(e) => self.status = e.to_string(),
+            Err(e) => {
+                self.status = e.to_string();
+                self.actions.edit_error = Some(e.to_string());
+            }
         }
     }
 
@@ -1524,6 +1531,7 @@ impl App {
             self.side_panel(ctx);
             self.canvas(ctx);
             self.floating_panels(ctx);
+            self.actions_panel_ui(ctx);
         }
         self.dialogs(ctx);
         self.palette_ui(ctx);
