@@ -1,4 +1,3 @@
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use lumenply_doc::{Mask, Selection};
@@ -255,7 +254,7 @@ fn editing_stroke_150_of_200_rerenders_only_what_it_overlaps() {
     let first = r.render_canvas(&g, &blobs);
     let cold = r.cache.stats().misses;
     assert_eq!(cold, 201 + 16 + 16 + 16);
-    assert_eq!(r.paint.regions_painted.load(Ordering::Relaxed), 0);
+    assert_eq!(r.wholes.stats().2, 0);
 
     // Recolour stroke 150.
     let n150 = ids[149];
@@ -352,7 +351,7 @@ fn smudge_and_blur_paint_their_region_once_and_only_when_what_they_read_changes(
     let out = r.render_canvas(&g, &blobs);
     // Each region stroke is painted once although the smudge spans two
     // tiles that are rendered in parallel.
-    assert_eq!(r.paint.regions_painted.load(Ordering::Relaxed), 3);
+    assert_eq!(r.wholes.stats().2, 3);
     assert_bits(&out, &painted(canvas, &image, &strokes), canvas, &image);
 
     // Recolour the far paint stroke: the blur over it reads what changed
@@ -366,12 +365,19 @@ fn smudge_and_blur_paint_their_region_once_and_only_when_what_they_read_changes(
     .unwrap();
     let m0 = r.cache.stats().misses;
     let edited = r.render_canvas(&g, &blobs);
-    assert_eq!(r.paint.regions_painted.load(Ordering::Relaxed), 4);
+    assert_eq!(r.wholes.stats().2, 4);
     // The paint stroke's tile and the blur's tile.
     assert_eq!(r.cache.stats().misses - m0, 2);
     let mut want = strokes.clone();
     want[2].0.color = [0.9, 0.1, 0.1, 1.0];
-    assert_bits(&edited, &painted(canvas, &image, &want), canvas, &image);
+    let want = painted(canvas, &image, &want);
+    assert_bits(&edited, &want, canvas, &image);
+
+    // A planned render (node by node) paints the same.
+    let mut planned = Renderer::new();
+    planned.plan = true;
+    assert_bits(&planned.render_canvas(&g, &blobs), &want, canvas, &image);
+    assert_eq!(planned.wholes.stats().2, 3);
 }
 
 #[test]

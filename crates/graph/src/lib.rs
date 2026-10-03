@@ -17,7 +17,9 @@ pub mod key;
 pub mod lower;
 pub mod model;
 pub mod ops;
+pub mod ops_content;
 mod ops_paint;
+pub mod whole;
 
 pub use blob::{BlobId, BlobStore, Hash, TileHasher};
 pub use cache::{CacheStats, TileCache};
@@ -27,7 +29,11 @@ pub use key::{Key, KeyMemo};
 pub use lower::{lower, Lowered};
 pub use model::{Graph, GraphError, Node, NodeId, FORMAT};
 pub use ops::{ClipMember, LayerProps, Op};
+pub use ops_content::PatternPixels;
 pub use ops_paint::StrokeBrush;
+pub use whole::WholeCache;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_content;

@@ -285,9 +285,10 @@ fn graph_cmd(path: &PathBuf, out: Option<&PathBuf>, check: bool) -> Result<()> {
         let stats = renderer.cache.stats();
         println!(
             "layer tree {tree_ms:.1} ms; graph cold {cold_ms:.1} ms, warm {warm_ms:.2} ms; max difference {worst:.2e}; \
-             cache {} tiles, {:.1} MB",
+             cache {} tiles, {:.1} MB, {} computed twice",
             stats.tiles,
-            stats.bytes as f64 / 1048576.0
+            stats.bytes as f64 / 1048576.0,
+            stats.duplicates
         );
         if worst > 1e-5 || !same_warm {
             anyhow::bail!("the graph renders differently from the layer tree (max difference {worst})");

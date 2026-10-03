@@ -95,9 +95,15 @@ history; wgpu executes the graph on the GPU.
       threads), graph-version history with coalescing, lowering of every
       layer-tree feature; renders all 482 corpus PSDs bit-identically to the
       layer tree (`lumenply graph FILE --check`)
-- [ ] Stage 2, operations instead of pixels: strokes, erasers, fills, filters
-      and adjustments applied to pixels, text/fill/shape/smart content as
-      nodes; dab rasterisation moves to `render`
+- [x] Stage 2b: text, fill, shape, smart-object transform and smart-filter
+      layers lower to ops, bit-identical to the layer tree (corpus 482/482,
+      max difference 0); whole-image ops computed once per content key
+      before any tile is pulled; content keys include the canvas size
+- [ ] Stage 2a: brush strokes, erasers and retouch strokes as `stroke` nodes;
+      dab rasterisation moves to `render`
+- [ ] Pattern Overlay effect pixels as blobs in the graph (today only in
+      memory); disabled smart filters and the stack's master switch in the
+      graph
 - [ ] Stage 3, graph-backed editor: graph versions as the undo history,
       the app renders through the graph cache (replacing `BelowCache`),
       `.lumen` v3 (graph.json + blobs + optional render hints)

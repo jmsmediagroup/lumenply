@@ -42,8 +42,9 @@ so the JSON stays small and identical data is stored once.
 
 ### Content keys: invalidation without bookkeeping
 
-Every node has a **content key**: a BLAKE3 hash of its op's canonical JSON
-and the content keys of its inputs, computed bottom-up. Changing a
+Every node has a **content key**: a BLAKE3 hash of its op's canonical JSON,
+the canvas size (a fill covers the canvas, filters treat its edge
+specially) and the content keys of its inputs, computed bottom-up. Changing a
 parameter changes that node's key and therefore the key of everything
 downstream, and of nothing else. The render cache is keyed by
 `(content key, tile)`, so:
@@ -54,13 +55,30 @@ downstream, and of nothing else. The render cache is keyed by
   cache until memory pressure evicts them;
 - two nodes that compute the same thing share one cache entry.
 
+Brush strokes refine this to **tile keys**, because a long chain of strokes
+is mostly strokes that miss any given tile. A stroke's tiles are cached
+under a hash of its op and the keys of the input tiles it reads (the tile
+under it for paint, erase, dodge, burn and the sponge; every tile of its
+read area for smudge, blur and sharpen), and a tile a stroke doesn't reach
+has its input's key. Editing stroke 150 of 200 then repaints only tiles
+under later strokes that overlap what it changed; strokes elsewhere keep
+hitting the cache although their content keys changed. Content keys still
+name every node; the cache may hold a stroke's tiles under tile keys only.
+
 ### Evaluation
 
 Rendering pulls tiles: the output node is asked for the tiles in view, and
 each op asks its inputs for the tiles it needs (a blur pads by its radius,
 a transform maps the tile back through its inverse, a whole-image op such
-as Equalize asks for everything once). Tiles are evaluated in parallel; a
-tile being computed by one thread is waited for, never computed twice. An
+as Equalize asks for everything once). Tiles are evaluated in parallel,
+and nothing ever waits for another thread's computation: a thread that
+wants a tile someone else is computing computes it too, and the first
+result is kept. Waiting deadlocks under rayon, whose threads run other
+queued jobs while they wait, so a thread can end up waiting for a tile its
+own stack is still computing. The duplicate work this allows is small (up
+to 3% of tiles on the corpus); `Renderer::plan` trades it for a
+node-by-node schedule that never duplicates but renders cold documents
+30–50% slower. An
 op whose effect doesn't reach a tile (a brush stroke elsewhere) returns its
 input tile unchanged, sharing the same `Arc`, so long chains cost neither
 time nor memory outside the area they touch.
@@ -69,6 +87,29 @@ The cache holds tiles under a byte budget with least-recently-used
 eviction. Results can also be persisted in the project file as hints keyed
 by content key, so a document with a long history opens without replaying
 it.
+
+Some ops are whole-image computations: a text layer's glyphs, a fill or
+shape over the canvas, a smart object's transform, a stack of smart
+filters. They call the same `lumenply-render` function the layer tree's
+derived caches come from, so their pixels are bit-identical to it. Each
+makes its whole output once per content key (`Ctx::whole`, kept in a
+separate byte-budgeted cache) and serves tiles from it. A render first
+makes the whole outputs it will read, in dependency order and independent
+ones in parallel, and only then pulls tiles: a thread that blocked waiting
+for another's whole result inside rayon's work stealing could deadlock, so
+nothing ever waits for one. A run of smart filters is one node per filter
+but is evaluated as one fused, chunked pass, exactly as the layer tree does:
+the box blurs' running sums depend on where a pass starts, so filtering node
+by node would differ in the last bits.
+
+A brush stroke replays `lumenply_render::paint`, the code `PaintStroke`
+runs. In the modes where a pixel's result depends only on that pixel and
+the dabs over it (paint, erase, dodge, burn, the sponge) it is painted tile
+by tile from the dabs reaching each tile, which is bit-identical to painting
+it whole. Smudge, blur and sharpen read around each dab, so their dabs
+interact across tiles: such a stroke is a whole result over its read area,
+made in the same pass before tiles are pulled. A sampled tip is a blob of
+its own kind, kept as exact f32 coverage.
 
 ### History
 

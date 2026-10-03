@@ -20,8 +20,10 @@
 //!   it can change.
 //! - **Smudge, blur, sharpen** read around each dab, so a dab sees earlier
 //!   dabs' writes across tile borders. The stroke is painted once over
-//!   everything it reads ([`paint::dabs_reach`]); its tiles are served from
-//!   that region, which is cached once per key.
+//!   everything it reads ([`paint::dabs_reach`]) as a whole result
+//!   ([`crate::WholeCache`], under the stroke's region key), and its tiles
+//!   are served from that. [`prepare`] paints these regions before a
+//!   render pulls tiles, lower strokes first, so no tile waits for one.
 //!
 //! # Keys
 //!
@@ -35,9 +37,9 @@
 //! keeps caching under its content key.
 
 use std::collections::{BTreeSet, HashMap};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
-use std::thread::ThreadId;
+use std::sync::{Arc, Mutex};
+
+use rayon::prelude::*;
 
 use lumenply_doc::{Mask, Selection};
 use lumenply_render::paint::{self, Brush, BrushDynamics, BrushMode, Dab, StrokePoint, StrokeReach};
@@ -269,9 +271,6 @@ const DAB_BUDGET: usize = 1 << 20;
 /// Most tile keys remembered before the memo starts over.
 const KEY_MEMO_LIMIT: usize = 1 << 18;
 
-/// Most bytes of painted regions kept.
-const REGION_BUDGET: usize = 256 << 20;
-
 struct StrokeEntry {
     /// Keeps the address meaningful; a node no graph holds any more is
     /// dropped at the next sweep.
@@ -339,121 +338,16 @@ impl Strokes {
     }
 }
 
-/// A painted region of a smudge, blur or sharpen stroke, or the thread
-/// painting it.
-enum Region {
-    Painting(ThreadId),
-    Done {
-        store: Arc<TileStore>,
-        bytes: usize,
-        last_use: u64,
-    },
-}
-
-#[derive(Default)]
-struct RegionsInner {
-    map: HashMap<Key, Region>,
-    bytes: usize,
-    clock: u64,
-}
-
-/// Painted regions by key, under a byte budget (least recently used go
-/// first). A region being painted is waited for by other threads; a
-/// request from the painting thread itself (rayon can run another job
-/// there while it waits) paints its own copy instead of waiting on itself.
-#[derive(Default)]
-struct Regions {
-    inner: Mutex<RegionsInner>,
-    done: Condvar,
-}
-
-impl Regions {
-    fn get_or_paint(&self, key: Key, paint: impl FnOnce() -> Arc<TileStore>) -> Arc<TileStore> {
-        let me = std::thread::current().id();
-        let mut inner = self.inner.lock().unwrap();
-        loop {
-            inner.clock += 1;
-            let now = inner.clock;
-            match inner.map.get_mut(&key) {
-                Some(Region::Done { store, last_use, .. }) => {
-                    *last_use = now;
-                    return store.clone();
-                }
-                Some(Region::Painting(owner)) if *owner != me => {
-                    inner = self.done.wait(inner).unwrap();
-                }
-                Some(Region::Painting(_)) => {
-                    drop(inner);
-                    return paint();
-                }
-                None => break,
-            }
-        }
-        inner.map.insert(key, Region::Painting(me));
-        drop(inner);
-        /// Unblocks the waiters if painting panics.
-        struct Abandon<'a>(&'a Regions, Key);
-        impl Drop for Abandon<'_> {
-            fn drop(&mut self) {
-                if let Ok(mut inner) = self.0.inner.lock() {
-                    inner.map.remove(&self.1);
-                }
-                self.0.done.notify_all();
-            }
-        }
-        let guard = Abandon(self, key);
-        let store = paint();
-        std::mem::forget(guard);
-        let bytes = store.byte_size();
-        let mut inner = self.inner.lock().unwrap();
-        inner.clock += 1;
-        let now = inner.clock;
-        inner.map.insert(
-            key,
-            Region::Done {
-                store: store.clone(),
-                bytes,
-                last_use: now,
-            },
-        );
-        inner.bytes += bytes;
-        if inner.bytes > REGION_BUDGET {
-            let mut order: Vec<(u64, Key)> = inner
-                .map
-                .iter()
-                .filter_map(|(k, r)| match r {
-                    Region::Done { last_use, .. } => Some((*last_use, *k)),
-                    Region::Painting(_) => None,
-                })
-                .collect();
-            order.sort_unstable();
-            for (_, k) in order {
-                if inner.bytes <= REGION_BUDGET / 10 * 9 || k == key {
-                    break;
-                }
-                if let Some(Region::Done { bytes, .. }) = inner.map.remove(&k) {
-                    inner.bytes -= bytes;
-                }
-            }
-        }
-        drop(inner);
-        self.done.notify_all();
-        store
-    }
-}
-
 /// Tile keys by (node content key, tile, canvas size).
 type TileKeys = HashMap<(Key, TileCoord, (u32, u32)), Key>;
 
 /// What a [`crate::Renderer`] remembers about strokes between renders:
-/// their dabs and footprints (by node), tile keys, and painted regions.
+/// their dabs and footprints (by node) and their tile keys. Painted
+/// regions are whole results in the renderer's [`crate::WholeCache`].
 #[derive(Default)]
 pub struct PaintMemo {
     strokes: Mutex<Strokes>,
     keys: Mutex<TileKeys>,
-    regions: Regions,
-    /// Smudge, blur and sharpen regions painted so far.
-    pub(crate) regions_painted: AtomicU64,
 }
 
 impl PaintMemo {
@@ -665,25 +559,85 @@ fn local_tile(ctx: &Ctx, id: NodeId, input: Option<Arc<Tile>>, coord: TileCoord)
 }
 
 /// A smudge, blur or sharpen stroke painted over its whole read area.
-fn paint_region(ctx: &Ctx, id: NodeId) -> Arc<TileStore> {
-    ctx.paint.regions_painted.fetch_add(1, Ordering::Relaxed);
-    let mut store = TileStore::new();
+fn paint_region(ctx: &Ctx, id: NodeId) -> TileStore {
     let (Some(node), Some((s, Some(p)))) = (ctx.graph.node(id), ctx.paint.stroke(ctx, id, true)) else {
-        return Arc::new(store);
+        return TileStore::new();
     };
-    // One tile at a time: a parallel gather lets rayon start other jobs on
-    // this thread, and one of them may want a tile being computed below.
-    for c in s.read.tiles() {
-        if let Some(t) = ctx.tile(node.input(0), c) {
-            store.insert(c, t);
-        }
-    }
+    let mut store = match node.input(0) {
+        Some(input) => ctx.area(input, s.read),
+        None => TileStore::new(),
+    };
     let sel = selection(ctx, node.input(1), &s.write.tiles());
     let _ = paint::paint_dabs(&mut store, &p.brush, &p.dabs, ctx.canvas, sel.as_ref());
-    Arc::new(store)
+    store
 }
 
-/// One tile of stroke `id`'s output: what `Ctx::tile` returns for strokes.
+/// A region stroke's painted region, kept under its region key `key`.
+fn region(ctx: &Ctx, id: NodeId, key: Key) -> Arc<TileStore> {
+    ctx.wholes.get_or_compute(key, || paint_region(ctx, id))
+}
+
+/// Paint the regions of the smudge, blur and sharpen strokes a render of
+/// `root` reads, before it pulls tiles: lower strokes first, independent
+/// ones in parallel, so no tile waits for a region (or paints one twice).
+/// Regions already kept are skipped.
+pub(crate) fn prepare(ctx: &Ctx, root: NodeId) {
+    // Post-order over every node read. A node's level is the most region
+    // strokes on any path below it; a region stroke is painted once every
+    // level below its own is.
+    let mut level: HashMap<NodeId, usize> = HashMap::new();
+    let mut by_level: Vec<Vec<NodeId>> = Vec::new();
+    let mut stack = vec![(root, false)];
+    while let Some((id, ready)) = stack.pop() {
+        if level.contains_key(&id) {
+            continue;
+        }
+        let Some(node) = ctx.graph.node(id) else {
+            level.insert(id, 0);
+            continue;
+        };
+        if !ready {
+            stack.push((id, true));
+            stack.extend(
+                node.inputs
+                    .iter()
+                    .flatten()
+                    .filter(|i| !level.contains_key(i))
+                    .map(|&i| (i, false)),
+            );
+            continue;
+        }
+        let below = node
+            .inputs
+            .iter()
+            .flatten()
+            .filter_map(|i| level.get(i))
+            .copied()
+            .max()
+            .unwrap_or(0);
+        let is_region = matches!(node.op, Op::Stroke { .. })
+            && ctx.paint.summary(ctx, id).is_some_and(|s| s.active && !s.local);
+        if is_region {
+            if by_level.len() <= below {
+                by_level.resize(below + 1, Vec::new());
+            }
+            by_level[below].push(id);
+        }
+        level.insert(id, below + usize::from(is_region));
+    }
+    for ids in by_level {
+        ids.par_iter().for_each(|&id| {
+            let (Some(node), Some(s)) = (ctx.graph.node(id), ctx.paint.summary(ctx, id)) else {
+                return;
+            };
+            let key = region_key(ctx, node, &s, sel_key(ctx, node));
+            region(ctx, id, key);
+        });
+    }
+}
+
+/// One tile of stroke `id`'s output: what `Ctx::tile` (and
+/// [`crate::ops::eval_tile`]) returns for strokes.
 pub(crate) fn tile(ctx: &Ctx, id: NodeId, coord: TileCoord) -> Option<Arc<Tile>> {
     // Local strokes that paint `coord`, top first, down to the first tile
     // that is cached or isn't a local stroke's.
@@ -702,13 +656,9 @@ pub(crate) fn tile(ctx: &Ctx, id: NodeId, coord: TileCoord) -> Option<Arc<Tile>>
         }
         let key = resolved_key(ctx, Some(c), coord);
         if !s.local {
-            break ctx.cache.get_or_compute(key, coord, || {
-                ctx.paint
-                    .regions
-                    .get_or_paint(key, || paint_region(ctx, c))
-                    .tile_arc(coord)
-                    .cloned()
-            });
+            break ctx
+                .cache
+                .get_or_compute(key, coord, || region(ctx, c, key).tile_arc(coord).cloned());
         }
         if ctx.cache.contains(key, coord) {
             break ctx.cache.get_or_compute(key, coord, || {
@@ -725,17 +675,6 @@ pub(crate) fn tile(ctx: &Ctx, id: NodeId, coord: TileCoord) -> Option<Arc<Tile>>
             .get_or_compute(key, coord, || local_tile(ctx, c, below, coord));
     }
     tile
-}
-
-/// [`crate::ops::eval_tile`] for a stroke. `Ctx::tile` sends strokes to
-/// [`tile`] directly; this serves a caller evaluating the node by itself.
-pub(crate) fn eval_tile(ctx: &Ctx, node: &Node, coord: TileCoord) -> Option<Arc<Tile>> {
-    let id = ctx
-        .graph
-        .nodes()
-        .find(|(_, n)| std::ptr::eq(*n, node))
-        .map(|(id, _)| id)?;
-    tile(ctx, id, coord)
 }
 
 /// Where stroke `id`'s output can be non-transparent: its input's extent

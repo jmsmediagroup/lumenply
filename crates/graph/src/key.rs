@@ -1,7 +1,7 @@
-//! Content keys: a hash of a node's operation, parameters and the content
-//! keys of its inputs. Equal keys mean equal output, so the render cache
-//! keyed by them never needs explicit invalidation: editing a node changes
-//! its key and every key downstream of it, and nothing else.
+//! Content keys: a hash of a node's operation, parameters, the canvas size
+//! and the content keys of its inputs. Equal keys mean equal output, so the
+//! render cache keyed by them never needs explicit invalidation: editing a
+//! node changes its key and every key downstream of it, and nothing else.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -60,6 +60,10 @@ impl KeyMemo {
             }
             let mut h = blake3::Hasher::new();
             h.update(b"node");
+            // Ops read the canvas (a fill covers it, filters treat its edge
+            // specially), so the same op on another canvas is other pixels.
+            h.update(&graph.width.to_le_bytes());
+            h.update(&graph.height.to_le_bytes());
             h.update(&self.op_hash(node).0);
             for i in &node.inputs {
                 match i.and_then(|i| keys.get(&i)) {
