@@ -313,9 +313,19 @@ None of these could be tested in the container.
       licence) and progress/cancel, Preferences ▸ AI models, jobs off the UI
       thread with results applied to the document they were asked for;
       tested against a fake engine
-- [ ] Engine (`lumenply-ai`, ONNX Runtime with CoreML/DirectML/CUDA):
-      MobileSAM, BiRefNet lite, guided-filter refinement, model store with
-      pinned SHA-256; then the adapter into the app's `AiService`
+- [x] Engine (`lumenply-ai`, ADR 0028): ONNX Runtime through `ort` with
+      CoreML / DirectML / CUDA tried in platform order and CPU fallback;
+      MobileSAM (encoder on CoreML, decoder on CPU: ~12 ms per click,
+      embeddings cached by content), BiRefNet lite (CPU: CoreML can't
+      compile it), refinement with Select and Mask's matting; pinned,
+      SHA-256-checked downloads; `lumenply ai models|download|remove-bg|
+      select`; wired into the app (models in the data folder, BiRefNet
+      unloaded after each run)
+- [ ] BiRefNet at 1024 peaks near 10 GB: evaluate the 512 model, keep 1024
+      as an optional "high detail" model, refuse runs that won't fit in
+      memory
+- [ ] AI on Intel Macs (no prebuilt ONNX Runtime) and on Windows/Linux
+      (DirectML and CUDA untested)
 - [ ] Object Selection refinements: negative-point prompts, Photoshop's
       object-finder hover, caching the composite between clicks
 
