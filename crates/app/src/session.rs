@@ -121,6 +121,8 @@ pub(crate) struct Prefs {
     pub show_grid: bool,
     /// View ▸ Snap: drags snap to guides, grid, canvas and layer edges.
     pub snap: bool,
+    /// View ▸ Show smart guides: Move drags show and snap to alignments.
+    pub smart_guides: bool,
     /// Grid line every this many document pixels...
     pub grid_spacing: f32,
     /// ...with this many subdivisions per cell.
@@ -190,6 +192,7 @@ impl Default for Prefs {
             lock_guides: false,
             show_grid: false,
             snap: true,
+            smart_guides: true,
             grid_spacing: 100.0,
             grid_subdivisions: 4,
             gradient_presets: Vec::new(),

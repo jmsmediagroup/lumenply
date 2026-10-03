@@ -71,6 +71,7 @@ mod session;
 mod shape_tool;
 mod smart_contents;
 mod smart_filters_ui;
+mod smart_guides;
 mod soft_proof;
 mod start;
 mod status;
