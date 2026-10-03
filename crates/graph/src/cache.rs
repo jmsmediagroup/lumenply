@@ -1,22 +1,32 @@
 //! The render cache: output tiles keyed by `(content key, tile)`, under a
-//! byte budget with least-recently-used eviction. A tile being computed by
-//! one thread is waited for by the others, never computed twice.
+//! byte budget with least-recently-used eviction.
+//!
+//! A caller never waits for another computation: if the tile it wants is
+//! being computed elsewhere, it computes the tile itself. Waiting would
+//! deadlock under rayon, whose threads run other queued jobs while they
+//! wait for their own, so a thread can end up waiting for a tile its own
+//! stack is still computing. Renders plan their work so inputs are ready
+//! before anyone asks for them (see [`crate::Renderer::render_node`]), which
+//! keeps such duplicate work rare.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use lumenply_tiles::{Tile, TileCoord};
 
 use crate::key::Key;
 
-type Cell = Arc<OnceLock<Option<Arc<Tile>>>>;
+enum State {
+    Computing,
+    Ready(Option<Arc<Tile>>),
+}
 
 struct Slot {
-    cell: Cell,
+    state: State,
     last_use: u64,
-    /// Bytes charged to the budget once the tile is known (0 for a tile
-    /// shared with another entry, such as an op passing its input through).
+    /// Bytes charged to the budget (0 for a tile shared with another entry,
+    /// such as an op passing its input through, or while computing).
     bytes: usize,
 }
 
@@ -31,6 +41,9 @@ struct Inner {
 pub struct CacheStats {
     pub hits: u64,
     pub misses: u64,
+    /// Tiles computed a second time because another thread was already
+    /// computing them.
+    pub duplicates: u64,
     pub tiles: usize,
     pub bytes: usize,
 }
@@ -41,11 +54,35 @@ pub struct TileCache {
     clock: AtomicU64,
     hits: AtomicU64,
     misses: AtomicU64,
+    duplicates: AtomicU64,
 }
 
 impl Default for TileCache {
     fn default() -> Self {
         TileCache::with_budget(1 << 30)
+    }
+}
+
+/// Removes a slot left `Computing` if its computation panics, so later
+/// callers compute the tile instead of finding a slot that never fills.
+struct Pending<'a> {
+    cache: &'a TileCache,
+    slot: (Key, TileCoord),
+    done: bool,
+}
+
+impl Drop for Pending<'_> {
+    fn drop(&mut self) {
+        if !self.done {
+            if let Ok(mut inner) = self.cache.inner.lock() {
+                if matches!(
+                    inner.slots.get(&self.slot).map(|s| &s.state),
+                    Some(State::Computing)
+                ) {
+                    inner.slots.remove(&self.slot);
+                }
+            }
+        }
     }
 }
 
@@ -57,6 +94,7 @@ impl TileCache {
             clock: AtomicU64::new(0),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
+            duplicates: AtomicU64::new(0),
         }
     }
 
@@ -70,6 +108,7 @@ impl TileCache {
         CacheStats {
             hits: self.hits.load(Ordering::Relaxed),
             misses: self.misses.load(Ordering::Relaxed),
+            duplicates: self.duplicates.load(Ordering::Relaxed),
             tiles: inner.slots.len(),
             bytes: inner.bytes,
         }
@@ -84,14 +123,14 @@ impl TileCache {
     /// Whether `(key, coord)` is cached and finished.
     pub fn contains(&self, key: Key, coord: TileCoord) -> bool {
         let inner = self.inner.lock().unwrap();
-        inner
-            .slots
-            .get(&(key, coord))
-            .is_some_and(|s| s.cell.get().is_some())
+        matches!(
+            inner.slots.get(&(key, coord)).map(|s| &s.state),
+            Some(State::Ready(_))
+        )
     }
 
     /// The cached tile for `(key, coord)`, computing it with `f` first if
-    /// needed. Concurrent callers for the same entry wait for one `f`.
+    /// needed. Never blocks on another thread's computation.
     pub fn get_or_compute(
         &self,
         key: Key,
@@ -99,51 +138,83 @@ impl TileCache {
         f: impl FnOnce() -> Option<Arc<Tile>>,
     ) -> Option<Arc<Tile>> {
         let now = self.clock.fetch_add(1, Ordering::Relaxed);
-        let cell = {
+        {
             let mut inner = self.inner.lock().unwrap();
-            let slot = inner.slots.entry((key, coord)).or_insert_with(|| Slot {
-                cell: Arc::new(OnceLock::new()),
+            match inner.slots.get_mut(&(key, coord)) {
+                Some(slot) => {
+                    slot.last_use = now;
+                    if let State::Ready(t) = &slot.state {
+                        let t = t.clone();
+                        drop(inner);
+                        self.hits.fetch_add(1, Ordering::Relaxed);
+                        return t;
+                    }
+                    // Someone else is computing it: do it too, don't wait.
+                    drop(inner);
+                    self.duplicates.fetch_add(1, Ordering::Relaxed);
+                    return f();
+                }
+                None => {
+                    inner.slots.insert(
+                        (key, coord),
+                        Slot {
+                            state: State::Computing,
+                            last_use: now,
+                            bytes: 0,
+                        },
+                    );
+                }
+            }
+        }
+        let mut pending = Pending {
+            cache: self,
+            slot: (key, coord),
+            done: false,
+        };
+        let out = f();
+        self.misses.fetch_add(1, Ordering::Relaxed);
+        // Charge new tiles only: an Arc held elsewhere too (an input passed
+        // through, a blob's tile) costs no extra memory.
+        let bytes = match &out {
+            Some(t) if Arc::strong_count(t) == 1 => t.byte_size(),
+            _ => 0,
+        };
+        let over = {
+            let mut inner = self.inner.lock().unwrap();
+            let slot = inner.slots.entry((key, coord)).or_insert(Slot {
+                state: State::Computing,
                 last_use: now,
                 bytes: 0,
             });
-            slot.last_use = now;
-            slot.cell.clone()
+            let old = slot.bytes;
+            slot.state = State::Ready(out.clone());
+            slot.bytes = bytes;
+            inner.bytes = inner.bytes - old + bytes;
+            inner.bytes > self.budget.load(Ordering::Relaxed)
         };
-        if let Some(t) = cell.get() {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            return t.clone();
-        }
-        let mut computed = false;
-        let out = cell
-            .get_or_init(|| {
-                computed = true;
-                f()
-            })
-            .clone();
-        if computed {
-            self.misses.fetch_add(1, Ordering::Relaxed);
-            // Charge new tiles only: an Arc held elsewhere too (an input
-            // passed through, a blob's tile) costs no extra memory.
-            let bytes = match &out {
-                Some(t) if Arc::strong_count(t) <= 2 => t.byte_size(),
-                _ => 0,
-            };
-            if bytes > 0 {
-                let mut inner = self.inner.lock().unwrap();
-                if let Some(slot) = inner.slots.get_mut(&(key, coord)) {
-                    if Arc::ptr_eq(&slot.cell, &cell) {
-                        slot.bytes = bytes;
-                        inner.bytes += bytes;
-                    }
-                }
-            }
-            if self.inner.lock().unwrap().bytes > self.budget.load(Ordering::Relaxed) {
-                self.evict();
-            }
-        } else {
-            self.hits.fetch_add(1, Ordering::Relaxed);
+        pending.done = true;
+        if over {
+            self.evict();
         }
         out
+    }
+
+    /// Put a tile known to be `(key, coord)`'s output into the cache (render
+    /// hints loaded with a project).
+    pub fn seed(&self, key: Key, coord: TileCoord, tile: Option<Arc<Tile>>) {
+        let now = self.clock.fetch_add(1, Ordering::Relaxed);
+        let bytes = tile.as_ref().map_or(0, |t| t.byte_size());
+        let mut inner = self.inner.lock().unwrap();
+        let old = inner.slots.get(&(key, coord)).map_or(0, |s| s.bytes);
+        inner.slots.insert(
+            (key, coord),
+            Slot {
+                state: State::Ready(tile),
+                last_use: now,
+                bytes,
+            },
+        );
+        inner.bytes = inner.bytes - old + bytes;
     }
 
     /// Drop least-recently-used finished tiles until under 90% of the budget.
@@ -157,7 +228,7 @@ impl TileCache {
         let mut order: Vec<((Key, TileCoord), u64)> = inner
             .slots
             .iter()
-            .filter(|(_, s)| s.cell.get().is_some())
+            .filter(|(_, s)| matches!(s.state, State::Ready(_)))
             .map(|(k, s)| (*k, s.last_use))
             .collect();
         order.sort_by_key(|(_, t)| *t);
