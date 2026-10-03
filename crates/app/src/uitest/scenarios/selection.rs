@@ -18,9 +18,8 @@ fn select_and_mask(s: &mut Session) -> UiResult {
     s.describe("Pick the Rectangular Marquee from the toolbar");
     s.click("Rectangular Marquee")?;
 
-    // Feather lives in the options bar; Select ▸ Feather applies it.
-    s.describe("Type a feather radius of 24 px in the options bar");
-    s.set_field("Feather", "24")?;
+    // The options bar's Feather (0 px) softens new selections; Select ▸
+    // Modify ▸ Feather softens the current one.
     s.describe("Drag a rectangle over the mountain");
     s.canvas_drag((400.0, 300.0), (1400.0, 900.0), 16, "")?;
     s.wait_idle()?;
@@ -34,8 +33,10 @@ fn select_and_mask(s: &mut Session) -> UiResult {
     s.check_eq("its edge is hard until feathered", edge, (0.0, 1.0))?;
     s.expect_text("Selection")?;
 
-    s.describe("Feather it with Select ▸ Feather 24 px");
-    s.menu("Select > Feather 24 px")?;
+    s.describe("Feather it by 24 px with Select ▸ Modify ▸ Feather…");
+    s.menu("Select > Modify > Feather...")?;
+    s.set_field("Feather radius", "24")?;
+    s.click("OK")?;
     s.wait_idle()?;
     let soft = (
         s.selection_at(380, 600)?,
