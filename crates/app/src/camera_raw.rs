@@ -146,7 +146,7 @@ impl App {
         let mut ed = Editor::new(Document::new(w, h));
         let _ = ed.execute(&AddPixelLayer::from_raster("Background", developed, 0, 0));
         self.open_in_new_tab(Editor::new(ed.doc().clone()), None);
-        self.untitled = file_name(&st.path);
+        self.mark_imported(&st.path);
         self.recent = session::push_recent(&st.path);
         self.status = format!("Opened {} ({w}×{h})", st.path);
     }

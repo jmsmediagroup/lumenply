@@ -292,7 +292,7 @@ impl App {
                     self.open_in_new_tab(Editor::new(rep.value), None);
                     // Imports keep their file name on the tab until saved
                     // as a project.
-                    self.untitled = file_name(path);
+                    self.mark_imported(path);
                     self.recent = session::push_recent(path);
                     self.status = if n == 0 {
                         format!("Imported {path}")
@@ -309,7 +309,7 @@ impl App {
                 Ok(rep) => {
                     let n = rep.warnings.len();
                     self.open_in_new_tab(Editor::new(rep.value), None);
-                    self.untitled = file_name(path);
+                    self.mark_imported(path);
                     self.recent = session::push_recent(path);
                     self.status = if n == 0 {
                         format!("Imported {path}")
@@ -370,7 +370,7 @@ impl App {
                 // A fresh editor: the opened image is the starting point,
                 // not an undoable "Add layer" step.
                 self.open_in_new_tab(Editor::new(ed.doc().clone()), None);
-                self.untitled = file_name(path);
+                self.mark_imported(path);
                 self.recent = session::push_recent(path);
                 self.status = format!("Opened {path} ({w}×{h})");
             }
@@ -407,7 +407,7 @@ impl App {
         match crate::project_io::ProjectSnapshot::of(&self.editor).save(std::path::Path::new(path)) {
             Ok(_) => {
                 self.path = Some(PathBuf::from(path));
-                self.saved_rev = self.editor.revision();
+                self.saved_rev = Some(self.editor.revision());
                 self.recent = session::push_recent(path);
                 if self.any_unsaved() {
                     // Other documents still need their backups: rewrite
@@ -426,6 +426,41 @@ impl App {
             }
             Err(e) => self.status = format!("Could not save: {e}"),
         }
+    }
+
+    /// The live document was imported from `path`: its tab shows the
+    /// file's name until it is saved as a project, and opening the file
+    /// again comes back to it.
+    pub(crate) fn mark_imported(&mut self, path: &str) {
+        self.untitled = file_name(path);
+        self.imported.insert(self.doc_key, PathBuf::from(path));
+    }
+
+    /// The live document's tab title.
+    pub(crate) fn live_title(&self) -> String {
+        self.path
+            .as_ref()
+            .map(|p| file_name(&p.to_string_lossy()))
+            .unwrap_or_else(|| self.untitled.clone())
+    }
+
+    /// The window was asked to close with unsaved work: bring the first
+    /// unsaved document forward and ask about it (`Dialog::ConfirmClose`).
+    pub(crate) fn ask_before_quitting(&mut self) {
+        if !self.live_unsaved() {
+            if let Some(i) = self.tab_infos().iter().position(|t| t.1) {
+                self.switch_tab(i);
+            }
+        }
+        self.dialog = Some(Dialog::ConfirmClose);
+    }
+
+    /// While quitting: the live document is dealt with (saved, or its
+    /// changes discarded), so close it and go on quitting: the next
+    /// unsaved document is asked about in turn, or the window closes.
+    fn quit_past_live(&mut self, ctx: &egui::Context) {
+        self.force_close_tab(self.cur_tab);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     pub(crate) fn export_png(&mut self, path: &str) {
@@ -507,7 +542,7 @@ impl App {
             Dialog::New(..) => "New document",
             Dialog::ConfirmClose => "Unsaved changes",
             Dialog::ConfirmCloseTab(_) => "Close document",
-            Dialog::Recover => "Recover autosaved document",
+            Dialog::Recover => "Recover autosaved work",
             Dialog::Preferences(..) => "Preferences",
             Dialog::ColorRange(..) => "Colour range",
             Dialog::NewGuide(..) => "New guide",
@@ -557,7 +592,7 @@ impl App {
             &d,
             Dialog::Filter(_) | Dialog::ColorRange(..) | Dialog::SelectEdge(..)
         );
-        modal_backdrop(ctx, !previews);
+        let backdrop = draw_backdrop(ctx, !previews);
 
         let mut keep = true;
         let mut confirmed = false;
@@ -741,7 +776,6 @@ impl App {
                                         }
                                     });
                                 a11y_name(&r.response, "Saved selection");
-                                popup_above_dialog(ui.ctx(), &r.response);
                                 if ui
                                     .add(egui::Button::new(RichText::new("Delete").small().color(MUTED)).frame(false))
                                     .on_hover_text("Forget this saved selection")
@@ -993,7 +1027,8 @@ impl App {
                             a11y_scroll(ui.ctx(), &scroll_out, "Shortcuts");
                         }
                         Dialog::Recover => {
-                            let n = session::autosave_backups().len();
+                            let backups = session::autosave_backups();
+                            let n = backups.len();
                             let text = if n > 1 {
                                 format!(
                                     "The previous session left autosaved backups of {n} documents, probably after a crash."
@@ -1002,14 +1037,23 @@ impl App {
                                 "The previous session left an autosaved backup, probably after a crash.".to_string()
                             };
                             note(ui, &text);
+                            // Which documents, by the file each came from.
+                            let names: Vec<String> = backups
+                                .iter()
+                                .map(|(_, src)| {
+                                    src.as_ref()
+                                        .map_or("Untitled".to_string(), |p| file_name(&p.to_string_lossy()))
+                                })
+                                .collect();
+                            note(ui, &names.join(", "));
                             footer(ui, |ui| {
                                 if ui.add(primary_button("Recover")).clicked() || enter {
                                     self.recover_autosave();
                                     keep = false;
                                 }
                                 if ui
-                                    .add(footer_button("Discard backup"))
-                                    .on_hover_text("Delete the backup and start fresh")
+                                    .add(footer_button(if n > 1 { "Discard backups" } else { "Discard backup" }))
+                                    .on_hover_text("Delete the autosaved work and start fresh")
                                     .clicked()
                                 {
                                     session::remove_autosave();
@@ -1018,13 +1062,24 @@ impl App {
                             });
                         }
                         Dialog::ConfirmClose => {
-                            note(ui, "The document has unsaved changes.");
+                            // Quitting asks about each unsaved document in
+                            // turn, as Photoshop does; this one is live.
+                            let others = self.tab_infos().iter().filter(|t| t.1).count().saturating_sub(1);
+                            note(ui, &format!("Save changes to “{}” before quitting?", self.live_title()));
+                            if others > 0 {
+                                let (n, verb) = match others {
+                                    1 => ("1 other document".to_string(), "has"),
+                                    n => (format!("{n} other documents"), "have"),
+                                };
+                                note(ui, &format!("{n} also {verb} unsaved changes."));
+                            }
                             footer(ui, |ui| {
-                                if ui.add(primary_button("Save and quit")).clicked() || enter {
+                                if ui.add(primary_button("Save")).clicked() || enter {
+                                    // An untitled document asks where; a
+                                    // cancelled panel stops the quit.
                                     self.save_live();
-                                    if self.editor.revision() == self.saved_rev {
-                                        self.allow_close = true;
-                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    if !self.live_unsaved() {
+                                        self.quit_past_live(ctx);
                                     }
                                     keep = false;
                                 }
@@ -1033,23 +1088,22 @@ impl App {
                                 }
                                 ui.add_space(16.0);
                                 if ui
-                                    .add(footer_button("Quit without saving"))
-                                    .on_hover_text("Discard the changes and quit")
+                                    .add(footer_button("Don't save"))
+                                    .on_hover_text("Discard the changes to this document")
                                     .clicked()
                                 {
-                                    self.allow_close = true;
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    self.quit_past_live(ctx);
                                     keep = false;
                                 }
                             });
                         }
                         Dialog::ConfirmCloseTab(i) => {
                             let i = *i;
-                            note(ui, "This document has unsaved changes.");
+                            note(ui, &format!("Save changes to “{}” before closing?", self.live_title()));
                             footer(ui, |ui| {
                                 if ui.add(primary_button("Save and close")).clicked() || enter {
                                     self.save_live();
-                                    if self.editor.revision() == self.saved_rev {
+                                    if !self.live_unsaved() {
                                         self.force_close_tab(i);
                                     }
                                     keep = false;
@@ -1200,12 +1254,7 @@ impl App {
             });
         // The dialog above the backdrop, which is above everything else.
         if let Some(shown) = shown {
-            ctx.move_to_top(shown.response.layer_id);
-            // Always just above its backdrop: a dialog reopened after
-            // another one keeps its old place in the layer order, below
-            // the backdrop (which moves to the top every frame), where the
-            // mouse could not reach it.
-            ctx.set_sublayer(backdrop_layer(), shown.response.layer_id);
+            raise_modal(ctx, backdrop, shown.response.layer_id);
             ctx.accesskit_node_builder(shown.response.id, |b| {
                 b.set_role(egui::accesskit::Role::Dialog);
                 b.set_name(title);
@@ -1298,9 +1347,10 @@ impl App {
                     self.status = "Preferences saved".into();
                 }
                 Dialog::ExportJpeg(p, q) => self.export_jpeg(p, *q),
-                Dialog::New(w, h, ppi) => {
-                    self.open_in_new_tab(crate::image_size_ui::blank_at(*w, *h, *ppi), None)
-                }
+                Dialog::New(w, h, ppi) => self.open_in_new_tab(
+                    crate::image_size_ui::new_document_from_dialog(ctx, *w, *h, *ppi),
+                    None,
+                ),
                 Dialog::Filter(f) => {
                     if let Some(layer) = self.active {
                         self.apply_filter_dialog(ctx, layer, f.clone());
@@ -1375,33 +1425,27 @@ impl App {
     }
 }
 
-/// A full-window layer under a dialog that swallows clicks, so nothing
-/// behind it can be edited while the dialog is open; optionally dimmed.
-/// It sits in the foreground order on top of the canvas's floating bars
-/// (zoom, selection actions); the dialog is then raised above it.
-/// Keep a combo box's list above the dialog it opens from: a popup that
-/// stays where egui first put it sinks below the dialog (and its backdrop),
-/// which move to the top every frame.
-pub(crate) fn popup_above_dialog(ctx: &egui::Context, combo: &egui::Response) {
-    // egui keys a combo's list by its button's id with "popup".
-    if egui::ComboBox::is_open(ctx, combo.id) {
-        ctx.move_to_top(egui::LayerId::new(
-            egui::Order::Foreground,
-            combo.id.with("popup"),
-        ));
-    }
-}
-
 /// The layer of [`modal_backdrop`].
 pub(crate) fn backdrop_layer() -> egui::LayerId {
     egui::LayerId::new(egui::Order::Foreground, egui::Id::new("modal-backdrop"))
 }
 
+/// A full-window layer under a dialog that swallows clicks, so nothing
+/// behind it can be edited while the dialog is open; optionally dimmed.
+/// It sits in the foreground order on top of the canvas's floating bars
+/// (zoom, selection actions); the dialog is then raised above it.
 pub(crate) fn modal_backdrop(ctx: &egui::Context, dim: bool) {
-    let id = egui::Id::new("modal-backdrop");
+    let layer = draw_backdrop(ctx, dim);
+    ctx.move_to_top(layer);
+}
+
+/// [`modal_backdrop`] without raising it: the caller raises it with its
+/// dialog once that has been shown ([`raise_modal`]).
+fn draw_backdrop(ctx: &egui::Context, dim: bool) -> egui::LayerId {
+    let layer = backdrop_layer();
     let screen = ctx.screen_rect();
-    egui::Area::new(id)
-        .order(egui::Order::Foreground)
+    egui::Area::new(layer.id)
+        .order(layer.order)
         .sense(BACKDROP_SENSE)
         .fixed_pos(screen.min)
         .show(ctx, |ui| {
@@ -1414,7 +1458,25 @@ pub(crate) fn modal_backdrop(ctx: &egui::Context, dim: bool) {
                 ui.painter().rect_filled(r, 0.0, Color32::from_black_alpha(110));
             }
         });
-    ctx.move_to_top(egui::LayerId::new(egui::Order::Foreground, id));
+    layer
+}
+
+/// Keep a dialog directly above its backdrop, and raise the two to the top
+/// after the dialog was shown, unless one of its popups is open.
+///
+/// egui raises layers by flagging them and keeping their old relative
+/// order, so raising the backdrop and then the dialog put a dialog shown
+/// before the last one (Canvas size, then Trim, then Canvas size again)
+/// under the backdrop, where it could be seen but not clicked; as the
+/// backdrop's sublayer it always sits right above it. A combo box list
+/// opened from the dialog is a foreground layer too and must stay above
+/// both; raising earlier in the frame, before the list opens, would put
+/// the backdrop over a list opened before, which keeps its old place.
+pub(crate) fn raise_modal(ctx: &egui::Context, backdrop: egui::LayerId, dialog: egui::LayerId) {
+    ctx.set_sublayer(backdrop, dialog);
+    if !ctx.memory(|m| m.any_popup_open()) {
+        ctx.move_to_top(backdrop);
+    }
 }
 
 const DIALOG_MARGIN: f32 = 16.0;
@@ -1526,6 +1588,37 @@ fn anchor_grid(ui: &mut egui::Ui, anchor: &mut (f32, f32)) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn a_dialog_shown_again_after_another_is_on_top_of_its_backdrop() {
+        let mut app = crate::a11y_tests::launch(&[]);
+        app.open_in_new_tab(crate::blank(64, 48), None);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(900.0, 600.0));
+        let frames = |app: &mut App, n: usize| {
+            for _ in 0..n {
+                let raw = egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..Default::default()
+                };
+                let _ = ctx.run(raw, |ctx| app.frame(ctx));
+            }
+        };
+        let canvas_size = || Dialog::CanvasSize(64, 48, (0.5, 0.5));
+        for d in [canvas_size(), Dialog::Trim(true), canvas_size()] {
+            app.dialog = Some(d);
+            frames(&mut app, 3);
+            let top = ctx.layer_id_at(screen.center()).map(|l| l.id);
+            let want = egui::Id::new(match app.dialog {
+                Some(Dialog::Trim(_)) => "Trim",
+                _ => "Canvas size",
+            });
+            assert_eq!(top, Some(want), "the dialog takes the clicks, not its backdrop");
+            app.dialog = None;
+            frames(&mut app, 2);
+        }
+    }
 
     #[test]
     fn save_paths_get_the_right_extension() {

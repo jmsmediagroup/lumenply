@@ -822,6 +822,59 @@ mod tests {
     }
 
     #[test]
+    fn a_revision_tells_whether_the_document_is_the_one_saved() {
+        let mut ed = Editor::new(Document::new(16, 16));
+        ed.execute(&AddPixelLayer::new("L")).unwrap();
+        let id = ed.doc().layers()[0].id;
+        let opacity = |o: f32| SetOpacity {
+            layer: id,
+            opacity: o,
+        };
+        let saved = ed.revision();
+        // A failed edit changes nothing.
+        assert!(ed
+            .execute(&SetOpacity {
+                layer: 99,
+                opacity: 0.5
+            })
+            .is_err());
+        assert_eq!(ed.revision(), saved);
+        ed.execute(&opacity(0.5)).unwrap();
+        let half = ed.revision();
+        assert_ne!(half, saved);
+        // Undo returns to the saved version's own number, redo to the edit's.
+        ed.undo();
+        assert_eq!(ed.revision(), saved);
+        ed.redo();
+        assert_eq!(ed.revision(), half);
+        // Undo, then a different edit: the history is as long as when
+        // saved, but this is a version never saved.
+        ed.undo();
+        ed.execute(&opacity(0.25)).unwrap();
+        assert_eq!(ed.history().len(), 2);
+        assert_ne!(ed.revision(), saved);
+        assert_ne!(ed.revision(), half);
+        // Every tick of a coalesced drag is a new version.
+        let before = ed.revision();
+        ed.execute_coalescing(&opacity(0.3), "drag").unwrap();
+        let tick = ed.revision();
+        ed.execute_coalescing(&opacity(0.4), "drag").unwrap();
+        assert!(before != tick && tick != ed.revision());
+        // At the history limit the length stops growing; versions don't.
+        ed.history_limit = 2;
+        let mut seen = vec![ed.revision()];
+        for o in [0.6, 0.7, 0.8] {
+            ed.execute(&opacity(o)).unwrap();
+            assert!(!seen.contains(&ed.revision()));
+            seen.push(ed.revision());
+        }
+        assert_eq!(ed.history().len(), 2);
+        // Another editor never shares a number.
+        let other = Editor::new(Document::new(16, 16));
+        assert!(!seen.contains(&other.revision()) && other.revision() != saved);
+    }
+
+    #[test]
     fn discarding_a_coalesced_run_leaves_no_trace() {
         let mut ed = Editor::new(Document::new(64, 64));
         ed.execute(&AddPixelLayer::new("L")).unwrap();

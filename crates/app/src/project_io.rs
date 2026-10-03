@@ -143,6 +143,75 @@ mod tests {
     }
 
     #[test]
+    fn a_different_edit_after_undo_counts_as_unsaved() {
+        let dir = std::env::temp_dir().join(format!("lumenply-project-io-dirty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("dirty.lumen").to_string_lossy().into_owned();
+        let mut app = crate::a11y_tests::launch(&[]);
+        app.open_in_new_tab(crate::blank(40, 30), None);
+        let layer = app.editor.doc().layers()[0].id;
+        let opacity = |o: f32| SetOpacity { layer, opacity: o };
+        assert!(!app.live_unsaved(), "a new blank document has nothing to save");
+        app.run(&opacity(0.5));
+        assert!(app.live_unsaved());
+        app.save_path(&file);
+        assert_eq!(app.tab_infos(), vec![("dirty.lumen".to_string(), false)]);
+        // Undo after saving: differs from the file; redo: the file again.
+        app.undo();
+        assert!(app.live_unsaved());
+        app.redo();
+        assert!(!app.live_unsaved());
+        // Undo, then something else: as many steps as at the save, but not
+        // what was saved; closing must warn.
+        app.undo();
+        app.run(&opacity(0.25));
+        assert_eq!(app.tab_infos(), vec![("dirty.lumen".to_string(), true)]);
+        app.close_tab(0);
+        assert!(matches!(app.dialog, Some(Dialog::ConfirmCloseTab(0))));
+        // Past the history limit the step count stops growing; still unsaved.
+        app.dialog = None;
+        app.save_path(&file);
+        let steps = app.editor.history().len();
+        app.editor.history_limit = steps;
+        app.run(&opacity(0.75));
+        assert_eq!(app.editor.history().len(), steps);
+        assert!(app.live_unsaved());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opening_an_open_image_again_comes_back_to_its_tab() {
+        let dir = std::env::temp_dir().join(format!("lumenply-project-io-reopen-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("photo.png");
+        image::RgbaImage::from_pixel(6, 4, image::Rgba([10, 20, 30, 255]))
+            .save(&png)
+            .unwrap();
+        let other = dir.join("other.png");
+        image::RgbaImage::from_pixel(3, 2, image::Rgba([0, 0, 0, 255]))
+            .save(&other)
+            .unwrap();
+        let (png, other) = (
+            png.to_string_lossy().into_owned(),
+            other.to_string_lossy().into_owned(),
+        );
+        let mut app = crate::a11y_tests::launch(&[]);
+        app.open_path(&png);
+        app.open_path(&other);
+        assert_eq!(app.tab_infos().len(), 2);
+        app.open_path(&png);
+        assert_eq!(app.status, format!("Switched to {png}"));
+        assert_eq!((app.tab_infos().len(), app.cur_tab), (2, 0));
+        assert_eq!(app.editor.doc().width, 6);
+        // Saved as a project, it is that project now: the image opens anew.
+        let project = dir.join("photo.lumen").to_string_lossy().into_owned();
+        app.save_path(&project);
+        app.open_path(&png);
+        assert_eq!(app.tab_infos().len(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_app_saves_backs_up_and_recovers_format_3() {
         let dir = std::env::temp_dir().join(format!("lumenply-project-io-app-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

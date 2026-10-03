@@ -347,6 +347,48 @@ pub(crate) fn blank_at(w: u32, h: u32, ppi: f32) -> Editor {
     Editor::new(doc)
 }
 
+/// File ▸ New's Background contents, as in Photoshop: what the new
+/// document's first layer holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NewBackground {
+    White,
+    Black,
+    /// No Background: one empty "Layer 1".
+    Transparent,
+}
+
+/// The New dialog's Background choice, kept for the session like its unit.
+const NEW_BACKGROUND_ID: &str = "new-doc-background";
+
+/// A new document of `w` × `h` at `ppi` with `bg` contents, with nothing to
+/// undo.
+pub(crate) fn new_document(w: u32, h: u32, ppi: f32, bg: NewBackground) -> Editor {
+    let mut doc = match bg {
+        NewBackground::White => return blank_at(w, h, ppi),
+        NewBackground::Black => {
+            let mut ed = Editor::new(Document::new(w, h));
+            let ink = Raster::filled(w, h, lumenply_tiles::Rgba::new(0.0, 0.0, 0.0, 1.0));
+            let _ = ed.execute(&AddPixelLayer::from_raster("Background", ink, 0, 0));
+            ed.doc().clone()
+        }
+        NewBackground::Transparent => {
+            let mut ed = Editor::new(Document::new(w, h));
+            let _ = ed.execute(&AddPixelLayer::new("Layer 1"));
+            ed.doc().clone()
+        }
+    };
+    doc.resolution = ppi;
+    Editor::new(doc)
+}
+
+/// The document File ▸ New's Create makes, with the Background chosen.
+pub(crate) fn new_document_from_dialog(ctx: &egui::Context, w: u32, h: u32, ppi: f32) -> Editor {
+    let bg = ctx
+        .data(|d| d.get_temp::<NewBackground>(egui::Id::new(NEW_BACKGROUND_ID)))
+        .unwrap_or(NewBackground::White);
+    new_document(w, h, ppi, bg)
+}
+
 /// A unit dropdown: its id salt, the value, and the (value, label) choices.
 type UnitPick<'a, U> = (&'a str, &'a mut U, &'a [(U, &'a str)]);
 
@@ -571,6 +613,23 @@ pub(crate) fn new_doc_ui(ui: &mut egui::Ui, w: &mut u32, h: &mut u32, ppi: &mut 
         *w = px_from(px_in(*w, unit, before), unit, *ppi);
         *h = px_from(px_in(*h, unit, before), unit, *ppi);
     }
+    let bg_id = egui::Id::new(NEW_BACKGROUND_ID);
+    let mut bg = ui
+        .data(|d| d.get_temp::<NewBackground>(bg_id))
+        .unwrap_or(NewBackground::White);
+    ui.horizontal(|ui| {
+        row_label(ui, "Background", LABEL_W);
+        segmented(
+            ui,
+            &mut bg,
+            &[
+                (NewBackground::White, "White"),
+                (NewBackground::Black, "Black"),
+                (NewBackground::Transparent, "Transparent"),
+            ],
+        );
+    });
+    ui.data_mut(|d| d.insert_temp(bg_id, bg));
     note(
         ui,
         &format!(
@@ -819,5 +878,30 @@ mod tests {
         assert_eq!((ed.doc().width, ed.doc().resolution), (20, 300.0));
         assert_eq!(ed.doc().layer_count(), 1);
         assert!(ed.history().is_empty());
+    }
+
+    #[test]
+    fn new_documents_have_the_chosen_background() {
+        let first = |bg| {
+            let ed = new_document(8, 6, 150.0, bg);
+            assert!(ed.history().is_empty());
+            assert_eq!(
+                (ed.doc().width, ed.doc().height, ed.doc().resolution),
+                (8, 6, 150.0)
+            );
+            let l = &ed.doc().layers()[0];
+            assert_eq!(ed.doc().layer_count(), 1);
+            let px = l.pixels().unwrap().get_pixel(4, 3);
+            (l.name.clone(), [px.r, px.g, px.b, px.a])
+        };
+        assert_eq!(
+            first(NewBackground::White),
+            ("Background".into(), [1.0, 1.0, 1.0, 1.0])
+        );
+        assert_eq!(
+            first(NewBackground::Black),
+            ("Background".into(), [0.0, 0.0, 0.0, 1.0])
+        );
+        assert_eq!(first(NewBackground::Transparent), ("Layer 1".into(), [0.0; 4]));
     }
 }

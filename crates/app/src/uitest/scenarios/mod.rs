@@ -8,6 +8,7 @@
 
 use super::Scenario;
 
+mod a_files;
 mod adjust;
 mod b_layers;
 mod basics;
@@ -35,4 +36,5 @@ pub(crate) const AREAS: &[&[Scenario]] = &[
     i_ai_actions::SCENARIOS,
     g_text_shapes::SCENARIOS,
     j_robustness::SCENARIOS,
+    a_files::SCENARIOS,
 ];

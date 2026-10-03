@@ -614,6 +614,27 @@ impl App {
         menu_separator(ui);
         let shown = !self.prefs.history_collapsed;
         self.act_check(ui, "History strip", "toggle-history", shown);
+        // The open documents, as at the foot of Photoshop's Window menu:
+        // every one is reachable even when the tab strip can't show them all.
+        let docs = self.tab_infos();
+        if !docs.is_empty() {
+            menu_separator(ui);
+            let mut pick = None;
+            for (i, (name, unsaved)) in docs.iter().enumerate() {
+                let label = if *unsaved {
+                    format!("{name} •")
+                } else {
+                    name.clone()
+                };
+                if menu_check(ui, i == self.cur_tab, &label, "").clicked() {
+                    pick = Some(i);
+                }
+            }
+            if let Some(i) = pick {
+                self.switch_tab(i);
+                ui.close_menu();
+            }
+        }
     }
 
     // ---- debug tokens ------------------------------------------------------------

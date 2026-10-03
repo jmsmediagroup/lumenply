@@ -420,8 +420,9 @@ struct App {
     filter_last: Vec<Filter>,
     status: String,
     /// [`Editor::revision`] at the last save (or open), for the
-    /// unsaved-changes dot and the close prompts.
-    saved_rev: u64,
+    /// unsaved-changes dot and the close prompts; `None` when never saved
+    /// (a duplicate, recovered work).
+    saved_rev: Option<u64>,
     /// History thumbnails by the [`Editor::revision`] of the step they show.
     hist_thumbs: Vec<(u64, egui::TextureHandle)>,
     /// Open command palette (Ctrl+K).
@@ -469,6 +470,10 @@ struct App {
     cur_tab: usize,
     /// Tab label while the live document has no file path.
     untitled: String,
+    /// The file each imported document (an image, PSD, ORA or RAW opened
+    /// as a new document) came from, by document key: opening that file
+    /// again brings its tab forward instead of a second copy.
+    imported: HashMap<u64, PathBuf>,
     /// No document is open: the welcome screen replaces the editor and
     /// `editor` is an empty placeholder that nothing may edit (see start.rs).
     no_doc: bool,
@@ -515,7 +520,7 @@ struct DocTab {
     smart_link: Option<smart_contents::SmartLink>,
     editor: Editor,
     path: Option<PathBuf>,
-    saved_rev: u64,
+    saved_rev: Option<u64>,
     zoom: f32,
     pan: Vec2,
     active: Option<LayerId>,
@@ -532,7 +537,7 @@ impl DocTab {
     }
 
     fn unsaved(&self) -> bool {
-        self.editor.revision() != self.saved_rev
+        Some(self.editor.revision()) != self.saved_rev
     }
 }
 
@@ -625,7 +630,7 @@ impl App {
             cb_tone: 1,
             levels_ch: 0,
             dialog: None,
-            saved_rev: 0,
+            saved_rev: None,
             hist_thumbs: Vec::new(),
             palette: None,
             allow_close: false,
@@ -673,6 +678,7 @@ impl App {
             tabs: Vec::new(),
             cur_tab: 0,
             untitled: String::new(),
+            imported: HashMap::new(),
             no_doc: true,
             start_thumb: None,
             crop: crop::CropTool::default(),
@@ -692,7 +698,7 @@ impl App {
             ai: ai_ui::AiState::new(),
         };
         // The placeholder editor counts as saved: nothing to lose.
-        app.saved_rev = app.editor.revision();
+        app.saved_rev = Some(app.editor.revision());
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
         if launch.demo {
@@ -817,7 +823,7 @@ impl App {
         self.editor = editor;
         self.prefs.apply(&mut self.editor);
         self.path = path;
-        self.saved_rev = self.editor.revision();
+        self.saved_rev = Some(self.editor.revision());
         self.hist_thumbs.clear();
         self.cancel_interaction();
         self.select_top();
@@ -876,7 +882,7 @@ impl App {
             .as_ref()
             .map(|p| file_name(&p.to_string_lossy()))
             .unwrap_or_else(|| self.untitled.clone());
-        let live_unsaved = self.editor.revision() != self.saved_rev;
+        let live_unsaved = self.live_unsaved();
         let mut out: Vec<(String, bool)> = Vec::with_capacity(self.tabs.len() + 1);
         for (i, t) in self.tabs.iter().enumerate() {
             if i == self.cur_tab {
@@ -935,10 +941,13 @@ impl App {
     /// If `path` is already open in some tab, switch to it.
     fn focus_tab_with_path(&mut self, path: &str) -> bool {
         let wanted = PathBuf::from(path);
-        if self.path.as_ref() == Some(&wanted) {
+        let from = |key: u64, path: &Option<PathBuf>| {
+            path.as_ref() == Some(&wanted) || (path.is_none() && self.imported.get(&key) == Some(&wanted))
+        };
+        if !self.no_doc && from(self.doc_key, &self.path) {
             return true;
         }
-        let hit = self.tabs.iter().position(|t| t.path.as_ref() == Some(&wanted));
+        let hit = self.tabs.iter().position(|t| from(t.doc_key, &t.path));
         if let Some(idx) = hit {
             // Parked index -> display index (the live tab shifts by one).
             let display = if idx < self.cur_tab { idx } else { idx + 1 };
@@ -951,7 +960,7 @@ impl App {
     /// Close a tab by display index; asks about unsaved changes first.
     pub(crate) fn close_tab(&mut self, i: usize) {
         let unsaved = if i == self.cur_tab {
-            self.editor.revision() != self.saved_rev
+            self.live_unsaved()
         } else {
             let idx = if i < self.cur_tab { i } else { i - 1 };
             self.tabs.get(idx).is_some_and(|t| t.unsaved())
@@ -994,7 +1003,7 @@ impl App {
     /// with where it came from: what an autosave backs up.
     fn unsaved_docs(&self) -> Vec<(project_io::ProjectSnapshot, Option<PathBuf>)> {
         let mut out = Vec::new();
-        if self.editor.revision() != self.saved_rev {
+        if self.live_unsaved() {
             out.push((project_io::ProjectSnapshot::of(&self.editor), self.path.clone()));
         }
         for t in self.tabs.iter().filter(|t| t.unsaved()) {
@@ -1003,8 +1012,14 @@ impl App {
         out
     }
 
+    /// Whether the live document differs from its file (or was never saved);
+    /// never with no document open (the welcome screen's placeholder).
+    pub(crate) fn live_unsaved(&self) -> bool {
+        !self.no_doc && Some(self.editor.revision()) != self.saved_rev
+    }
+
     fn any_unsaved(&self) -> bool {
-        self.editor.revision() != self.saved_rev || self.tabs.iter().any(|t| t.unsaved())
+        self.live_unsaved() || self.tabs.iter().any(|t| t.unsaved())
     }
 
     fn active_layer(&self) -> Option<&Layer> {
@@ -1613,7 +1628,7 @@ impl App {
         // Intercept closing the window while there are unsaved changes.
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close && self.any_unsaved() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.dialog = Some(Dialog::ConfirmClose);
+            self.ask_before_quitting();
         }
         self.shortcuts(ctx);
         self.text_edit_guard(ctx);
@@ -1661,11 +1676,7 @@ impl App {
             .as_ref()
             .map(|p| file_name(&p.to_string_lossy()))
             .unwrap_or_else(|| self.untitled.clone());
-        let unsaved = if self.editor.revision() != self.saved_rev {
-            " •"
-        } else {
-            ""
-        };
+        let unsaved = if self.live_unsaved() { " •" } else { "" };
         let title = if self.no_doc {
             "Lumenply".to_string()
         } else {

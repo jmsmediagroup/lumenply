@@ -381,6 +381,22 @@ fn autosave_files(s: &mut Session) -> UiResult<Vec<String>> {
     })
 }
 
+/// Click a document's tab by its name; a tab with unsaved changes is
+/// spoken as "<name>, unsaved changes".
+fn click_tab(s: &mut Session, name: &str) -> UiResult {
+    let spoken = tab_name(s, name);
+    s.click(&spoken)
+}
+
+/// The name a document's tab is spoken by (see [`click_tab`]).
+fn tab_name(s: &Session, name: &str) -> String {
+    if s.has_node(name) {
+        name.to_string()
+    } else {
+        format!("{name}, unsaved changes")
+    }
+}
+
 /// Wait `secs` of real time with the app running, as a user who stops to
 /// think: the autosave clock is the wall clock.
 fn pause(s: &mut Session, secs: u64) -> UiResult {
@@ -438,8 +454,8 @@ fn autosave_and_recover(s: &mut Session) -> UiResult {
     );
     s.app(|a| *a = crate::App::launch(&[]))?;
     s.wait_idle()?;
-    s.expect_text("Recover autosaved document")?;
-    s.expect_text("2 documents")?;
+    s.expect_node("Recover autosaved work")?;
+    s.expect_text("autosaved backups of 2 documents")?;
     s.describe("Recover them");
     s.click("Recover")?;
     s.wait_idle()?;
@@ -460,12 +476,12 @@ fn autosave_and_recover(s: &mut Session) -> UiResult {
     s.note(&format!("Other tab index: {other:?}"))?;
     s.describe("Switch to the other tab");
     let first_name = names[0].clone();
-    s.click(&first_name)?;
+    click_tab(s, &first_name)?;
     s.wait_idle()?;
     let a = snap(s)?;
     let second_name = names[1].clone();
     s.describe("And to the other one");
-    s.click(&second_name)?;
+    click_tab(s, &second_name)?;
     s.wait_idle()?;
     let b = snap(s)?;
     s.check(
@@ -482,7 +498,7 @@ fn autosave_and_recover(s: &mut Session) -> UiResult {
     if b == second {
         s.key("Cmd+S")?;
     } else {
-        s.click(&first_name)?;
+        click_tab(s, &first_name)?;
         s.key("Cmd+S")?;
     }
     s.wait_idle()?;
@@ -626,7 +642,7 @@ fn odd_behaviour(s: &mut Session) -> UiResult {
     s.key("Cmd+K")?;
     s.type_text("Gaussian")?;
     s.key("Enter")?;
-    let tab1 = s.point_in("Untitled-1", 0.5, 0.5)?;
+    let tab1 = s.point_in(&tab_name(s, "Untitled-1"), 0.5, 0.5)?;
     s.describe("Click the first tab while the dialog is open");
     s.click_at(tab1, "the first document's tab")?;
     let on = s.app(|a| a.cur_tab)?;
@@ -638,22 +654,22 @@ fn odd_behaviour(s: &mut Session) -> UiResult {
     let which = s.app(|a| a.cur_tab)?;
     s.check_eq("the second document is not blurred", now, doc2.clone())?;
     s.describe("Look at the first document");
-    s.click("Untitled-1")?;
+    click_tab(s, "Untitled-1")?;
     s.wait_idle()?;
     let now = snap(s)?;
     s.check_eq("the first document is not blurred either", now, doc1.clone())?;
     s.describe("Back to the second");
-    s.click("Untitled-2")?;
+    click_tab(s, "Untitled-2")?;
     s.wait_idle()?;
 
     s.describe("Free transform in this tab, then switch tabs mid-transform");
     s.key("Cmd+T")?;
     let other = if which == 0 { "Untitled-2" } else { "Untitled-1" };
-    s.click(other)?;
+    click_tab(s, other)?;
     s.wait_idle()?;
     s.describe("Come back");
     let back = if which == 0 { "Untitled-1" } else { "Untitled-2" };
-    s.click(back)?;
+    click_tab(s, back)?;
     s.wait_idle()?;
     let shown = s.has_node("Free Transform");
     s.note(&format!("Free transform still up after the round trip: {shown}"))?;
@@ -663,9 +679,9 @@ fn odd_behaviour(s: &mut Session) -> UiResult {
     s.click("Text")?;
     s.canvas_click((200.0, 200.0), "")?;
     s.type_text("Half")?;
-    s.click(other)?;
+    click_tab(s, other)?;
     s.wait_idle()?;
-    s.click(back)?;
+    click_tab(s, back)?;
     s.wait_idle()?;
     let text = s.doc(|d| {
         d.layers().iter().find_map(|l| match &l.content {

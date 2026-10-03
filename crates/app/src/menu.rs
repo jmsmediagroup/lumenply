@@ -270,7 +270,21 @@ impl App {
                     menu(ui, "Help", |ui| self.help_menu(ui));
 
                     ui.add_space(10.0);
-                    self.document_tab(ui);
+                    // The tabs scroll sideways rather than push the Export
+                    // button (and the live tab itself) off a narrow window:
+                    // room is kept for Export and, when there is space, a
+                    // compact search box; the live tab is scrolled into view.
+                    let reserve = if ui.available_width() >= 400.0 {
+                        170.0
+                    } else {
+                        90.0
+                    };
+                    let room = (ui.available_width() - reserve).max(60.0);
+                    egui::ScrollArea::horizontal()
+                        .id_salt("document-tabs")
+                        .max_width(room)
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                        .show(ui, |ui| ui.horizontal(|ui| self.document_tab(ui)));
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let export = ui.add(
@@ -432,7 +446,7 @@ impl App {
     }
 
     fn image_menu(&mut self, ui: &mut egui::Ui) {
-        self.act(ui, "Duplicate...", "duplicate-doc");
+        self.act(ui, "Duplicate", "duplicate-doc");
         menu_separator(ui);
         self.act(ui, "Image size...", "image-size");
         self.act(ui, "Canvas size...", "canvas-size");
@@ -708,6 +722,12 @@ impl App {
                     .rounding(6.0),
             );
             if live {
+                // Bring a newly live tab into view in the scrolling strip.
+                let shown = egui::Id::new("document-tabs-live");
+                if ui.data(|d| d.get_temp::<u64>(shown)) != Some(self.doc_key) {
+                    resp.scroll_to_me(None);
+                    ui.data_mut(|d| d.insert_temp(shown, self.doc_key));
+                }
                 ui.painter().line_segment(
                     [
                         resp.rect.left_bottom() + egui::vec2(4.0, 0.0),
@@ -720,6 +740,16 @@ impl App {
                 let c = resp.rect.right_center() + egui::vec2(-9.0, 0.0);
                 ui.painter().circle_filled(c, 3.0, ACCENT);
             }
+            // Screen readers hear the name and the unsaved state, not
+            // the padding that makes room for the dot.
+            a11y_name(
+                &resp,
+                &if unsaved {
+                    format!("{name}, unsaved changes")
+                } else {
+                    name.clone()
+                },
+            );
             let resp = resp.on_hover_text(if unsaved {
                 "Unsaved changes — middle-click closes"
             } else {
@@ -739,6 +769,7 @@ impl App {
                         .fill(Color32::TRANSPARENT)
                         .frame(false),
                 );
+                a11y_name(&x, "Close document");
                 if x.on_hover_text("Close document").clicked() {
                     close = Some(i);
                 }
@@ -749,6 +780,7 @@ impl App {
                 .fill(Color32::TRANSPARENT)
                 .frame(false),
         );
+        a11y_name(&plus, "New document (tab)");
         if plus.on_hover_text("New document (tab)").clicked() {
             self.dialog = Some(Dialog::New(1920, 1080, 72.0));
         }

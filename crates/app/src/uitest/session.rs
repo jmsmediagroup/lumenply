@@ -299,6 +299,15 @@ pub(crate) struct Session {
     recorded: u64,
     pub(crate) title: String,
     quit: bool,
+    /// The window was asked to close (the app's Close command, or the
+    /// user's close button): the next frame carries the close request, as
+    /// eframe delivers it, so the app can still cancel it.
+    close_pending: bool,
+    /// That request went out this frame: quit unless the app cancels it.
+    close_asked: bool,
+    /// Files dragged over the window, and dropped onto it, next frame.
+    hovered_files: Vec<PathBuf>,
+    dropped_files: Vec<PathBuf>,
 
     // Stand-ins for the system.
     clipboard_text: String,
@@ -471,6 +480,10 @@ impl Session {
             recorded: 0,
             title: String::new(),
             quit: false,
+            close_pending: false,
+            close_asked: false,
+            hovered_files: Vec::new(),
+            dropped_files: Vec::new(),
             clipboard_text: String::new(),
             clipboard_image: clipboard,
             dialog: None,
@@ -608,6 +621,25 @@ impl Session {
         info.inner_rect = Some(screen);
         info.outer_rect = Some(screen);
         info.focused = Some(true);
+        if std::mem::take(&mut self.close_pending) {
+            info.events.push(egui::ViewportEvent::Close);
+            self.close_asked = true;
+        }
+        raw.hovered_files = self
+            .hovered_files
+            .iter()
+            .map(|p| egui::HoveredFile {
+                path: Some(p.clone()),
+                mime: String::new(),
+            })
+            .collect();
+        raw.dropped_files = std::mem::take(&mut self.dropped_files)
+            .into_iter()
+            .map(|p| egui::DroppedFile {
+                path: Some(p),
+                ..Default::default()
+            })
+            .collect();
         raw
     }
 
@@ -653,12 +685,19 @@ impl Session {
         if let Some(url) = out.open_url {
             self.notes.push(format!("the app asked to open {url}"));
         }
+        // eframe turns a Close command into a close request on the next
+        // frame; the window closes unless that frame sends CancelClose.
+        let mut cancelled = false;
         for c in out.commands {
             match c {
-                egui::ViewportCommand::Close => self.quit = true,
+                egui::ViewportCommand::Close => self.close_pending = true,
+                egui::ViewportCommand::CancelClose => cancelled = true,
                 egui::ViewportCommand::Title(t) => self.title = t,
                 _ => {}
             }
+        }
+        if std::mem::take(&mut self.close_asked) && !cancelled {
+            self.quit = true;
         }
         if let Some(gpu) = self.gpu.as_mut() {
             self.ui_image = Some(gpu.paint(&out.textures, &out.prims, out.ppp));
@@ -705,8 +744,10 @@ impl Session {
     /// animation, no follow-up frame), at most `max`.
     fn settle(&mut self, max: usize) -> UiResult {
         for _ in 0..max {
-            // A file panel the action opened waits for the scenario.
-            if self.dialog.is_some() {
+            // A file panel the action opened waits for the scenario; an
+            // action that quit the app (File ▸ Quit, saving the last
+            // document while quitting) is done.
+            if self.dialog.is_some() || self.quit {
                 return Ok(());
             }
             self.frame()?;
@@ -722,7 +763,7 @@ impl Session {
         let start = Instant::now();
         let mut still = 0;
         loop {
-            if self.dialog.is_some() {
+            if self.dialog.is_some() || self.quit {
                 return Ok(());
             }
             self.frame()?;
@@ -1864,6 +1905,97 @@ impl Session {
         })
     }
 
+    /// Run frames, giving background work real time, until `done` holds
+    /// (a timed autosave, a slow export), or fail after `timeout`.
+    pub(crate) fn wait_until(
+        &mut self,
+        what: &str,
+        timeout: Duration,
+        mut done: impl FnMut(&mut Session) -> UiResult<bool>,
+    ) -> UiResult {
+        self.step("wait", format!("Wait until {what}"), |s| {
+            let start = Instant::now();
+            loop {
+                s.frame()?;
+                if done(s)? {
+                    return s.settle(20);
+                }
+                if start.elapsed() > timeout {
+                    return Err(UiError(format!(
+                        "not after {:.0} s: {what}",
+                        timeout.as_secs_f32()
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        })
+    }
+
+    // ---- the window ------------------------------------------------------------
+
+    /// Click the window's close button (or Quit in the system menu): the
+    /// app gets a close request it may cancel, as eframe delivers it.
+    pub(crate) fn close_window(&mut self) -> UiResult {
+        self.step("action", "Close the window".into(), |s| {
+            s.close_pending = true;
+            s.settle(20)
+        })
+    }
+
+    /// Whether the app has quit (its window closed).
+    pub(crate) fn has_quit(&self) -> bool {
+        self.quit
+    }
+
+    /// Drag files from the Finder over the window and drop them.
+    pub(crate) fn drop_files(&mut self, paths: &[PathBuf]) -> UiResult {
+        let names: Vec<String> = paths
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+            })
+            .collect();
+        self.step(
+            "action",
+            format!("Drop {} onto the window", names.join(", ")),
+            |s| {
+                s.hovered_files = paths.to_vec();
+                for _ in 0..8 {
+                    s.frame()?;
+                }
+                s.hovered_files.clear();
+                s.dropped_files = paths.to_vec();
+                s.frame()?;
+                s.settle_idle(Duration::from_secs(60))
+            },
+        )
+    }
+
+    /// Lumenply dies without a chance to clean up (a crash, a power cut)
+    /// and the user starts it again on the same profile: autosave backups
+    /// and recent files stay, and none of the old app's exit code runs.
+    pub(crate) fn crash_and_relaunch(&mut self) -> UiResult {
+        let args = self.opts.args.clone();
+        self.step("launch", "Lumenply crashes; start it again".into(), |s| {
+            s.call(move |st: &mut UiState| {
+                let ctx = egui::Context::default();
+                crate::theme::install(&ctx);
+                ctx.enable_accesskit();
+                // No Drop, no on_exit: a crash runs none of the app's code.
+                let old = std::mem::replace(&mut st.app, App::launch(&args));
+                std::mem::forget(old);
+                st.ctx = ctx;
+            })?;
+            s.tree = Tree::default();
+            s.prev_tree = Tree::default();
+            s.title.clear();
+            s.pressed = None;
+            s.modifiers = Modifiers::NONE;
+            s.settle_idle(Duration::from_secs(60))
+        })
+    }
+
     /// [`Session::wait_idle`] for work that can take longer than 30 s (a
     /// model download), failing after `secs`.
     pub(crate) fn wait_idle_for(&mut self, secs: u64) -> UiResult {
@@ -1875,6 +2007,9 @@ impl Session {
     /// Let `n` frames pass with no input.
     pub(crate) fn wait_frames(&mut self, n: usize) -> UiResult {
         for _ in 0..n {
+            if self.quit {
+                break;
+            }
             self.frame()?;
         }
         Ok(())

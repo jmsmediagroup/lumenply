@@ -73,7 +73,7 @@ impl App {
         };
         match parent.editor.execute(&cmd) {
             Ok(()) => {
-                self.saved_rev = self.editor.revision();
+                self.saved_rev = Some(self.editor.revision());
                 self.status = format!("Updated smart object '{}'", link.name);
                 true
             }
@@ -176,11 +176,7 @@ mod tests {
         app.run_menu_action("fill");
         app.run_menu_action("save");
         assert!(app.status.starts_with("Updated smart object"), "{}", app.status);
-        assert_eq!(
-            app.editor.revision(),
-            app.saved_rev,
-            "the contents tab counts as saved"
-        );
+        assert!(!app.live_unsaved(), "the contents tab counts as saved");
         // Back in the original document the smart object is blue in place.
         let parent = app
             .tab_infos()
