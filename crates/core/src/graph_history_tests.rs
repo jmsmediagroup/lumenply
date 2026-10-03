@@ -275,6 +275,81 @@ fn an_edit_to_one_layer_reuses_every_other_layers_nodes() {
     assert_eq!(changed, vec![top], "only the top layer's node changes key");
 }
 
+fn text(s: &str) -> lumenply_doc::TextLayer {
+    lumenply_doc::TextLayer::new(s, 40.0, 60.0, 28.0, [1.0, 1.0, 0.2, 1.0])
+}
+
+#[test]
+fn editing_a_content_layer_makes_one_new_op_node_and_no_blob() {
+    let mut ed = layered_editor();
+    ed.execute(&AddTextLayer {
+        text: text("Hello"),
+        above: None,
+    })
+    .unwrap();
+    let words = ed.doc().layers().last().unwrap().id;
+    let mut add = AddFillLayer::new(lumenply_doc::Fill::Solid {
+        color: [0.1, 0.5, 0.9],
+    });
+    add.mask_selection = false;
+    ed.execute(&add).unwrap();
+    let paint = ed.doc().layers().last().unwrap().id;
+    ed.execute(&SetOpacity {
+        layer: paint,
+        opacity: 0.4,
+    })
+    .unwrap();
+
+    // Retyping the text: one new `text` node (and the `compact` after it:
+    // the editor keeps the re-rendered glyphs at 16 bits) replaces the old
+    // pair, the layer node is re-made under the same id, and no pixels are
+    // stored.
+    let (g0, n0, blobs0) = (ed.graph_arc(), layer_nodes(&ed), ed.blobs().len());
+    let chain = |g: &Graph, top: NodeId| -> Vec<NodeId> {
+        let n = g.node(top).unwrap();
+        assert_eq!(n.op, Op::Compact);
+        vec![n.input(0).unwrap(), top]
+    };
+    let old = chain(&g0, n0[&words].1.unwrap());
+    ed.execute(&SetText {
+        layer: words,
+        text: text("Hello, world"),
+    })
+    .unwrap();
+    let g1 = ed.graph_arc();
+    let (added, removed, rearced) = diff(&g0, &g1);
+    assert_eq!(removed, old);
+    let new = chain(&g1, layer_nodes(&ed)[&words].1.unwrap());
+    assert_eq!(added, new);
+    match &g1.node(new[0]).unwrap().op {
+        Op::Text { text } => assert_eq!(text.text, "Hello, world"),
+        op => panic!("{op:?}"),
+    }
+    assert_eq!(rearced, vec![n0[&words].0]);
+    assert_eq!(ed.blobs().len(), blobs0, "no new blob");
+
+    // Recolouring the fill layer: likewise one new `fill` node.
+    ed.execute(&SetFill {
+        layer: paint,
+        fill: lumenply_doc::Fill::Solid {
+            color: [0.9, 0.2, 0.1],
+        },
+    })
+    .unwrap();
+    let g2 = ed.graph_arc();
+    let (added, removed, rearced) = diff(&g1, &g2);
+    assert_eq!((added.len(), removed.len()), (1, 1));
+    assert!(matches!(g2.node(added[0]).unwrap().op, Op::Fill { .. }));
+    assert_eq!(rearced, vec![n0[&paint].0]);
+    assert_eq!(ed.blobs().len(), blobs0);
+
+    let r = ed.renderer().render_canvas(ed.graph(), ed.blobs());
+    assert!(max_diff(&r, &lumenply_render::composite(ed.doc()), ed.doc().canvas()) <= 1e-6);
+    ed.undo();
+    ed.undo();
+    assert!(Arc::ptr_eq(&ed.graph_arc(), &g0));
+}
+
 #[test]
 fn undo_returns_the_identical_graph_version_and_document() {
     let mut ed = layered_editor();
@@ -522,9 +597,11 @@ fn random_edit(ed: &mut Editor, rng: &mut Rng) -> String {
     let pixel = all_ids(doc, |l| matches!(l.content, LayerContent::Pixel(_)));
     let masked = all_ids(doc, |l| l.mask.is_some());
     let groups = all_ids(doc, |l| matches!(l.content, LayerContent::Group(_)));
+    let texts = all_ids(doc, |l| matches!(l.content, LayerContent::Text(_)));
+    let fills = all_ids(doc, |l| matches!(l.content, LayerContent::Fill(_)));
     let pick = |rng: &mut Rng, v: &[LayerId]| (!v.is_empty()).then(|| v[rng.below(v.len())]);
     let color = |rng: &mut Rng| [rng.unit(), rng.unit(), rng.unit(), 0.3 + rng.unit() * 0.7];
-    let kind = rng.below(24);
+    let kind = rng.below(27);
     let cmd: Box<dyn Command> = match kind {
         0 | 1 => {
             let (rw, rh) = (20 + rng.below(300) as u32, 20 + rng.below(200) as u32);
@@ -692,6 +769,44 @@ fn random_edit(ed: &mut Editor, rng: &mut Rng) -> String {
             ed.undo();
             return "undo".into();
         }
+        24 => match pick(rng, &texts) {
+            Some(layer) if rng.below(3) > 0 => Box::new(SetText {
+                layer,
+                text: lumenply_doc::TextLayer::new(
+                    ["Hi", "Lumen", "ply", "graph"][rng.below(4)],
+                    rng.unit() * w,
+                    20.0 + rng.unit() * h,
+                    12.0 + rng.unit() * 40.0,
+                    color(rng),
+                ),
+            }),
+            _ => Box::new(AddTextLayer {
+                text: text("Text"),
+                above: None,
+            }),
+        },
+        25 => match pick(rng, &fills) {
+            Some(layer) if rng.below(2) > 0 => Box::new(SetFill {
+                layer,
+                fill: lumenply_doc::Fill::Solid {
+                    color: [rng.unit(), rng.unit(), rng.unit()],
+                },
+            }),
+            _ => {
+                let mut add = AddFillLayer::new(lumenply_doc::Fill::Solid {
+                    color: [rng.unit(), rng.unit(), rng.unit()],
+                });
+                add.mask_selection = rng.below(2) == 0;
+                Box::new(add)
+            }
+        },
+        26 => match pick(rng, &pixel) {
+            Some(layer) => match rng.below(2) {
+                0 => Box::new(AddSmartFilter::new(layer, Filter::GaussianBlur { radius: 3.0 })),
+                _ => Box::new(ConvertToSmartObject { layer }),
+            },
+            None => return "skip".into(),
+        },
         _ => {
             match rng.below(3) {
                 0 => {

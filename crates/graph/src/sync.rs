@@ -34,7 +34,7 @@ use lumenply_tiles::{Tile, TileStore};
 
 use crate::blob::{BlobId, BlobStore, TileHasher};
 use crate::eval::Renderer;
-use crate::lower::{lower_content, lower_mask};
+use crate::lower::Step;
 use crate::model::{Graph, Node, NodeId};
 use crate::ops::{ClipMember, LayerProps, Op};
 
@@ -259,6 +259,7 @@ pub fn sync(
         prev: base.map(index).unwrap_or_default(),
         blobs,
         hasher,
+        float: doc.float_mode,
         empty: NodeId(0),
     };
     sx.empty = sx.bottom();
@@ -274,10 +275,21 @@ struct Sx<'a> {
     prev: HashMap<LayerId, Prev<'a>>,
     blobs: &'a mut BlobStore,
     hasher: &'a TileHasher,
+    float: bool,
     empty: NodeId,
 }
 
 impl Sx<'_> {
+    /// Lower one part of the document as [`crate::lower`] does.
+    fn lowering(&mut self) -> Step<'_> {
+        Step {
+            graph: &mut self.graph,
+            blobs: self.blobs,
+            hasher: self.hasher,
+            float: self.float,
+        }
+    }
+
     /// Copy `id` and everything it depends on from the base graph, keeping
     /// ids and `Arc`s. False when the base doesn't have it.
     fn carry(&mut self, id: NodeId) -> bool {
@@ -368,7 +380,7 @@ impl Sx<'_> {
                 }
             }
         }
-        lower_mask(&mut self.graph, self.blobs, self.hasher, layer)
+        self.lowering().mask(layer)
     }
 
     /// The previous version's content nodes for `layer`, if its pixels are
@@ -412,7 +424,7 @@ impl Sx<'_> {
             let in_graph = plain.is_some_and(|s| was_in_graph || self.holds(id, s));
             return (id, Vec::new(), in_graph);
         }
-        let id = lower_content(&mut self.graph, self.blobs, self.hasher, layer);
+        let id = self.lowering().content(layer);
         let in_graph = plain.is_some_and(|s| self.holds(id, s));
         (id, Vec::new(), in_graph)
     }
@@ -769,13 +781,20 @@ impl Op {
         let blob = match self {
             Op::Image { blob } => Some(blob),
             Op::Mask { blob, .. } => blob.as_ref(),
+            Op::Fill { pattern_pixels, .. } | Op::Shape { pattern_pixels, .. } => {
+                pattern_pixels.as_ref().map(|p| &p.blob)
+            }
             Op::Empty
             | Op::Layer { .. }
             | Op::Adjustment { .. }
             | Op::FilterLayer { .. }
             | Op::PassThrough { .. }
             | Op::ClipGroup { .. }
-            | Op::Translate { .. } => None,
+            | Op::Text { .. }
+            | Op::Transform { .. }
+            | Op::SmartFilter { .. }
+            | Op::Translate { .. }
+            | Op::Compact => None,
         };
         blob.into_iter()
     }

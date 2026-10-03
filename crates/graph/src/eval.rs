@@ -11,6 +11,7 @@ use crate::blob::{BlobId, BlobStore, TileHasher};
 use crate::cache::TileCache;
 use crate::key::{Key, KeyMemo};
 use crate::model::{Graph, NodeId};
+use crate::whole::WholeCache;
 
 /// Everything an op sees while one render runs.
 pub struct Ctx<'a> {
@@ -18,6 +19,7 @@ pub struct Ctx<'a> {
     pub blobs: &'a BlobStore,
     pub keys: HashMap<NodeId, Key>,
     pub cache: &'a TileCache,
+    pub wholes: &'a WholeCache,
     pub canvas: Rect,
     extents: Mutex<HashMap<NodeId, Option<Rect>>>,
 }
@@ -41,7 +43,19 @@ impl Ctx<'_> {
         let n = self.graph.node(id)?;
         let key = *self.keys.get(&id)?;
         self.cache
-            .get_or_compute(key, coord, || crate::ops::eval_tile(self, n, coord))
+            .get_or_compute(key, coord, || crate::ops::eval_tile(self, id, n, coord))
+    }
+
+    /// The whole output of `node`, for an op that computes everything at
+    /// once (text, fills, smart filters): made by `compute` once per content
+    /// key and kept, so the op can serve its tiles one at a time. Renders
+    /// make these before pulling tiles (see [`Renderer::render_node`]), so a
+    /// tile normally finds its node's result ready.
+    pub fn whole(&self, node: NodeId, compute: impl FnOnce() -> TileStore) -> Arc<TileStore> {
+        match self.keys.get(&node) {
+            Some(key) => self.wholes.get_or_compute(*key, compute),
+            None => Arc::new(compute()),
+        }
     }
 
     /// A node's output over every tile touching `area`, computed in parallel.
@@ -72,6 +86,8 @@ impl Ctx<'_> {
 pub struct Renderer {
     pub cache: TileCache,
     pub hasher: TileHasher,
+    /// Whole-region results of ops computed in one piece (see [`Ctx::whole`]).
+    pub wholes: WholeCache,
     keys: KeyMemo,
 }
 
@@ -83,6 +99,7 @@ impl Renderer {
     pub fn with_budget(bytes: usize) -> Self {
         Renderer {
             cache: TileCache::with_budget(bytes),
+            wholes: WholeCache::with_budget(bytes),
             ..Self::default()
         }
     }
@@ -98,6 +115,7 @@ impl Renderer {
             blobs,
             keys: self.keys.keys(graph, node),
             cache: &self.cache,
+            wholes: &self.wholes,
             canvas: graph.canvas(),
             extents: Mutex::new(HashMap::new()),
         }
@@ -106,22 +124,29 @@ impl Renderer {
     /// A bound on where `node`'s output can be non-transparent (`None`:
     /// transparent everywhere). Not limited to the canvas.
     pub fn extent(&self, graph: &Graph, blobs: &BlobStore, node: NodeId) -> Option<Rect> {
-        self.ctx(graph, blobs, node).extent(node)
+        let ctx = self.ctx(graph, blobs, node);
+        crate::ops_content::prepare(&ctx, node);
+        ctx.extent(node)
     }
 
     /// All of `node`'s output: every tile within its extent, on the canvas
     /// or off it (a layer's pixels may reach past the canvas).
     pub fn render_all(&self, graph: &Graph, blobs: &BlobStore, node: NodeId) -> TileStore {
         let ctx = self.ctx(graph, blobs, node);
+        crate::ops_content::prepare(&ctx, node);
         match ctx.extent(node) {
             Some(r) => ctx.area(node, r),
             None => TileStore::new(),
         }
     }
 
-    /// `node`'s output over the tiles touching `rect`.
+    /// `node`'s output over the tiles touching `rect`. Ops computed in one
+    /// piece upstream of it are made first, independent ones in parallel,
+    /// so that pulling tiles never waits for one.
     pub fn render_node(&self, graph: &Graph, blobs: &BlobStore, node: NodeId, rect: Rect) -> TileStore {
-        self.ctx(graph, blobs, node).area(node, rect)
+        let ctx = self.ctx(graph, blobs, node);
+        crate::ops_content::prepare(&ctx, node);
+        ctx.area(node, rect)
     }
 
     /// The image (the output node) over the tiles touching `rect`; empty

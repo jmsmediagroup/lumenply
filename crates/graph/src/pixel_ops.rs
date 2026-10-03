@@ -1,6 +1,8 @@
-//! The `translate` op: content shifted by whole pixels, exactly as
-//! [`TileStore::translated`](lumenply_tiles::TileStore::translated) shifts
-//! a store (the Move tool on a pixel layer).
+//! Ops on a layer's own pixels that change no value: `translate` shifts
+//! them by whole pixels, exactly as
+//! [`TileStore::translated`](lumenply_tiles::TileStore::translated) does
+//! (the Move tool on a pixel layer); `compact` stores them at 16 bits, as
+//! the editor keeps pixels at rest.
 
 use std::sync::Arc;
 
@@ -8,6 +10,18 @@ use lumenply_tiles::{Rect, Tile, TileCoord, TILE_SIZE};
 
 use crate::eval::Ctx;
 use crate::model::NodeId;
+
+/// One tile of `compact`: the input tile at 16 bits (itself, shared, when
+/// it already is).
+pub(crate) fn compact(tile: Option<Arc<Tile>>) -> Option<Arc<Tile>> {
+    let t = tile?;
+    if t.is_compact() {
+        return Some(t);
+    }
+    let mut c = (*t).clone();
+    c.compact();
+    Some(Arc::new(c))
+}
 
 /// Where `r` lands when shifted by `(dx, dy)`.
 pub(crate) fn shift(r: Rect, dx: i32, dy: i32) -> Rect {

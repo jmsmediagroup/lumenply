@@ -165,9 +165,60 @@ pub enum Op {
         base: LayerProps,
         members: Vec<ClipMember>,
     },
+    /// A text layer's glyphs, rasterised by `lumenply-render`; the fields
+    /// are the text layer's own (see [`crate::ops_content`]).
+    Text {
+        #[serde(flatten)]
+        text: Box<lumenply_doc::TextLayer>,
+    },
+    /// A fill layer's paint over the canvas: solid, gradient or pattern.
+    /// A pattern's pixels are a blob named by `pattern_pixels`; `float`
+    /// keeps 32-bit tiles (HDR documents) instead of 16-bit ones.
+    Fill {
+        fill: lumenply_doc::Fill,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pattern_pixels: Option<crate::ops_content::PatternPixels>,
+        #[serde(default, skip_serializing_if = "crate::ops_content::is_false")]
+        float: bool,
+    },
+    /// A vector shape layer's fill and stroke; the fields are the shape
+    /// layer's own, plus its fill pattern's pixels and precision as for
+    /// `fill`.
+    Shape {
+        #[serde(flatten)]
+        shape: Box<lumenply_doc::ShapeLayer>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pattern_pixels: Option<crate::ops_content::PatternPixels>,
+        #[serde(default, skip_serializing_if = "crate::ops_content::is_false")]
+        float: bool,
+    },
+    /// The input resampled through the affine map `[a, b, c, d, tx, ty]`
+    /// (`x' = a·x + c·y + tx`, `y' = b·x + d·y + ty`): a smart object's
+    /// placement of its untouched source.
+    /// Port: input.
+    Transform { matrix: [f32; 6] },
+    /// One smart filter on a layer's own pixels (ADR 0011): the input
+    /// filtered, blended onto itself and mixed in by opacity. A mask fades
+    /// the whole run of smart filters ending here back to its input.
+    /// Ports: input, mask.
+    SmartFilter {
+        filter: Filter,
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        opacity: f32,
+        #[serde(default, skip_serializing_if = "is_normal")]
+        blend: BlendMode,
+        #[serde(default, skip_serializing_if = "crate::ops_content::is_false")]
+        float: bool,
+    },
     /// The input shifted by whole pixels (a pixel layer moved).
     /// Port: input.
     Translate { dx: i32, dy: i32 },
+    /// The input stored at 16 bits per channel, as the editor keeps a
+    /// layer's pixels at rest after each command (`Tile::compact`). Follows
+    /// an op that computes at 32 bits (text, a smart object's transform)
+    /// where the document holds its result compacted.
+    /// Port: input.
+    Compact,
 }
 
 impl Op {
@@ -182,7 +233,13 @@ impl Op {
             Op::FilterLayer { .. } => "filter-layer",
             Op::PassThrough { .. } => "pass-through",
             Op::ClipGroup { .. } => "clip-group",
+            Op::Text { .. } => "text",
+            Op::Fill { .. } => "fill",
+            Op::Shape { .. } => "shape",
+            Op::Transform { .. } => "transform",
+            Op::SmartFilter { .. } => "smart-filter",
             Op::Translate { .. } => "translate",
+            Op::Compact => "compact",
         }
     }
 
@@ -194,7 +251,10 @@ impl Op {
             Op::Adjustment { .. } | Op::FilterLayer { .. } => &["backdrop", "mask"],
             Op::PassThrough { .. } => &["before", "after", "mask"],
             Op::ClipGroup { .. } => &["backdrop", "base", "base-mask"],
-            Op::Translate { .. } => &["input"],
+            Op::Text { .. } | Op::Fill { .. } | Op::Shape { .. } => &[],
+            Op::Transform { .. } => &["input"],
+            Op::SmartFilter { .. } => &["input", "mask"],
+            Op::Translate { .. } | Op::Compact => &["input"],
         }
     }
 
@@ -306,7 +366,13 @@ pub(crate) fn extent(ctx: &Ctx, id: crate::NodeId) -> Option<Rect> {
                 .unwrap_or(0);
             union(input(0), input(1).map(|r| grow(r, pad)))
         }
-        Op::Translate { dx, dy } => input(0).map(|r| crate::translate::shift(r, *dx, *dy)),
+        Op::Text { .. }
+        | Op::Fill { .. }
+        | Op::Shape { .. }
+        | Op::Transform { .. }
+        | Op::SmartFilter { .. } => crate::ops_content::extent(ctx, id, node),
+        Op::Translate { dx, dy } => input(0).map(|r| crate::pixel_ops::shift(r, *dx, *dy)),
+        Op::Compact => input(0),
     }
 }
 
@@ -323,8 +389,9 @@ fn content_area(ctx: &Ctx, content: crate::NodeId, fx: &LayerEffects, coord: Til
     near
 }
 
-/// Evaluate one output tile of `node`. `None` means fully transparent.
-pub(crate) fn eval_tile(ctx: &Ctx, node: &Node, coord: TileCoord) -> Option<Arc<Tile>> {
+/// Evaluate one output tile of `node` (whose id is `id`). `None` means
+/// fully transparent.
+pub(crate) fn eval_tile(ctx: &Ctx, id: crate::NodeId, node: &Node, coord: TileCoord) -> Option<Arc<Tile>> {
     let input = |i: usize| node.input(i);
     match &node.op {
         Op::Empty => None,
@@ -476,6 +543,12 @@ pub(crate) fn eval_tile(ctx: &Ctx, node: &Node, coord: TileCoord) -> Option<Arc<
             }
             lumenply_render::render_tile_over(owned(backdrop), &layers, coord, ctx.canvas).map(Arc::new)
         }
-        Op::Translate { dx, dy } => crate::translate::tile(ctx, input(0), *dx, *dy, coord),
+        Op::Text { .. }
+        | Op::Fill { .. }
+        | Op::Shape { .. }
+        | Op::Transform { .. }
+        | Op::SmartFilter { .. } => crate::ops_content::eval_tile(ctx, id, node, coord),
+        Op::Translate { dx, dy } => crate::pixel_ops::tile(ctx, input(0), *dx, *dy, coord),
+        Op::Compact => crate::pixel_ops::compact(ctx.tile(input(0), coord)),
     }
 }

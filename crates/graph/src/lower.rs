@@ -5,9 +5,9 @@
 //! passes through, what a hidden layer skips), so the graph renders the
 //! same pixels as the document.
 //!
-//! Layer content that isn't an operation yet (painted pixels, and for now
-//! the rendered text, fills, shapes and smart objects) is stored as an
-//! `image` blob.
+//! A layer's own content is an operation where one exists (text, fill,
+//! shape, a smart object's transform, smart filters; see `lower/content.rs`);
+//! painted pixels are an `image` blob.
 
 use std::collections::HashMap;
 
@@ -16,6 +16,8 @@ use lumenply_doc::{Document, Layer, LayerContent, LayerId};
 use crate::blob::{BlobStore, TileHasher};
 use crate::model::{Graph, Node, NodeId};
 use crate::ops::{ClipMember, LayerProps, Op};
+
+mod content;
 
 /// A lowered document and where each layer ended up.
 pub struct Lowered {
@@ -31,6 +33,7 @@ pub fn lower(doc: &Document, blobs: &mut BlobStore, hasher: &TileHasher) -> Lowe
         blobs,
         hasher,
         layer_nodes: HashMap::new(),
+        float: doc.float_mode,
     };
     let empty = cx.graph.add(Node::new(Op::Empty, vec![]));
     let out = cx.stack(doc.layers(), empty);
@@ -46,6 +49,8 @@ struct Cx<'a> {
     blobs: &'a mut BlobStore,
     hasher: &'a TileHasher,
     layer_nodes: HashMap<LayerId, NodeId>,
+    /// The document's 32-bit mode: content ops keep float tiles.
+    float: bool,
 }
 
 fn is_filter(l: &Layer) -> bool {
@@ -102,13 +107,7 @@ impl Cx<'_> {
             let empty = self.graph.add(Node::new(Op::Empty, vec![]));
             return self.stack(children, empty);
         }
-        let op = match layer.raster_store() {
-            Some(store) if !store.is_empty() => Op::Image {
-                blob: self.blobs.insert(self.hasher, store.clone()),
-            },
-            _ => Op::Empty,
-        };
-        self.graph.add(Node::new(op, vec![]))
+        self.own_content(layer)
     }
 
     fn layer(&mut self, layer: &Layer, below: NodeId) -> NodeId {
@@ -206,43 +205,39 @@ impl Cx<'_> {
     }
 }
 
-/// Run one step of the lowering on an existing graph (for
-/// [`crate::sync`], which lowers only what changed).
-fn with_cx<T>(
-    graph: &mut Graph,
-    blobs: &mut BlobStore,
-    hasher: &TileHasher,
-    f: impl FnOnce(&mut Cx) -> T,
-) -> T {
-    let mut cx = Cx {
-        graph: std::mem::replace(graph, Graph::new(0, 0)),
-        blobs,
-        hasher,
-        layer_nodes: HashMap::new(),
-    };
-    let out = f(&mut cx);
-    *graph = cx.graph;
-    out
+/// Where [`crate::sync`] lowers the parts of a document that changed: one
+/// step of [`lower`] at a time, onto a graph being built.
+pub(crate) struct Step<'a> {
+    pub graph: &'a mut Graph,
+    pub blobs: &'a mut BlobStore,
+    pub hasher: &'a TileHasher,
+    /// The document's 32-bit mode.
+    pub float: bool,
 }
 
-/// The nodes producing a (non-group) layer's own pixels, as [`lower`]
-/// makes them; returns the last.
-pub(crate) fn lower_content(
-    graph: &mut Graph,
-    blobs: &mut BlobStore,
-    hasher: &TileHasher,
-    layer: &Layer,
-) -> NodeId {
-    debug_assert!(!matches!(layer.content, LayerContent::Group(_)));
-    with_cx(graph, blobs, hasher, |cx| cx.content(layer))
-}
+impl Step<'_> {
+    fn run<T>(&mut self, f: impl FnOnce(&mut Cx) -> T) -> T {
+        let mut cx = Cx {
+            graph: std::mem::replace(self.graph, Graph::new(0, 0)),
+            blobs: self.blobs,
+            hasher: self.hasher,
+            layer_nodes: HashMap::new(),
+            float: self.float,
+        };
+        let out = f(&mut cx);
+        *self.graph = cx.graph;
+        out
+    }
 
-/// A layer's mask node, as [`lower`] makes it (`None`: no enabled mask).
-pub(crate) fn lower_mask(
-    graph: &mut Graph,
-    blobs: &mut BlobStore,
-    hasher: &TileHasher,
-    layer: &Layer,
-) -> Option<NodeId> {
-    with_cx(graph, blobs, hasher, |cx| cx.mask(layer))
+    /// The nodes producing a (non-group) layer's own pixels, as [`lower`]
+    /// makes them; returns the last.
+    pub fn content(&mut self, layer: &Layer) -> NodeId {
+        debug_assert!(!matches!(layer.content, LayerContent::Group(_)));
+        self.run(|cx| cx.content(layer))
+    }
+
+    /// A layer's mask node, as [`lower`] makes it (`None`: no enabled mask).
+    pub fn mask(&mut self, layer: &Layer) -> Option<NodeId> {
+        self.run(|cx| cx.mask(layer))
+    }
 }
