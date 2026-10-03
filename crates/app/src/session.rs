@@ -141,6 +141,8 @@ pub(crate) struct Prefs {
     pub render_cache_mb: usize,
     /// Show the render cache's memory use in the status bar.
     pub show_render_cache: bool,
+    /// Move tool ▸ Auto-Select: a press picks the layer under the pointer.
+    pub move_auto_select: bool,
 }
 
 /// The render cache's default budget. Rendering keeps the image, layers'
@@ -218,6 +220,7 @@ impl Default for Prefs {
             panels: Default::default(),
             render_cache_mb: DEFAULT_RENDER_CACHE_MB,
             show_render_cache: false,
+            move_auto_select: false,
         }
     }
 }

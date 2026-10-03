@@ -392,13 +392,15 @@ impl App {
             self.cancel_pcrop();
         }
         let ready = self.crop.persp.quad.is_some();
-        if ui
-            .add_enabled(
-                ready,
-                primary_button("Crop")
-                    .shortcut_text(RichText::new("Enter").color(ACCENT_INK.gamma_multiply(0.7))),
-            )
-            .on_hover_text("Rectify and crop to the frame (Enter)")
+        let r = ui.add_enabled(
+            ready,
+            primary_button("Crop")
+                .shortcut_text(RichText::new("Enter").color(ACCENT_INK.gamma_multiply(0.7))),
+        );
+        // Not just "Crop": the tool on the rail has that name.
+        a11y_name(&r, "Crop to frame");
+        if r.on_hover_text("Rectify and crop to the frame (Enter)")
+            .on_disabled_hover_text("Drag a frame over the image first")
             .clicked()
         {
             self.commit_pcrop();

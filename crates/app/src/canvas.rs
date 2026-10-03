@@ -5,6 +5,12 @@ use crate::soft_proof::display_image;
 /// the render timings in `render_bench`.
 pub(crate) static COMPOSITE_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// An angle (radians) to the nearest 15°, for Shift-rotating.
+pub(crate) fn snap_angle(a: f32) -> f32 {
+    let step = 15f32.to_radians();
+    (a / step).round() * step
+}
+
 pub(crate) fn timed<T>(f: impl FnOnce() -> T) -> T {
     let t = std::time::Instant::now();
     let out = f();
@@ -164,6 +170,84 @@ impl Xform {
             rows: WARP_CELLS,
             points: w.clone(),
         })
+    }
+
+    /// The eight scale handles in document space: the corners (top-left,
+    /// top-right, bottom-right, bottom-left), then the edge midpoints
+    /// (top, right, bottom, left), where the canvas grabs them.
+    pub(crate) fn handles(&self) -> [(Handle, (f32, f32)); 8] {
+        let c = self.corners();
+        let mid = |i: usize| {
+            let (a, b) = (c[i], c[(i + 1) % 4]);
+            (Handle::Edge(i), ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0))
+        };
+        [
+            (Handle::Corner(0), c[0]),
+            (Handle::Corner(1), c[1]),
+            (Handle::Corner(2), c[2]),
+            (Handle::Corner(3), c[3]),
+            mid(0),
+            mid(1),
+            mid(2),
+            mid(3),
+        ]
+    }
+
+    /// The local point (centre-relative, before scaling) of a scale
+    /// handle: a corner or an edge's midpoint.
+    fn handle_local(&self, h: Handle) -> Option<(f32, f32)> {
+        let (w, ht) = (self.bounds.w as f32 / 2.0, self.bounds.h as f32 / 2.0);
+        match h {
+            Handle::Corner(i) => Some(([-w, w, w, -w][i % 4], [-ht, -ht, ht, ht][i % 4])),
+            Handle::Edge(i) => Some([(0.0, -ht), (w, 0.0), (0.0, ht), (-w, 0.0)][i % 4]),
+            _ => None,
+        }
+    }
+
+    /// Scale for a drag of handle `h` (a corner or edge) that pressed at
+    /// `press` and is now at `to` (document points), from the box as it
+    /// was when the drag began (`base`). The opposite corner or edge stays
+    /// where it was, or the centre with `from_centre`; `proportional`
+    /// scales both axes by one ratio (along the press–anchor diagonal).
+    pub(crate) fn drag_scale(
+        &mut self,
+        h: Handle,
+        press: (f32, f32),
+        to: (f32, f32),
+        proportional: bool,
+        from_centre: bool,
+    ) {
+        let Some((hx, hy)) = self.handle_local(h) else {
+            return;
+        };
+        let (px, py) = if from_centre { (0.0, 0.0) } else { (-hx, -hy) };
+        let (cx, cy) = self.center();
+        let mut start = self.clone();
+        (start.sx, start.sy, start.angle, start.dx, start.dy) = self.base;
+        let anchor = start.affine().apply(cx + px, cy + py);
+        let clamp = |v: f32| v.abs().clamp(0.02, 50.0) * if v < 0.0 { -1.0 } else { 1.0 };
+        if proportional {
+            let a = (press.0 - anchor.0, press.1 - anchor.1);
+            let b = (to.0 - anchor.0, to.1 - anchor.1);
+            let k = (a.0 * b.0 + a.1 * b.1) / (a.0 * a.0 + a.1 * a.1).max(1e-6);
+            self.sx = clamp(self.base.0 * k);
+            self.sy = clamp(self.base.1 * k);
+        } else {
+            // The pointer in the box's un-rotated frame, from the anchor.
+            let (s, c) = (-self.base.2).sin_cos();
+            let v = (to.0 - anchor.0, to.1 - anchor.1);
+            let local = (v.0 * c - v.1 * s, v.0 * s + v.1 * c);
+            let span = (hx - px, hy - py);
+            if span.0.abs() > 1e-6 {
+                self.sx = clamp(local.0 / span.0);
+            }
+            if span.1.abs() > 1e-6 {
+                self.sy = clamp(local.1 / span.1);
+            }
+        }
+        let now = self.affine().apply(cx + px, cy + py);
+        self.dx += anchor.0 - now.0;
+        self.dy += anchor.1 - now.1;
     }
 
     pub(crate) fn bbox(&self) -> Rect {
@@ -864,47 +948,13 @@ impl App {
                 changed = true;
             } else if let (Some(a), Some(b)) = (self.drag_start, resp.interact_pointer_pos()) {
                 match h {
-                    Handle::Corner(i) if ctx.input(|inp| inp.modifiers.shift) => {
-                        // Shift frees the aspect ratio: each axis follows the
-                        // pointer in the box's un-rotated frame (corners are
-                        // top-left, top-right, bottom-right, bottom-left).
-                        let (px, py) = to_doc(b);
-                        let v = (px - (cx + x.dx), py - (cy + x.dy));
-                        let (s, c) = (-x.angle).sin_cos();
-                        let local = (v.0 * c - v.1 * s, v.0 * s + v.1 * c);
-                        let (sx, sy) = ([-1.0, 1.0, 1.0, -1.0][i], [-1.0, -1.0, 1.0, 1.0][i]);
-                        let clamp = |v: f32| {
-                            let m = v.abs().clamp(0.02, 50.0);
-                            m * v.signum()
-                        };
-                        x.sx = clamp(sx * local.0 / (x.bounds.w as f32 / 2.0));
-                        x.sy = clamp(sy * local.1 / (x.bounds.h as f32 / 2.0));
-                    }
-                    Handle::Corner(_) => {
-                        // Corners scale both axes by the same ratio.
-                        let d0 = a.distance(centre_s).max(1.0);
-                        let d1 = b.distance(centre_s);
-                        let k = d1 / d0;
-                        x.sx = (x.base.0 * k).clamp(-50.0, 50.0);
-                        x.sy = (x.base.1 * k).clamp(-50.0, 50.0);
-                    }
-                    Handle::Edge(i) => {
-                        // One axis only: measure the pointer in the box's
-                        // un-rotated frame; crossing the centre mirrors.
-                        let (px, py) = to_doc(b);
-                        let v = (px - (cx + x.dx), py - (cy + x.dy));
-                        let (s, c) = (-x.angle).sin_cos();
-                        let local = (v.0 * c - v.1 * s, v.0 * s + v.1 * c);
-                        let clamp = |v: f32| {
-                            let m = v.abs().clamp(0.02, 50.0);
-                            m * v.signum()
-                        };
-                        match i {
-                            1 => x.sx = clamp(local.0 / (x.bounds.w as f32 / 2.0)),
-                            3 => x.sx = clamp(-local.0 / (x.bounds.w as f32 / 2.0)),
-                            0 => x.sy = clamp(-local.1 / (x.bounds.h as f32 / 2.0)),
-                            _ => x.sy = clamp(local.1 / (x.bounds.h as f32 / 2.0)),
-                        }
+                    Handle::Corner(_) | Handle::Edge(_) => {
+                        // As in Photoshop: the opposite corner or edge stays
+                        // put (Alt: the centre does); corners keep the
+                        // proportions unless Shift is held.
+                        let (shift, alt) = ctx.input(|i| (i.modifiers.shift, i.modifiers.alt));
+                        let proportional = matches!(h, Handle::Corner(_)) && !shift;
+                        x.drag_scale(h, to_doc(a), to_doc(b), proportional, alt);
                     }
                     Handle::Inside => {
                         let (ax, ay) = to_doc(a);
@@ -944,6 +994,10 @@ impl App {
                         let a0 = (a.y - centre_s.y).atan2(a.x - centre_s.x);
                         let a1 = (b.y - centre_s.y).atan2(b.x - centre_s.x);
                         x.angle = x.base.2 + (a1 - a0);
+                        // Shift turns in 15° steps, as in Photoshop.
+                        if ctx.input(|i| i.modifiers.shift) {
+                            x.angle = snap_angle(x.angle);
+                        }
                     }
                     Handle::WarpPoint(_) => {}
                 }
@@ -1309,15 +1363,24 @@ impl App {
                         self.begin_text_edit(ctx, id, crate::text_edit::EditStart::At(x, y));
                     }
                 }
+                // Auto-Select (or Cmd at the press) picks the layer first.
+                if resp.clicked_by(primary) {
+                    if let Some(p) = resp.interact_pointer_pos() {
+                        self.move_auto_select(ctx, to_doc(p));
+                    }
+                }
                 if resp.drag_started_by(primary) {
+                    if let Some(p) = ctx.input(|i| i.pointer.press_origin()) {
+                        self.move_auto_select(ctx, to_doc(p));
+                    }
                     let fill = self
                         .active_layer()
                         .is_some_and(|l| l.fill_layer().is_some() || l.shape_layer().is_some());
-                    // Alt-drag moves a copy, as in Photoshop.
+                    // Alt-drag moves a copy, as in Photoshop (one undo step).
                     if ctx.input(|i| i.modifiers.alt)
                         && (self.active_is_pixel() || self.active_is_text() || fill)
                     {
-                        self.duplicate_active();
+                        self.begin_move_copy();
                     }
                     if let Some(why) = self.lock_block(layer_actions::LockNeed::Move) {
                         self.status = why.into();
@@ -1378,12 +1441,7 @@ impl App {
                     self.drag_start = None;
                     self.end_snap();
                     let (dx, dy) = self.move_offset;
-                    if let (Some(layer), true) = (self.active, dx != 0 || dy != 0) {
-                        self.run(&MoveLayer { layer, dx, dy });
-                    } else {
-                        // The drag went nowhere; drop any preview left on the texture.
-                        self.mark(None);
-                    }
+                    self.finish_move(self.active, dx, dy);
                 }
             }
             Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal => {
@@ -2158,17 +2216,13 @@ pub(crate) fn paint_xform_box(painter: &egui::Painter, x: &Xform, to_screen: imp
         Stroke::new(2.0, Color32::from_black_alpha(140)),
     ));
     painter.add(Shape::line(closed, Stroke::new(1.0, Color32::WHITE)));
-    for p in &pts {
-        painter.rect_filled(
-            egui::Rect::from_center_size(*p, Vec2::splat(8.0)),
-            1.0,
-            Color32::WHITE,
-        );
-        painter.rect_stroke(
-            egui::Rect::from_center_size(*p, Vec2::splat(8.0)),
-            1.0,
-            Stroke::new(1.0, ACCENT),
-        );
+    // Eight handles, as in Photoshop: corners, and the edge midpoints
+    // that stretch one axis (smaller, so the corners still read first).
+    for (h, (px, py)) in x.handles() {
+        let size = if matches!(h, Handle::Corner(_)) { 8.0 } else { 6.0 };
+        let r = egui::Rect::from_center_size(to_screen(px, py), Vec2::splat(size));
+        painter.rect_filled(r, 1.0, Color32::WHITE);
+        painter.rect_stroke(r, 1.0, Stroke::new(1.0, ACCENT));
     }
     let (cx, cy) = x.center();
     let c = to_screen(cx + x.dx, cy + x.dy);
@@ -2266,5 +2320,95 @@ mod tests {
         assert!(mesh
             .iter()
             .all(|p| b.contains(p.0.floor() as i32, p.1.floor() as i32)));
+    }
+
+    fn corner(x: &Xform, i: usize) -> (f32, f32) {
+        let c = x.corners()[i];
+        ((c.0 * 100.0).round() / 100.0, (c.1 * 100.0).round() / 100.0)
+    }
+
+    #[test]
+    fn corner_drags_scale_from_the_opposite_corner_and_alt_from_the_centre() {
+        // A 200 × 100 box at (100, 100): drag the bottom-right corner
+        // (300, 200) to (400, 250), along its diagonal from (100, 100).
+        let mut x = xform(Rect::new(100, 100, 200, 100));
+        x.drag_scale(Handle::Corner(2), (300.0, 200.0), (400.0, 250.0), true, false);
+        assert_eq!((x.sx, x.sy), (1.5, 1.5));
+        assert_eq!(corner(&x, 0), (100.0, 100.0), "the top-left corner stays");
+        assert_eq!(corner(&x, 2), (400.0, 250.0));
+        // Shift: each axis follows the pointer on its own.
+        let mut x = xform(Rect::new(100, 100, 200, 100));
+        x.drag_scale(Handle::Corner(2), (300.0, 200.0), (500.0, 200.0), false, false);
+        assert_eq!((x.sx, x.sy), (2.0, 1.0));
+        assert_eq!(corner(&x, 0), (100.0, 100.0));
+        assert_eq!(corner(&x, 2), (500.0, 200.0));
+        // Alt: about the centre (200, 150), both sides grow.
+        let mut x = xform(Rect::new(100, 100, 200, 100));
+        x.drag_scale(Handle::Corner(2), (300.0, 200.0), (400.0, 250.0), true, true);
+        assert_eq!((x.sx, x.sy), (2.0, 2.0));
+        assert_eq!(corner(&x, 0), (0.0, 50.0));
+        assert_eq!(corner(&x, 2), (400.0, 250.0));
+    }
+
+    #[test]
+    fn edge_drags_move_one_side_and_keep_the_other_even_when_turned() {
+        // The left edge in to x 150: the right edge stays at 300.
+        let mut x = xform(Rect::new(100, 100, 200, 100));
+        x.drag_scale(Handle::Edge(3), (100.0, 150.0), (150.0, 150.0), false, false);
+        assert_eq!((x.sx, x.sy), (0.75, 1.0));
+        assert_eq!(corner(&x, 0), (150.0, 100.0));
+        assert_eq!(corner(&x, 2), (300.0, 200.0));
+        // Turned 90° clockwise about (200, 150): the box spans (150, 50)
+        // to (250, 250) and its "bottom" edge (local +y) is on the left at
+        // x 150. Dragging it out to x 100 grows only that side.
+        let mut x = xform(Rect::new(100, 100, 200, 100));
+        x.angle = std::f32::consts::FRAC_PI_2;
+        x.base.2 = x.angle;
+        x.drag_scale(Handle::Edge(2), (150.0, 150.0), (100.0, 150.0), false, false);
+        assert!((x.sy - 1.5).abs() < 1e-4 && (x.sx - 1.0).abs() < 1e-4);
+        let b = x.bbox();
+        assert_eq!((b.x, b.y, b.w, b.h), (100, 50, 150, 200), "{b:?}");
+        // Alt: both sides move, about the centre.
+        let mut x = xform(Rect::new(100, 100, 200, 100));
+        x.drag_scale(Handle::Edge(1), (300.0, 150.0), (350.0, 150.0), false, true);
+        assert_eq!((x.sx, x.sy), (1.5, 1.0));
+        assert_eq!(corner(&x, 0), (50.0, 100.0));
+    }
+
+    #[test]
+    fn the_box_shows_eight_handles_where_the_canvas_grabs_them() {
+        let mut x = xform(Rect::new(100, 100, 200, 100));
+        x.drag_scale(Handle::Corner(2), (300.0, 200.0), (400.0, 250.0), true, false);
+        let pts: Vec<(f32, f32)> = x.handles().iter().map(|(_, p)| *p).collect();
+        assert_eq!(
+            pts,
+            vec![
+                (100.0, 100.0),
+                (400.0, 100.0),
+                (400.0, 250.0),
+                (100.0, 250.0),
+                (250.0, 100.0),
+                (400.0, 175.0),
+                (250.0, 250.0),
+                (100.0, 175.0),
+            ]
+        );
+        // Each edge handle is the one that stretches that side only.
+        let (h, at) = x.handles()[5];
+        assert!(h == Handle::Edge(1));
+        let mut y = x.clone();
+        y.base = (y.sx, y.sy, y.angle, y.dx, y.dy);
+        y.drag_scale(h, at, (500.0, 175.0), false, false);
+        assert_eq!((y.corners()[0], y.corners()[2]), ((100.0, 100.0), (500.0, 250.0)));
+    }
+
+    #[test]
+    fn shift_rotation_snaps_to_fifteen_degrees() {
+        let deg = |a: f32| (snap_angle(a.to_radians()).to_degrees() * 1000.0).round() / 1000.0;
+        assert_eq!(deg(40.05), 45.0);
+        assert_eq!(deg(37.4), 30.0);
+        assert_eq!(deg(-8.0), -15.0);
+        assert_eq!(deg(7.4), 0.0);
+        assert_eq!(deg(91.0), 90.0);
     }
 }

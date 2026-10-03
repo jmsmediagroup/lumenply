@@ -29,12 +29,17 @@ impl App {
                 let used = bar_scroll(ui, |ui| {
                     ui.spacing_mut().slider_width = tier.slider_w();
                     if let Some(mut x) = self.xform.clone() {
-                        ui.label(
-                            RichText::new("Free Transform")
-                                .family(egui::FontFamily::Name("semibold".into()))
-                                .color(TEXT),
-                        );
-                        ui.separator();
+                        // Narrow windows drop the title and the buttons'
+                        // key hints (still in their tooltips) so Cancel fits.
+                        let tight = tier == Tier::Tight;
+                        if !tight {
+                            ui.label(
+                                RichText::new("Free Transform")
+                                    .family(egui::FontFamily::Name("semibold".into()))
+                                    .color(TEXT),
+                            );
+                            ui.separator();
+                        }
                         // Editable numbers; the canvas handles drive the
                         // same fields. In perspective mode the corners are
                         // free points, so the numbers go quiet.
@@ -65,7 +70,7 @@ impl App {
                             let mut skew = x.shear.atan().to_degrees();
                             let field = |ui: &mut egui::Ui, label: &str, dv: egui::DragValue| {
                                 ui.label(RichText::new(label).color(MUTED));
-                                let r = num_field(ui, dv.fixed_decimals(1), 70.0);
+                                let r = num_field(ui, dv.fixed_decimals(1), if tight { 60.0 } else { 70.0 });
                                 a11y_name(
                                     &r,
                                     match label {
@@ -127,10 +132,11 @@ impl App {
                             self.xform = Some(x.clone());
                         }
                         ui.separator();
+                        let (enter, esc) = if tight { ("", "") } else { ("Enter", "Esc") };
                         if ui
                             .add(
                                 primary_button("Apply").shortcut_text(
-                                    RichText::new("Enter").color(ACCENT_INK.gamma_multiply(0.7)),
+                                    RichText::new(enter).color(ACCENT_INK.gamma_multiply(0.7)),
                                 ),
                             )
                             .on_hover_text("Commit the transform (Enter)")
@@ -139,7 +145,7 @@ impl App {
                             self.commit_free_transform();
                         }
                         if ui
-                            .add(footer_button("Cancel").shortcut_text("Esc"))
+                            .add(footer_button("Cancel").shortcut_text(esc))
                             .on_hover_text("Drop the transform (Esc)")
                             .clicked()
                         {
@@ -183,6 +189,7 @@ impl App {
                     ui.separator();
                     match self.tool {
                         Tool::Move => {
+                            self.auto_select_toggle(ui);
                             let block = self.action_block("xform");
                             if ui
                                 .add_enabled(
@@ -767,7 +774,7 @@ pub(crate) fn select_ops(ui: &mut egui::Ui, op: &mut CombineOp) {
 /// How to use a tool, in a phrase.
 fn tool_hint(tool: Tool) -> Option<&'static str> {
     Some(match tool {
-        Tool::Move => "Drag to move the active layer",
+        Tool::Move => "Drag moves the layer · Alt-drag a copy · Shift+arrows 10 px",
         Tool::Eyedropper => "Click to pick the brush colour from the image",
         Tool::Gradient => "Drag on the canvas; Shift snaps to 45°",
         Tool::RectSelect | Tool::EllipseSelect => {
