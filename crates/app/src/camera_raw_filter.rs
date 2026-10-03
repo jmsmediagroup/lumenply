@@ -414,11 +414,16 @@ impl App {
             }
         }
         if self.editor.history().len() > before {
-            self.status = format!(
-                "Camera Raw Filter ({}) in {:.2} s",
-                t.apply.title().to_lowercase(),
-                started.elapsed().as_secs_f32()
-            );
+            let how = t.apply.title().to_lowercase();
+            self.status = if t.apply == CrfApply::LiveLayer {
+                // A live layer renders as the canvas draws: no time to report.
+                format!("Camera Raw Filter: {how}")
+            } else {
+                format!(
+                    "Camera Raw Filter ({how}) in {:.2} s",
+                    started.elapsed().as_secs_f32()
+                )
+            };
         }
     }
 
@@ -656,5 +661,61 @@ mod tests {
         let missing = crate::a11y_tests::nameless(&mut app, &ctx);
         assert!(app.camera_raw.is_some(), "still open");
         assert_eq!(missing, Vec::<String>::new());
+    }
+
+    /// Properties' "Edit in Camera Raw…" (a request in egui's memory)
+    /// re-opens the smart filter shown there on the next frame.
+    #[test]
+    fn edit_in_camera_raw_reopens_the_focused_smart_filter() {
+        let (mut app, id) = grey_app();
+        let ctx = crate::a11y_tests::ctx();
+        app.run(&ConvertToSmartObject { layer: id });
+        app.run(&AddSmartFilter::new(id, Filter::GaussianBlur { radius: 2.0 }));
+        app.run(&AddSmartFilter::new(
+            id,
+            Filter::Develop {
+                settings: exposure(0.5),
+                frame: [0, 0, 120, 80],
+            },
+        ));
+        crate::smart_filters_ui::set_sf_focus(&ctx, Some((id, 1)));
+        // Its summary and button in Properties have spoken names.
+        let missing = crate::a11y_tests::nameless(&mut app, &ctx);
+        assert_eq!(missing, Vec::<String>::new());
+        assert!(app.camera_raw.is_none());
+        ctx.data_mut(|m| m.insert_temp(request_key(), true));
+        let _ = crate::a11y_tests::nameless(&mut app, &ctx);
+        let st = app.camera_raw.as_ref().expect("re-opened");
+        assert_eq!(st.filter.as_ref().unwrap().edit, CrfEdit::SmartFilter(1));
+        assert_eq!(st.dev, exposure(0.5));
+        assert!(!take_request(&ctx), "the request was used up");
+    }
+
+    /// Shift+Cmd+A opens the workspace; Cmd+A alone still selects all
+    /// (the longer chord is consumed first).
+    #[test]
+    fn shift_cmd_a_opens_it_and_cmd_a_still_selects_all() {
+        let (mut app, _) = grey_app();
+        let ctx = crate::a11y_tests::ctx();
+        let press = |app: &mut App, m: egui::Modifiers| {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+                events: vec![egui::Event::Key {
+                    key: Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: m,
+                }],
+                modifiers: m,
+                ..Default::default()
+            };
+            let _ = ctx.run(raw, |ctx| app.frame(ctx));
+        };
+        press(&mut app, egui::Modifiers::COMMAND);
+        assert!(app.camera_raw.is_none());
+        assert!(app.editor.doc().selection.is_some(), "Cmd+A selected all");
+        press(&mut app, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
+        assert!(app.camera_raw.as_ref().is_some_and(|st| st.filter.is_some()));
     }
 }
