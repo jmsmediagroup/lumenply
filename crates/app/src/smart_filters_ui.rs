@@ -195,9 +195,23 @@ impl App {
         Some(doc)
     }
 
+    /// The settings a filter dialog opens with: as that filter was last
+    /// applied in this session (Photoshop's rule), else `f`, its defaults.
+    pub(crate) fn filter_settings(&self, f: Filter) -> Filter {
+        let kind = std::mem::discriminant(&f);
+        self.filter_last
+            .iter()
+            .find(|l| std::mem::discriminant(*l) == kind)
+            .cloned()
+            .unwrap_or(f)
+    }
+
     /// The filter dialog's Apply: bake, or add a smart filter (and open it
     /// in Properties).
     pub(crate) fn apply_filter_dialog(&mut self, ctx: &egui::Context, layer: LayerId, f: Filter) {
+        let kind = std::mem::discriminant(&f);
+        self.filter_last.retain(|l| std::mem::discriminant(l) != kind);
+        self.filter_last.push(f.clone());
         if self.filters_go_smart() {
             self.run(&AddSmartFilter::new(layer, f));
             let n = self
@@ -700,6 +714,25 @@ mod tests {
             .unwrap()
             .get_pixel(x, 16)
             .r
+    }
+
+    #[test]
+    fn filter_dialogs_reopen_with_the_settings_last_applied() {
+        let (mut app, id) = step_app();
+        let ctx = crate::a11y_tests::ctx();
+        app.run_menu_action("filter-gauss");
+        assert!(matches!(app.dialog, Some(Dialog::Filter(Filter::GaussianBlur { radius })) if radius == 8.0));
+        app.dialog = None;
+        app.apply_filter_dialog(&ctx, id, Filter::GaussianBlur { radius: 4.0 });
+        app.run_menu_action("filter-gauss");
+        assert!(
+            matches!(app.dialog, Some(Dialog::Filter(Filter::GaussianBlur { radius })) if radius == 4.0),
+            "Gaussian Blur reopens at 4 px"
+        );
+        app.dialog = None;
+        // Other filters keep their own defaults.
+        app.run_menu_action("filter-box");
+        assert!(matches!(app.dialog, Some(Dialog::Filter(Filter::BoxBlur { radius })) if radius == 5.0));
     }
 
     #[test]

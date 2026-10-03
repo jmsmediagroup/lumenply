@@ -410,6 +410,8 @@ struct App {
 
     dialog: Option<Dialog>,
     filter_previewed: bool,
+    /// Each filter kind's settings as last applied (dialogs reopen with them).
+    filter_last: Vec<Filter>,
     status: String,
     /// History length at the last save, for the unsaved-changes dot.
     saved_rev: usize,
@@ -657,6 +659,7 @@ impl App {
                 .map(|s| s.split(',').map(str::to_string).collect())
                 .unwrap_or_default(),
             filter_previewed: false,
+            filter_last: Vec::new(),
             status: String::from("Ready"),
             tabs: Vec::new(),
             cur_tab: 0,

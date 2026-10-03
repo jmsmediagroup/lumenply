@@ -1040,7 +1040,7 @@ impl App {
             tool if self.retouch_tool_action(tool) => {}
             filter if filter.starts_with("filter-") => {
                 match filter_presets().into_iter().find(|(_, f)| filter_id(f) == filter) {
-                    Some((_, f)) => self.dialog = Some(Dialog::Filter(f)),
+                    Some((_, f)) => self.dialog = Some(Dialog::Filter(self.filter_settings(f))),
                     None => self.status = format!("Unknown filter '{filter}'"),
                 }
             }
