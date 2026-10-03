@@ -195,6 +195,12 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Show or hide the Info panel", "info-panel"),
     ("Make work path from selection", "make-work-path"),
     ("Puppet Warp", "puppet-warp"),
+    ("Shadows/Highlights...", "adj-shadows-highlights"),
+    ("Replace Color...", "adj-replace-color"),
+    ("Match Color...", "adj-match-color"),
+    ("Desaturate", "adj-desaturate"),
+    ("Equalize", "adj-equalize"),
+    ("Auto tone", "auto-tone"),
 ];
 
 impl App {
@@ -565,6 +571,9 @@ impl App {
         if let Some(block) = self.panel_action_block(id) {
             return block;
         }
+        if let Some(block) = self.adjx_action_block(id) {
+            return block;
+        }
         match id {
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
             "redo" if !self.editor.can_redo() => Some("Nothing to redo"),
@@ -706,7 +715,7 @@ impl App {
         if self.run_layer_action(id) || self.run_smart_filter_action(id) {
             return;
         }
-        if self.run_panel_action(id) {
+        if self.run_panel_action(id) || self.run_adjx_action(id) {
             return;
         }
         match id {
@@ -935,7 +944,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 142); // + puppet warp
+        assert_eq!(n, 148); // + Image ▸ Adjustments (5) and auto tone
     }
 
     #[test]

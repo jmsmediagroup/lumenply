@@ -22,6 +22,7 @@ use lumenply_doc::{
 use lumenply_io::project;
 use lumenply_tiles::{Affine, Raster, Rect};
 
+mod adjust_dialogs;
 mod adjust_ui;
 mod blend_ui;
 mod brand;
@@ -323,6 +324,8 @@ struct App {
     puppet: Option<Box<puppet_ui::PuppetState>>,
     /// The Camera Raw develop workspace, while a RAW file is being opened.
     camera_raw: Option<Box<camera_raw::CameraRawState>>,
+    /// The open Image ▸ Adjustments dialog (Shadows/Highlights, ...).
+    adjx: Option<Box<adjust_dialogs::AdjxState>>,
     /// Select ▸ Select and Mask's workspace, while open (it replaces the
     /// editor UI), and the settings it remembers between openings.
     select_mask: Option<Box<select_mask::SelectMaskState>>,
@@ -519,6 +522,7 @@ impl App {
             quick: Default::default(),
             clip: None,
             camera_raw: None,
+            adjx: None,
             select_mask: None,
             select_mask_prefs: Default::default(),
             clone_source: None,
@@ -1449,6 +1453,7 @@ impl App {
             self.floating_panels(ctx);
         }
         self.dialogs(ctx);
+        self.adjx_ui(ctx);
         self.palette_ui(ctx);
         let unsaved = self.editor.history().len() != self.saved_rev;
         if unsaved && self.drag.is_none() && self.last_autosave.elapsed() > self.prefs.autosave_every() {
