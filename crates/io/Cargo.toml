@@ -27,6 +27,9 @@ gif = "0.13"
 color_quant = "1.1"
 
 lumenply-render.workspace = true
+lumenply-graph.workspace = true
+blake3.workspace = true
+rayon.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFURL", "CFDictionary", "CFNumber", "CFString", "CFCGTypes"] }

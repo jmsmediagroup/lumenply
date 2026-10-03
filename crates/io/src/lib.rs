@@ -4,9 +4,11 @@
 //! linear light with premultiplied alpha, so every load and save converts.
 //! Only PNG and JPEG are wired up today; TIFF, WebP, JPEG XL, HEIF, RAW,
 //! EXR and PSD each get their own module here as the roadmap reaches them.
-//! The native project format lives in [`project`].
+//! The native project format lives in [`project`] (layer trees, version 1)
+//! and [`graph_project`] (edit graphs, version 3).
 
 pub mod abr;
+pub mod graph_project;
 pub mod lut_files;
 pub mod ora;
 pub mod pattern_files;
