@@ -353,13 +353,31 @@ impl App {
         let mut finished = false;
         ui.horizontal(|ui| {
             row_label(ui, "Fill", LABEL_W);
-            let mut grad = matches!(fill, Fill::Gradient { .. });
-            if segmented(ui, &mut grad, &[(false, "Solid color"), (true, "Gradient")]) {
-                fill = match &fill {
-                    Fill::Solid { color } => Fill::gradient(Gradient::two(*color, [1.0; 3])),
-                    Fill::Gradient { gradient, .. } => Fill::Solid {
-                        color: gradient.sorted()[0].color,
-                    },
+            // 0 solid, 1 gradient, 2 pattern.
+            let kind = |f: &Fill| match f {
+                Fill::Solid { .. } => 0u8,
+                Fill::Gradient { .. } => 1,
+                Fill::Pattern { .. } => 2,
+            };
+            let mut k = kind(&fill);
+            if segmented(ui, &mut k, &[(0, "Solid color"), (1, "Gradient"), (2, "Pattern")]) {
+                let first = match &fill {
+                    Fill::Solid { color } => *color,
+                    Fill::Gradient { gradient, .. } => gradient.sorted()[0].color,
+                    Fill::Pattern { .. } => [0.5; 3],
+                };
+                fill = match k {
+                    0 => Fill::Solid { color: first },
+                    1 => Fill::gradient(Gradient::two(first, [1.0; 3])),
+                    _ => Fill::pattern(
+                        self.editor
+                            .doc()
+                            .patterns
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| self.patterns.default_pattern())
+                            .reference(),
+                    ),
                 };
                 finished = true;
             }
@@ -399,6 +417,9 @@ impl App {
                 if check(ui, reverse, "Reverse").changed() {
                     finished = true;
                 }
+            }
+            Fill::Pattern { .. } => {
+                finished |= self.pattern_fill_rows(ui, crate::pattern_ui::PickTarget::Fill(id), &mut fill);
             }
         }
         if fill != before {

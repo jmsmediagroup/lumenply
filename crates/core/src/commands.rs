@@ -20,6 +20,7 @@ pub use crate::guides::{AddGuide, ClearGuides, MoveGuide, RemoveGuide};
 
 pub use crate::erasers::{BackgroundErase, MagicErase};
 pub use crate::fill_cmds::{AddFillLayer, SetFill};
+pub use crate::pattern_cmds::{DefinePattern, RemoveUnusedPatterns};
 pub use crate::retouch::{ContentAwareMove, HealRegion, PatchHeal, RedEye, RetouchSample, SpotHealAware};
 pub use crate::retouch_brush::HistoryStroke;
 pub use crate::shape_cmds::{AddShapeLayer, SetShape, ShapeFromWorkPath, ShapeToWorkPath};

@@ -66,6 +66,18 @@ pub enum Fill {
         #[serde(default)]
         offset: [f32; 2],
     },
+    /// A pattern tiled from the canvas origin (ADR 0016).
+    Pattern {
+        pattern: crate::pattern::PatternRef,
+        /// 1.0 = 100%.
+        scale: f32,
+        /// Phase in canvas pixels: where the pattern's corner sits.
+        #[serde(default)]
+        offset: [f32; 2],
+        /// Counter-clockwise rotation in degrees.
+        #[serde(default)]
+        angle: f32,
+    },
 }
 
 impl Fill {
@@ -73,6 +85,7 @@ impl Fill {
         match self {
             Fill::Solid { .. } => "Color Fill",
             Fill::Gradient { .. } => "Gradient Fill",
+            Fill::Pattern { .. } => "Pattern Fill",
         }
     }
 
@@ -141,6 +154,24 @@ impl Fill {
                     reverse: *reverse,
                 }
             }
+            Fill::Pattern {
+                pattern,
+                scale,
+                offset,
+                angle,
+            } => FillSampler::Pattern(crate::pattern::PatternSampler::new(
+                pattern, *scale, *offset, *angle,
+            )),
+        }
+    }
+
+    /// A pattern fill at 100%, anchored at the canvas origin.
+    pub fn pattern(pattern: crate::pattern::PatternRef) -> Fill {
+        Fill::Pattern {
+            pattern,
+            scale: 1.0,
+            offset: [0.0, 0.0],
+            angle: 0.0,
         }
     }
 }
@@ -162,6 +193,7 @@ pub enum FillSampler {
         span: f32,
         reverse: bool,
     },
+    Pattern(crate::pattern::PatternSampler),
 }
 
 impl FillSampler {
@@ -205,6 +237,7 @@ impl FillSampler {
     pub fn sample(&self, x: i32, y: i32) -> Rgba {
         match self {
             FillSampler::Solid(c) => *c,
+            FillSampler::Pattern(p) => p.sample(x, y),
             FillSampler::Gradient { table, .. } => {
                 let p = self.position(x, y) * (table.len() - 1) as f32;
                 let i = p as usize;

@@ -236,6 +236,7 @@ pub mod fill;
 pub mod gradient;
 pub mod guides;
 pub mod locks;
+pub mod pattern;
 pub mod selection;
 pub mod selection_ops;
 pub mod shape;
@@ -248,6 +249,7 @@ pub use fill::{Fill, FillLayer, GradientStyle};
 pub use gradient::{Gradient, GradientStop};
 pub use guides::{Guide, Orientation};
 pub use locks::LayerLocks;
+pub use pattern::{Pattern, PatternOverlayFx, PatternRef};
 pub use selection::{CombineOp, Selection};
 pub use shape::{CustomShape, ShapeGeometry, ShapeKind, ShapeLayer, ShapeParams, ShapeStroke, StrokeAlign};
 pub use smart_filter::{SmartFilter, SmartFilters};
@@ -423,6 +425,9 @@ pub struct LayerEffects {
     /// Emboss lighting along the coverage edge (inner bevel).
     pub bevel: Option<BevelFx>,
     pub stroke: Option<StrokeFx>,
+    /// A pattern tiled over the layer's coverage (under the gradient and
+    /// colour overlays, as in Photoshop).
+    pub pattern_overlay: Option<PatternOverlayFx>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -608,6 +613,7 @@ impl LayerEffects {
             && self.inner_glow.is_none()
             && self.bevel.is_none()
             && self.stroke.is_none()
+            && self.pattern_overlay.is_none()
     }
 
     /// How far (px) any effect reaches outside the layer's coverage — also
@@ -1068,6 +1074,9 @@ pub struct Document {
     /// Bottom-to-top.
     layers: Vec<Layer>,
     next_id: LayerId,
+    /// Patterns the document's fills and effects use (ADR 0016); covered
+    /// by undo, saved with projects and PSDs.
+    pub patterns: Vec<Pattern>,
 }
 
 /// A path stored under a name in the document's Paths list.
@@ -1166,6 +1175,7 @@ impl Document {
             saved_selections: Vec::new(),
             layers: Vec::new(),
             next_id: 1,
+            patterns: Vec::new(),
         }
     }
 
@@ -1182,6 +1192,7 @@ impl Document {
             saved_selections: Vec::new(),
             layers,
             next_id,
+            patterns: Vec::new(),
         }
     }
 

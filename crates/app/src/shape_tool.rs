@@ -20,6 +20,7 @@ pub(crate) enum FillMode {
     None,
     Solid,
     Gradient,
+    Pattern,
 }
 
 /// The Shape tool's options and the drag in progress.
@@ -130,6 +131,9 @@ impl ShapeTool {
                 color: lin(self.fill_rgb),
             }),
             FillMode::Gradient => Some(Fill::gradient(Gradient::two(lin(self.fill_rgb), lin(bg)))),
+            FillMode::Pattern => Some(Fill::pattern(
+                lumenply_render::pattern::builtin_patterns()[0].reference(),
+            )),
         };
         let stroke = self.stroke_on.then(|| ShapeStroke {
             color: lin(self.stroke_rgb),
@@ -387,6 +391,7 @@ impl App {
                 FillMode::None => "None",
                 FillMode::Solid => "Solid",
                 FillMode::Gradient => "Gradient",
+                FillMode::Pattern => "Pattern",
             })
             .width(84.0)
             .show_ui(ui, |ui| {
@@ -394,6 +399,7 @@ impl App {
                 ui.selectable_value(&mut st.fill, FillMode::None, "None");
                 ui.selectable_value(&mut st.fill, FillMode::Solid, "Solid");
                 ui.selectable_value(&mut st.fill, FillMode::Gradient, "Gradient");
+                ui.selectable_value(&mut st.fill, FillMode::Pattern, "Pattern");
             })
             .response;
         a11y_name(&r, "Shape fill");
@@ -449,6 +455,7 @@ impl App {
                 None => FillMode::None,
                 Some(Fill::Solid { .. }) => FillMode::Solid,
                 Some(Fill::Gradient { .. }) => FillMode::Gradient,
+                Some(Fill::Pattern { .. }) => FillMode::Pattern,
             };
             let was = mode;
             segmented(
@@ -458,18 +465,28 @@ impl App {
                     (FillMode::None, "None"),
                     (FillMode::Solid, "Solid"),
                     (FillMode::Gradient, "Gradient"),
+                    (FillMode::Pattern, "Pattern"),
                 ],
             );
             if mode != was {
                 let first = match &shape.fill {
                     Some(Fill::Solid { color }) => *color,
                     Some(Fill::Gradient { gradient, .. }) => gradient.sorted()[0].color,
-                    None => lin(self.shape.fill_rgb),
+                    Some(Fill::Pattern { .. }) | None => lin(self.shape.fill_rgb),
                 };
                 shape.fill = match mode {
                     FillMode::None => None,
                     FillMode::Solid => Some(Fill::Solid { color: first }),
                     FillMode::Gradient => Some(Fill::gradient(Gradient::two(first, [1.0; 3]))),
+                    FillMode::Pattern => Some(Fill::pattern(
+                        self.editor
+                            .doc()
+                            .patterns
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| self.patterns.default_pattern())
+                            .reference(),
+                    )),
                 };
                 finished = true;
             }
@@ -504,6 +521,9 @@ impl App {
                 if check(ui, reverse, "Reverse").changed() {
                     finished = true;
                 }
+            }
+            Some(f @ Fill::Pattern { .. }) => {
+                finished |= self.pattern_fill_rows(ui, crate::pattern_ui::PickTarget::Shape(id), f);
             }
             None => {}
         }

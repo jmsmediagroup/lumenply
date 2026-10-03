@@ -412,6 +412,8 @@ impl App {
         self.act(ui, "Content-Aware Fill...", "content-aware");
         self.act(ui, "Clear", "clear");
         self.act(ui, "Define brush tip", "define-brush");
+        self.act(ui, "Define Pattern", "define-pattern");
+        self.act(ui, "Import patterns...", "import-patterns");
         menu_separator(ui);
         self.act(ui, "Preferences...", "prefs");
     }
@@ -501,6 +503,7 @@ impl App {
         menu(ui, "New fill layer", |ui| {
             self.act(ui, "Solid color", "fill-solid");
             self.act(ui, "Gradient", "fill-gradient");
+            self.act(ui, "Pattern...", "fill-pattern");
         });
         self.act(ui, "New shape from path", "shape-from-path");
         menu_separator(ui);

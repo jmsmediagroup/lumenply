@@ -46,6 +46,7 @@ mod macos_open;
 mod menu;
 mod options_bar;
 mod palette;
+mod pattern_ui;
 mod pen;
 mod properties;
 mod quick_select_tool;
@@ -427,6 +428,8 @@ struct App {
     brushes: brush_panel::BrushLibrary,
     /// On-canvas text editing with the Text tool (text_edit.rs).
     typer: text_edit::TypeTool,
+    /// Pattern library and picker (pattern_ui.rs).
+    patterns: pattern_ui::PatternLibrary,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -594,6 +597,7 @@ impl App {
             gradient: Default::default(),
             brushes: brush_panel::BrushLibrary::load(),
             typer: text_edit::TypeTool::default(),
+            patterns: Default::default(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -1430,6 +1434,7 @@ impl App {
         }
         self.dialogs(ctx);
         self.palette_ui(ctx);
+        self.pattern_picker_ui(ctx);
         let unsaved = self.editor.history().len() != self.saved_rev;
         if unsaved && self.drag.is_none() && self.last_autosave.elapsed() > self.prefs.autosave_every() {
             self.last_autosave = std::time::Instant::now();
@@ -1834,6 +1839,9 @@ pub(crate) mod a11y_tests {
                 inner_glow: Some(Default::default()),
                 bevel: Some(Default::default()),
                 stroke: Some(Default::default()),
+                pattern_overlay: Some(lumenply_doc::PatternOverlayFx::new(
+                    lumenply_render::pattern::builtin_patterns()[0].reference(),
+                )),
             },
         });
         check(&mut app, "every layer effect on");

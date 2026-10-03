@@ -23,6 +23,12 @@ mod color_modes;
 mod effects;
 mod extra;
 mod masks;
+mod patterns;
+
+/// One Photoshop pattern record (shared with `.pat` preset files).
+pub(crate) fn read_pattern_record_pub(b: &[u8]) -> Option<(lumenply_doc::Pattern, usize)> {
+    patterns::read_pattern_record(b)
+}
 mod shape;
 
 #[derive(Debug, thiserror::Error)]
@@ -1426,6 +1432,7 @@ fn save_depth(path: impl AsRef<Path>, doc: &Document, deep: bool) -> Result<Repo
         lm.push(0);
     }
     put_u32(&mut lm, 0); // global layer mask info: none
+    lm.extend_from_slice(&patterns::global_block(doc)); // the patterns layers use
     put_u32(&mut file, lm.len() as u32);
     file.extend_from_slice(&lm);
 
@@ -1740,10 +1747,14 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         b"iOpa" => fill_opacity = effects::parse_fill_opacity(data).unwrap_or(1.0),
                         // Shape content in newer files: pixels come clipped.
                         b"vscg" => layer_masks.shaped = true,
-                        // Pattern fills keep their rendered pixels.
+                        // Pattern fills: the settings, or (unreadable) the
+                        // rendered pixels.
                         b"PtFl" => {
-                            pattern = true;
                             layer_masks.shaped = true;
+                            match patterns::parse_pattern_fill(data) {
+                                Some(f) => fill = Some(f),
+                                None => pattern = true,
+                            }
                         }
                         b"levl" | b"curv" | b"brit" | b"CgEd" | b"hue2" | b"hue " | b"blnc" | b"blwh"
                         | b"expA" | b"vibA" | b"thrs" | b"post" | b"nvrt" | b"phfl" | b"mixr" | b"clrL"
@@ -1866,6 +1877,11 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
         }
     }
     rd.pos = lm_start + lm_len;
+    let file_patterns = if lm_len > 0 {
+        patterns::global_patterns(&buf, lm_start, lm_len, psb)
+    } else {
+        Vec::new()
+    };
 
     // Composite: the image itself when the file has no layers, and the
     // alpha channels (saved selections) when it names any.
@@ -1878,6 +1894,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     };
 
     let mut doc = Document::new(width, height);
+    doc.patterns = file_patterns;
     doc.guides = guides;
     // 32-bit files are linear float: keep values above 1 (HDR).
     doc.float_mode = cm.is_float();
@@ -1962,8 +1979,11 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     }
                     continue;
                 }
-                if let Some(sh) = rl.shape.clone() {
+                if let Some(mut sh) = rl.shape.clone() {
                     // Rendered below with the fills, once every layer is in.
+                    if let Some(f) = sh.fill.as_mut() {
+                        patterns::fit_phase(f, &doc, &rl.channels, rl.bounds);
+                    }
                     let id = doc.alloc_id();
                     let mut l = Layer::shape(id, sh);
                     rl.style(&mut l);
@@ -1977,8 +1997,17 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     stack.last_mut().expect("root").push(l);
                     continue;
                 }
-                if let Some(fill) = rl.fill.clone() {
+                // A pattern fill whose pattern the file lacks keeps its pixels.
+                let missing = |f: &lumenply_doc::Fill| matches!(f, lumenply_doc::Fill::Pattern { pattern, .. } if doc.find_pattern(pattern).is_none());
+                if rl.fill.as_ref().is_some_and(missing) {
+                    warnings.push(format!(
+                        "pattern fill layer '{}': its pattern is not in the file, imported as pixels",
+                        rl.name
+                    ));
+                }
+                if let Some(mut fill) = rl.fill.clone().filter(|f| !missing(f)) {
                     // The cache renders below, once every layer is in.
+                    patterns::fit_phase(&mut fill, &doc, &rl.channels, rl.bounds);
                     let id = doc.alloc_id();
                     let mut l = Layer::fill(id, fill);
                     rl.style(&mut l);
@@ -2028,6 +2057,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     if cm.is_float() {
         color_modes::linear_descriptor_colors(&mut doc);
     }
+    patterns::warn_missing(&doc, &mut warnings);
     lumenply_render::fill::refresh_stale(&mut doc);
     Ok(Report { value: doc, warnings })
 }

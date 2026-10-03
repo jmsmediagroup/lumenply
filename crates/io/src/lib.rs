@@ -8,6 +8,7 @@
 
 pub mod abr;
 pub mod ora;
+pub mod pattern_files;
 pub mod project;
 pub mod psd;
 mod psd_channels;
