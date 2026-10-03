@@ -68,7 +68,9 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
   tokens in `debug.rs`: `popups:click=File`, `popups:rclick=X:Y`,
   `text:click:X:Y`, `color:fg`, `start:fake-recent`, `layout:tool=…`,
   `layout:layer=background`, `select:rect=X:Y:W:H`, `select:caf`,
-  `crop:frame=X0:Y0:X1:Y1`, `guides:add=v:X`, `adj:add=gradient-map`,
+  `crop:frame=X0:Y0:X1:Y1`, `guides:add=v:X`,
+  `guides:smart-drag=X0:Y0:X1:Y1` (Move-tool drag of the active layer, held
+  mid-drag so Smart Guides show), `adj:add=gradient-map`,
   `adj:fill=gradient`, `liquify:demo`, `raw:open=PATH`, `layout:tool=shape`,
   `shape:kind=star`, `shape:draw=X0:Y0:X1:Y1`, `gradient:open|style=…|draw=…`,
   `brush:panel|tip=Name|set=key:value|stroke=X0:Y0:X1:Y1|import=PATH`,

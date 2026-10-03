@@ -170,6 +170,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("New guide...", "new-guide"),
     ("Show or hide the grid", "grid"),
     ("Snap on or off", "snap"),
+    ("Show or hide smart guides", "smart-guides"),
     ("New fill layer: solid color", "fill-solid"),
     ("New fill layer: gradient", "fill-gradient"),
     ("Load 3D LUT as a Color Lookup...", "load-lut"),
@@ -1039,7 +1040,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 188); // + Proof colors, gamut warning, print size
+        assert_eq!(n, 189); // + Proof colors, gamut warning, smart guides, print size
     }
 
     #[test]

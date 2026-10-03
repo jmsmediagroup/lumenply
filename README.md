@@ -40,6 +40,8 @@ What's in:
   RAW; export to PNG/JPEG/WebP/GIF/PDF; `lumenply batch` for whole folders.
 - **Actions**: record edits, play them back as one undo step, or run them
   over folders with `lumenply batch --action`.
+- **View**: rulers, guides, grid and Smart Guides with snapping; CMYK
+  soft-proofing (Proof Colors, Gamut Warning); Navigator and Info.
 - **Everyday**: command palette (Ctrl+K), Photoshop shortcuts, clipboard
   with other apps, tabs, autosave of every open document with crash
   recovery, screen-reader names on every control.

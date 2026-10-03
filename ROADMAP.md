@@ -220,7 +220,14 @@ None of these could be tested in the container.
 - [x] OpenRaster (.ora) import/export for GIMP/Krita interchange (layers, groups,
       opacity, visibility, the ten blend modes; masks baked in, adjustments and
       live filters skipped with warnings)
-- [ ] CMYK soft-proofing
+- [x] CMYK soft-proofing: View ▸ Proof Colors (Cmd+Y, which is no longer a
+      second Redo key, as in Photoshop) and Gamut Warning
+      (Shift+Cmd+Y), display only, U.S. Web Coated (SWOP) through the built-in
+      Neugebauer model (medium GCR, 300 % ink limit, Oklab nearest-colour
+      clipping, black point compensation) via a 33³ tetrahedral lookup
+      (io::proof); canvas, partial redraws, previews and Navigator
+- [ ] Proof Setup (other profiles and intents, paper/black-ink simulation),
+      proofing through embedded ICC profiles with qcms
 
 ## 5. Tools and features
 
@@ -344,6 +351,13 @@ None of these could be tested in the container.
       (Cmd+', spacing/subdivisions in Preferences), snapping (Shift+Cmd+;) to
       guides, grid, canvas edges/centre and layer bounds for Move, marquees,
       crop and free-transform moves
+- [x] Smart Guides (View ▸ Show smart guides, on by default): Move-tool and
+      free-transform moves show magenta alignment lines to other layers' bounds
+      and the canvas edges/centre, snap there (after View ▸ Snap), equal-spacing
+      brackets between neighbours, a ΔX/ΔY readout; Cmd/Ctrl-drag snaps nothing;
+      nudges never snap
+- [ ] Smart Guides for marquee/crop drags; equal spacing matching existing
+      gaps; distance labels
 - [x] Duplicate layer (any kind, groups deep-copied; Cmd+J without a
       selection), Merge down / Merge group / Merge clipping mask (Cmd+E, blocked
       with reasons), Merge visible (Shift+Cmd+E), Flatten image, Stamp visible

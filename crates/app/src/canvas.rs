@@ -521,6 +521,7 @@ impl App {
                     self.paint_tool_overlay(ctx, &painter, &resp);
                 }
                 self.paint_snap_hint(&painter, rect, doc_rect);
+                self.paint_smart_guides(&painter, rect, doc_rect);
                 self.rulers_ui(ui, rect);
                 self.selection_action_bar(ctx, rect, origin, zoom);
                 self.zoom_pill(ctx, rect);
@@ -709,6 +710,7 @@ impl App {
                 self.drag = Some(DragKind::Xform(hit(q)));
                 self.drag_start = Some(q);
                 self.begin_snap(&[x.layer]);
+                self.begin_smart_guides(&[x.layer]);
                 x.base = (x.sx, x.sy, x.angle, x.dx, x.dy);
                 if let Some(quad) = x.quad {
                     x.qbase = quad;
@@ -819,9 +821,22 @@ impl App {
                             ys.clone().fold(f32::INFINITY, f32::min),
                             ys.fold(f32::NEG_INFINITY, f32::max),
                         );
-                        let (sx, sy) = self.snap_rect_delta(x0, y0, x1, y1);
-                        x.dx += sx;
-                        x.dy += sy;
+                        // Cmd (Ctrl) held: no snapping, as in Photoshop.
+                        let free = ctx.input(|i| i.modifiers.command);
+                        let (sx, sy) = if free {
+                            self.clear_snap_hint();
+                            (0.0, 0.0)
+                        } else {
+                            self.snap_rect_delta(x0, y0, x1, y1)
+                        };
+                        // Then Smart Guides, on the axes View ▸ Snap left free.
+                        let held = self.snap_held();
+                        let bx = crate::smart_guides::Bx::new(x0 + sx, y0 + sy, x1 + sx, y1 + sy);
+                        let moved = (x.dx + sx - x.base.3, x.dy + sy - x.base.4);
+                        self.aids.smart.pointer = Some(b);
+                        let (mx, my) = self.smart_xform_nudge(bx, moved, held, free);
+                        x.dx += sx + mx;
+                        x.dy += sy + my;
                     }
                     Handle::Rotate => {
                         let a0 = (a.y - centre_s.y).atan2(a.x - centre_s.x);
@@ -1221,7 +1236,10 @@ impl App {
                 if self.drag == Some(DragKind::Move) && resp.dragged_by(primary) {
                     if let (Some(a), Some(b)) = (self.drag_start, resp.interact_pointer_pos()) {
                         let d = (b - a) / self.zoom;
-                        let off = self.snap_move_offset((d.x.round() as i32, d.y.round() as i32));
+                        // Cmd (Ctrl) held: no snapping, as in Photoshop.
+                        let free = ctx.input(|i| i.modifiers.command);
+                        self.aids.smart.pointer = Some(b);
+                        let off = self.snap_move_offset((d.x.round() as i32, d.y.round() as i32), free);
                         if off != self.move_offset {
                             let prev = self.move_offset;
                             self.move_offset = off;
