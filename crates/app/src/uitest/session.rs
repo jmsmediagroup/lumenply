@@ -1435,7 +1435,14 @@ impl Session {
         self.step("action", format!("Click {shown}"), |s| {
             let (first, rest) = parts.split_first().ok_or("an empty menu path")?;
             // Open the menu bar menu, unless it is open already.
-            let open = rest.first().is_some_and(|next| s.has_node(next));
+            // (An item is a button: a section title such as Properties'
+            // "HISTOGRAM" must not pass for an open Window menu.)
+            let open = rest.first().is_some_and(|next| {
+                s.tree
+                    .matches(next, Some(Role::Button))
+                    .iter()
+                    .any(|n| s.visible(n))
+            });
             if !open {
                 // The menu bar's button: the topmost of that name (a
                 // history step can be called "Select" too).
@@ -2091,6 +2098,86 @@ impl Session {
     ) -> UiResult<bool> {
         let (ok, actual) = self.doc(f)?;
         self.check(what, ok, expected, actual)
+    }
+
+    // ---- the window, held keys, relaunching ------------------------------------
+
+    /// The window's size in points (`--size`).
+    pub(crate) fn window_size(&self) -> Vec2 {
+        self.opts.size
+    }
+
+    /// Press and hold a key that is not a modifier (Space for panning);
+    /// [`Session::key_up`] lets it go. Steps in between see it held.
+    pub(crate) fn key_down(&mut self, name: &str) -> UiResult {
+        let key = input::key_named(name).ok_or_else(|| format!("unknown key {name:?}"))?;
+        self.step("action", format!("Hold down {name}"), |s| s.hold(key, true))
+    }
+
+    /// Let go of a key held with [`Session::key_down`].
+    pub(crate) fn key_up(&mut self, name: &str) -> UiResult {
+        let key = input::key_named(name).ok_or_else(|| format!("unknown key {name:?}"))?;
+        self.step("action", format!("Let go of {name}"), |s| s.hold(key, false))
+    }
+
+    fn hold(&mut self, key: egui::Key, pressed: bool) -> UiResult {
+        self.events.push(Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed,
+            repeat: false,
+            modifiers: self.modifiers,
+        });
+        self.frame()?;
+        self.settle(10)
+    }
+
+    /// Rest the pointer on a document point of the canvas (no click), as
+    /// when reading the Info panel or the status bar.
+    pub(crate) fn canvas_hover(&mut self, at: (f32, f32)) -> UiResult {
+        self.step(
+            "action",
+            format!("Point at the canvas at ({:.0}, {:.0})", at.0, at.1),
+            |s| {
+                let p = s.doc_to_screen(at.0, at.1)?;
+                s.aim_canvas(p, at)?;
+                s.settle(10)
+            },
+        )
+    }
+
+    /// Quit Lumenply the way a user does (the app's exit hook runs) and
+    /// start it again from the Dock with the same profile: prefs, recent
+    /// files and anything else in the data folder are kept.
+    pub(crate) fn relaunch(&mut self) -> UiResult {
+        self.step("launch", "Quit Lumenply and start it again".into(), |s| {
+            if s.dialog.is_some() {
+                return Err("a system file panel is still open".into());
+            }
+            if s.crashed.is_none() {
+                s.call(|st| eframe::App::on_exit(&mut st.app, None))?;
+            }
+            let clipboard = s.clipboard_image.clone();
+            let make = || {
+                let ctx = egui::Context::default();
+                crate::theme::install(&ctx);
+                ctx.enable_accesskit();
+                let app = App::launch(&[]);
+                UiState { app, ctx }
+            };
+            let fresh = UiThread::start(format!("uitest-{}", s.name), clipboard, make)?;
+            // The old app is dropped on its own thread, after the new one
+            // has read the profile.
+            drop(std::mem::replace(&mut s.ui, fresh));
+            s.quit = false;
+            s.crashed = None;
+            s.pressed = None;
+            s.modifiers = Modifiers::NONE;
+            s.tree = Tree::default();
+            s.prev_tree = Tree::default();
+            s.title.clear();
+            s.settle_idle(Duration::from_secs(60))
+        })
     }
 }
 

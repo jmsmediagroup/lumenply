@@ -14,6 +14,7 @@ mod basics;
 mod c_selections;
 mod d_painting;
 mod e_transform;
+mod h_workspace;
 mod selection;
 
 /// Every area's scenarios, in the order `--uitest` runs them.
@@ -25,4 +26,5 @@ pub(crate) const AREAS: &[&[Scenario]] = &[
     b_layers::SCENARIOS,
     d_painting::SCENARIOS,
     e_transform::SCENARIOS,
+    h_workspace::SCENARIOS,
 ];

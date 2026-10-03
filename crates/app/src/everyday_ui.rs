@@ -575,7 +575,9 @@ mod pick_tests {
         frame(&mut app, &ctx, vec![egui::Event::PointerMoved(p)], false);
         let (z0, under) = (app.zoom, app.cursor_doc.unwrap());
         click(&mut app, &ctx, p, egui::Modifiers::NONE);
-        assert!((app.zoom - 2.0 * z0).abs() < 1e-4, "{} vs {}", app.zoom, z0);
+        // One step up Photoshop's zoom levels (canvas::ZOOM_LEVELS).
+        let z1 = crate::canvas::zoom_step(z0, true);
+        assert!((app.zoom - z1).abs() < 1e-4, "{} vs {}", app.zoom, z1);
         frame(&mut app, &ctx, vec![egui::Event::PointerMoved(p)], false);
         assert_eq!(
             app.cursor_doc.unwrap(),
@@ -583,7 +585,8 @@ mod pick_tests {
             "the point under the pointer stays put"
         );
         click(&mut app, &ctx, p, egui::Modifiers::ALT);
-        assert!((app.zoom - z0).abs() < 1e-4);
+        let z2 = crate::canvas::zoom_step(z1, false);
+        assert!((app.zoom - z2).abs() < 1e-4, "{} vs {}", app.zoom, z2);
     }
 
     #[test]

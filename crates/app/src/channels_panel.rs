@@ -456,6 +456,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_channel_alone_says_how_back_in_the_apps_shortcut_spelling() {
+        let mut app = crate::a11y_tests::launch(&["--demo".to_string()]);
+        app.set_channel_view(ChannelView::Green);
+        let back = if cfg!(target_os = "macos") {
+            "Cmd+2"
+        } else {
+            "Ctrl+2"
+        };
+        assert_eq!(
+            app.status,
+            format!("Viewing the green channel alone ({back} returns to RGB)")
+        );
+    }
+
+    #[test]
     fn colour_rows_load_their_channel_and_rgb_loads_luminosity() {
         assert_eq!(
             colour_channel(ChannelView::Composite),

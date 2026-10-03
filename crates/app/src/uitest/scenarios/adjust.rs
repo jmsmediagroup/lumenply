@@ -83,7 +83,7 @@ fn adjust_a_photo(s: &mut Session) -> UiResult {
     let history = s.history()?;
     s.note(&format!("History: {}", history.join(" → ")))?;
     s.describe("Click the first step in the History strip");
-    s.click("Open")?;
+    s.click("History step 0: Open")?;
     s.wait_idle()?;
     let back = sample(s)?;
     s.check_eq("the photo is as it was opened", back, before.clone())?;
@@ -91,7 +91,7 @@ fn adjust_a_photo(s: &mut Session) -> UiResult {
     s.check_eq("the Curves layer is gone at that step", layers, layers_before)?;
     let last = history.last().cloned().unwrap_or_default();
     s.describe("Click the last step to come back");
-    s.click(&last)?;
+    s.click(&format!("History step {}: {last}", history.len()))?;
     s.wait_idle()?;
     let again = sample(s)?;
     s.check_eq("the lift is back again", again, lifted.clone())?;

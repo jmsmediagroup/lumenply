@@ -115,8 +115,8 @@ fn fill_rect(s: &mut Session, from: (f32, f32), to: (f32, f32)) -> UiResult {
     s.click("Rectangular Marquee")?;
     s.describe("Select a rectangle");
     s.canvas_drag(from, to, 10, "")?;
-    s.describe("Fill it with Edit ▸ Fill with brush colour");
-    s.menu("Edit > Fill with brush colour")?;
+    s.describe("Fill it with Edit ▸ Fill with foreground colour");
+    s.menu("Edit > Fill with foreground colour")?;
     s.describe("Deselect");
     s.key("Cmd+D")?;
     s.wait_idle()?;
@@ -851,7 +851,7 @@ fn clip_merge(s: &mut Session) -> UiResult {
     s.describe("Layer 3: blue over the whole canvas");
     s.click("New layer")?;
     s.key("Cmd+A")?;
-    s.menu("Edit > Fill with brush colour")?;
+    s.menu("Edit > Fill with foreground colour")?;
     s.key("Cmd+D")?;
     expect_pixel(s, "blue everywhere", (300, 250), BLUE)?;
 
@@ -1078,7 +1078,7 @@ fn smart_objects(s: &mut Session) -> UiResult {
     s.describe("Make the contents white: swap colours, Select All, fill");
     s.click("Swap colours")?;
     s.key("Cmd+A")?;
-    s.menu("Edit > Fill with brush colour")?;
+    s.menu("Edit > Fill with foreground colour")?;
     s.describe("Save with Cmd+S to update the smart object");
     s.key("Cmd+S")?;
     s.expect_text("Updated smart object")?;
