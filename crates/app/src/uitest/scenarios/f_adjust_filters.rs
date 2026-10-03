@@ -622,12 +622,12 @@ fn adjustment_mask(s: &mut Session) -> UiResult {
     s.wait_idle()?;
     expect_rgb(s, "shown, the left half is inverted again", grey(1), [191; 3], 0)?;
 
-    s.describe("Turn the mask off with Layer ▸ Disable mask");
-    s.menu("Layer > Disable mask")?;
+    s.describe("Turn the mask off with Layer ▸ Layer mask ▸ Disable mask");
+    s.menu("Layer > Layer mask > Disable mask")?;
     s.wait_idle()?;
     expect_rgb(s, "without its mask the whole card inverts", grey(4), [0; 3], 0)?;
-    s.describe("And on again with Layer ▸ Enable mask");
-    s.menu("Layer > Enable mask")?;
+    s.describe("And on again with Layer ▸ Layer mask ▸ Enable mask");
+    s.menu("Layer > Layer mask > Enable mask")?;
     s.wait_idle()?;
     expect_rgb(s, "masked again", grey(4), [255; 3], 0)?;
 
@@ -1599,8 +1599,8 @@ fn shape_document(s: &mut Session) -> UiResult {
     s.describe("Select a rectangle");
     s.click_role(Role::Button, "Rectangular Marquee")?;
     s.canvas_drag((100.0, 100.0), (300.0, 200.0), 10, "")?;
-    s.describe("Fill it with the brush colour");
-    s.menu("Edit > Fill with brush colour")?;
+    s.describe("Fill it with the foreground colour");
+    s.menu("Edit > Fill with foreground colour")?;
     s.key("Cmd+D")?;
     s.wait_idle()?;
     expect_rgb(
@@ -1712,7 +1712,7 @@ fn layer_styles(s: &mut Session) -> UiResult {
     s.menu("Layer > New pixel layer")?;
     s.click_role(Role::Button, "Rectangular Marquee")?;
     s.canvas_drag((320.0, 20.0), (380.0, 80.0), 8, "")?;
-    s.menu("Edit > Fill with brush colour")?;
+    s.menu("Edit > Fill with foreground colour")?;
     s.key("Cmd+D")?;
     tick_effect(s, "Color overlay")?;
     expect_rgb(s, "the square is orange", (350, 50), [255, 179, 89], 1)?;

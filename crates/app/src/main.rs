@@ -1472,8 +1472,13 @@ impl App {
                 // ...less what the active layer's settings need to show
                 // in full (a curve and its presets) when there is room.
                 let essential = properties::props_essential_height(ctx);
-                let layers_auto =
-                    properties::dock_layers_height(avail, quick_h + chrome, essential, layers_auto, layers_min);
+                let layers_auto = properties::dock_layers_height(
+                    avail,
+                    quick_h + chrome,
+                    essential,
+                    layers_auto,
+                    layers_min,
+                );
                 // The divider below Properties can be dragged; double-click
                 // returns to the automatic split.
                 let split_id = egui::Id::new("dock-layers-h");

@@ -38,7 +38,9 @@ Recordings (each folder has `session.mp4`, `session.json`, `keyframes/`):
 | `fx-layer-styles`: on a filled rectangle: Color overlay (exact colour, “EFFECTS · 1 ON”, undo), Stroke (3 px, then 10 px), Drop shadow, Outer glow, Inner shadow, Inner glow, Bevel, Gradient overlay, Pattern overlay each on and off; a second layer gets its own overlay; the histogram is there | fixed (10) | `after/fx-layer-styles/session.mp4` |
 | `fx-big-document`: a 4000 × 3000 photo through Curves, Hue/Sat, a live blur, the Levels dialog and the Gaussian Blur dialog | pass (finding 12, timings below) | `after/fx-big-document/session.mp4` |
 
-All 12 pass at 1440×900 after the fixes. Before them, 6 of the 11 recorded
+All 12 pass at 1440×900 after the fixes, and again after merging main
+(B–I merged; two scenario steps follow main's renamed menu items: Layer ▸
+Layer mask ▸ Disable mask, Edit ▸ Fill with foreground colour). Before them, 6 of the 11 recorded
 journeys failed (`fx-big-document` was only timed before). At 900×600 the
 journeys that edit in Properties stop where a control is scrolled out of
 the 60–110 pt Properties section (finding 13), and the Layer menu's
