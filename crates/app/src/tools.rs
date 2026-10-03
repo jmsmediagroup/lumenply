@@ -109,7 +109,7 @@ impl Tool {
             Tool::Lasso => "Lasso (L)",
             Tool::PolyLasso => "Polygonal Lasso (Shift+L)",
             Tool::Wand => "Magic Wand (W)",
-            Tool::Hand => "Hand (H)",
+            Tool::Hand => "Hand (H) · Zoom (Z)",
             Tool::Crop => "Crop (C) — drag the handles; drag outside the frame to straighten; Enter crops",
             Tool::Shape => {
                 "Shape (U) — rectangle, ellipse, polygon, line or custom; Shift constrains, Alt from the centre"

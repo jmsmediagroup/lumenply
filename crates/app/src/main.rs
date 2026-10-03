@@ -442,6 +442,8 @@ struct App {
     /// Where the last brush stroke ended (document key, x, y): a
     /// Shift-click paints a straight line from there, as in Photoshop.
     last_stroke_end: Option<(u64, f32, f32)>,
+    /// The Hand tool's Zoom mode (Z): click zooms in, Alt-click out.
+    hand_zoom: bool,
     /// Channels / Paths / Navigator / Info display state (panels.rs).
     panels: panels::PanelState,
     /// Pattern library and picker (pattern_ui.rs).
@@ -615,6 +617,7 @@ impl App {
             brushes: brush_panel::BrushLibrary::load(),
             typer: text_edit::TypeTool::default(),
             last_stroke_end: None,
+            hand_zoom: false,
             panels: Default::default(),
             patterns: Default::default(),
         };
@@ -1261,7 +1264,7 @@ impl App {
                 Some(Tool::Heal)
             } else if i.key_pressed(Key::P) {
                 Some(Tool::Pen)
-            } else if i.key_pressed(Key::H) {
+            } else if i.key_pressed(Key::H) || i.key_pressed(Key::Z) {
                 Some(Tool::Hand)
             } else if i.key_pressed(Key::C) {
                 Some(Tool::Crop)
@@ -1290,6 +1293,10 @@ impl App {
         if default_colors {
             self.brush_rgb = [0.0; 3];
             self.bg_rgb = [1.0; 3];
+        }
+        if tool == Some(Tool::Hand) {
+            // H pans, Z zooms (Photoshop's Zoom tool, a mode of the Hand here).
+            self.hand_zoom = ctx.input(|i| i.key_pressed(Key::Z));
         }
         if let Some(t) = tool {
             // Shift+W switches between the Magic Wand and Quick Selection.

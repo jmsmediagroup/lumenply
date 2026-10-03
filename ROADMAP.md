@@ -403,7 +403,9 @@ None of these could be tested in the container.
       px, Shift by 10, a burst as one undo step; Alt-drag with the Move tool
       moves a copy; Alt-click with the Brush picks a colour; Shift-click
       paints a straight line from the last stroke; Alt+Backspace /
-      Cmd+Backspace fill with the foreground / background colour
+      Cmd+Backspace fill with the foreground / background colour; Z is
+      the Hand tool's Zoom mode (click in at the pointer, Alt-click out);
+      Cmd+N, Shift+Cmd+N, Shift+Cmd+S
 - [x] Merge selected layers (Cmd+E with several layers selected, "Merge
       layers"): the selected visible siblings composite into the topmost
       one's slot and name; hidden ones stay; picture unchanged (tested)

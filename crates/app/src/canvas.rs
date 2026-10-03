@@ -436,6 +436,17 @@ impl App {
                 {
                     self.pan += resp.drag_delta();
                 }
+                // Zoom mode: click zooms in at the pointer, Alt-click out.
+                if self.tool == Tool::Hand
+                    && self.hand_zoom
+                    && !space
+                    && resp.clicked_by(egui::PointerButton::Primary)
+                {
+                    if let Some(p) = resp.interact_pointer_pos() {
+                        let out = ctx.input(|i| i.modifiers.alt);
+                        self.zoom_at(rect, p, if out { 0.5 } else { 2.0 });
+                    }
+                }
 
                 let (dw, dh) = (self.editor.doc().width as f32, self.editor.doc().height as f32);
                 let origin = rect.min + self.pan;
@@ -1061,8 +1072,13 @@ impl App {
             Tool::Shape => self.shape_input(ctx, resp, to_doc),
             Tool::Hand => {
                 if resp.hovered() {
+                    let out = ctx.input(|i| i.modifiers.alt);
                     ctx.set_cursor_icon(if resp.dragged() {
                         egui::CursorIcon::Grabbing
+                    } else if self.hand_zoom && out {
+                        egui::CursorIcon::ZoomOut
+                    } else if self.hand_zoom {
+                        egui::CursorIcon::ZoomIn
                     } else {
                         egui::CursorIcon::Grab
                     });

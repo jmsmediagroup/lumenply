@@ -502,7 +502,16 @@ impl App {
                             hint_label(ui, tier, self.tool);
                         }
                         Tool::Hand => {
-                            hint_label(ui, tier, self.tool);
+                            segmented(ui, &mut self.hand_zoom, &[(false, "Pan (H)"), (true, "Zoom (Z)")]);
+                            ui.separator();
+                            if self.hand_zoom {
+                                ui.label(
+                                    RichText::new("Click to zoom in, Alt-click to zoom out; drag pans")
+                                        .weak(),
+                                );
+                            } else {
+                                hint_label(ui, tier, self.tool);
+                            }
                         }
                         Tool::Crop => self.crop_options_bar(ui, tier),
                     }

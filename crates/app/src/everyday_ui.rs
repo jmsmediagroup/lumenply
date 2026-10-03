@@ -467,6 +467,33 @@ mod pick_tests {
     }
 
     #[test]
+    fn the_zoom_mode_zooms_in_at_the_pointer_and_out_with_alt() {
+        let mut app = App::launch(&[]);
+        app.open_in_new_tab(Editor::new(Document::new(400, 300)), None);
+        app.dialog = None;
+        app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
+        app.tool = Tool::Hand;
+        app.hand_zoom = true;
+        let ctx = crate::a11y_tests::ctx();
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![], false);
+        }
+        let p = egui::pos2(600.0, 420.0);
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(p)], false);
+        let (z0, under) = (app.zoom, app.cursor_doc.unwrap());
+        click(&mut app, &ctx, p, egui::Modifiers::NONE);
+        assert!((app.zoom - 2.0 * z0).abs() < 1e-4, "{} vs {}", app.zoom, z0);
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(p)], false);
+        assert_eq!(
+            app.cursor_doc.unwrap(),
+            under,
+            "the point under the pointer stays put"
+        );
+        click(&mut app, &ctx, p, egui::Modifiers::ALT);
+        assert!((app.zoom - z0).abs() < 1e-4);
+    }
+
+    #[test]
     fn shift_click_paints_a_straight_line_from_the_last_stroke() {
         let mut doc = Document::new(200, 120);
         let id = doc.add_pixel_layer("ink");
