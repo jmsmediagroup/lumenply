@@ -1,9 +1,10 @@
 # Lumenply roadmap
 
-Status as of 2026-10-02. About 12,900 lines of Rust, 76 engine tests, clippy-clean.
-Built and tested in a headless Linux container: the app was driven with simulated mouse
-input under a virtual X display with software OpenGL. **Nothing has run on real
-hardware yet**, so section 1 comes before any new features.
+Status as of 2026-10-03. About 153,000 lines of Rust in nine crates, 1,188 tests,
+clippy-clean. Built, run and tested on macOS (Apple Silicon); Windows and Linux are
+still unverified (section 1). The document is an edit graph (section 0b), local AI
+selection runs through ONNX Runtime (section 5), and every area of the app has been
+tested as a user would use it, with recorded sessions (section 6c).
 
 Legend: `[x]` done and tested · `[~]` done but unverified or partial · `[ ]` not started
 
@@ -685,6 +686,94 @@ None of these could be tested in the container.
       section and lossless flips everywhere; View ▸ Zoom in/out (Cmd+= / Cmd+−)
       and History toggle; egui's keyboard UI zoom disabled so Cmd+=/−/0 act
       on the canvas; Esc cancels "New text"; Untitled-N never skips
+
+## 6c. User testing (2026-10-03)
+
+Every area in [docs/testing/user-journeys.md](docs/testing/user-journeys.md)
+was tested the way a user would work: real mouse and keyboard input through the
+menus, panels, tools and dialogs, found by their on-screen names, at 1440×900 and
+900×600, each session recorded as a video and checked against the document with
+explicit values and undo. The harness is in `crates/app/src/uitest`
+([docs/testing/harness.md](docs/testing/harness.md)). Every journey runs with
+`cargo test --release -p lumenply-app --features uitest uitest -- --ignored`
+(the AI journeys also need `LUMENPLY_UITEST_MODELS`, `LUMENPLY_UITEST_PHOTOS` and
+`LUMENPLY_UITEST_PSD`; see results/i_ai_actions.md). 135 journeys pass.
+Each area's results, before/after recordings, findings and proposals are in
+`docs/testing/results/`.
+
+- [x] Harness: headless egui-wgpu rendering, accesskit widget lookup, real input
+      events, MP4 recordings with `session.json` logs, scratch profiles, an
+      in-memory clipboard and file-dialog seams, `relaunch()`, held keys
+- [x] A. Documents and files (10 journeys): quit asks about each unsaved
+      document in turn (it saved only the live one and lost the rest);
+      dialogs and their lists reopen above their backdrop; the tab strip
+      scrolls and the Window menu lists open documents; reopening an open
+      file switches to its tab; New offers White, Black or Transparent
+- [x] B. Layers (10): layer-mask menu (reveal/hide all or selection,
+      apply, delete, disable), rename selects the name, Photoshop chords
+      Shift+Cmd+G, Alt+Cmd+G, Cmd+] / Cmd+[ (reserved, so rebinding refuses them)
+- [x] C. Selections (15): Select ▸ Modify ▸ Feather (Shift+F6), options-bar
+      Feather, Photoshop marquee modifiers (Shift/Alt at the press, square and
+      centre mid-drag)
+- [x] D. Painting and retouching (14): Alt+Backspace and Edit ▸ Fill fill at full
+      strength, Fill no longer opens on Content-Aware, Dodge/Burn/Sponge/Smudge
+      and History Brush reachable by O / Y and Cmd+K, Exposure / Flow / Strength
+      named per mode, a click that closes a menu no longer paints; stroke
+      latency measured
+- [x] E. Moving and transforming (16): Move Auto-Select and Cmd-click picking,
+      Alt-drag copy as one step, Free Transform anchors the opposite side (Alt:
+      centre), Shift-rotate by 15°, eight handles; frame times on 4000×3000
+- [x] F. Adjustments, filters and effects (12): Curves press-and-drag adds a
+      point (drag off removes it) and the whole curve stays in view; adjustment
+      and live filter layers made with a selection are masked to it; filter
+      dialogs remember their last settings; Cmd+B / Shift+Cmd+B; named Auto
+      layers; a new Stroke effect is black
+- [x] G. Text, shapes and paths (16): one undo step per text session, the
+      keyboard stays on the text across options-bar edits, Cmd+Shift style and
+      alignment keys; one undo step per Pen anchor, Esc finishes the path
+- [x] H. Viewing and the workspace (16, also at 1024×700): one status-bar rule,
+      Photoshop zoom levels, Histogram panel, safe shortcut rebinding
+- [x] I. AI and automation (10): the download dialog is clickable, downloads run
+      in the background, the first click shows loading feedback, a High detail
+      option for Remove Background; actions and a PSD round trip
+- [x] J. Undo, history and robustness (13): unsaved state and "did the edit
+      apply" checks by editor revision (fixes a blocker: save, undo, a different
+      edit, and Cmd+W closed without asking; the same after any save with the
+      history full); undo/redo reuse unchanged layers (6000×4000, 30 layers:
+      undo 1.4 s → 10 ms, Cmd+Z to redrawn 5.8 s → 0.23 s); history thumbnails
+      kept by revision; memory flat over a 300-stroke session
+- [ ] Painting and free-transform commits on 6000×4000 × 30 layers: 84–240 ms
+      a stroke frame, 1.1–3.2 s a transform commit (J); scale the render-cache
+      budget with document size
+- [ ] Action recorder counts steps by revision, not history length (J)
+- [ ] Canvas Size fills the added area with an extension colour, as Photoshop
+      does (A; changes what the command computes); New remembers the last
+      size and offers the clipboard's; Cmd+Alt shortcuts for Image Size,
+      Canvas Size and Export As; Ctrl+Q on Windows and Linux (A)
+- [ ] Dock layout below ~700 pt of height: fold the "Add above active layer"
+      chips so Properties is usable at 900×600 (proposed by B, F, G and H)
+- [ ] Layer menu submenus open behind the two-column Layer menu at 900×600 (F)
+- [ ] Filter dialog previews in the background at view resolution: a 12 MP
+      Gaussian Blur preview freezes the UI for 1.5–2.5 s (F)
+- [ ] Filter dialogs: Preview check box, OK, Filter ▸ Last Filter (Cmd+F);
+      histograms in Levels and Curves; one neutral grey for High Pass and
+      Emboss; Posterize per pixel (F)
+- [ ] Decision: stroke-level brush Opacity plus a separate Flow; Dodge, Burn and
+      Sponge amounts from the stroke mask (D; changes `PaintStroke`, needs an ADR)
+- [ ] Decision: Magic Wand / Paint Bucket / Grow / Similar tolerance on sRGB
+      levels, 0–255, default 32 (C and D; needs an ADR)
+- [ ] Incremental brush preview; screen-resolution Free Transform previews on
+      large documents (D, E)
+- [ ] Colour Range samples the image while open, with Invert and a preview (C)
+- [ ] Crop straighten turns the image under a level frame; Straighten tool (E)
+- [ ] Free Transform distort/skew drags, arrow nudges, undo inside the transform,
+      one reference point shared with Content-Aware Scale (E)
+- [ ] MobileSAM's first CoreML compile (21–45 s): run on the CPU until a
+      background compile is ready (I); Select Subject and Remove Background as
+      action steps
+- [ ] Smaller proposals per area (drag feedback, filter layers by kind, a full
+      Fill dialog, Aligned cloning, Shortcuts page in Preferences, editable
+      zoom, palette ranking, …): see each results file
 
 ## 7. Ecosystem and release
 
