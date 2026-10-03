@@ -668,7 +668,11 @@ fn locks(s: &mut Session) -> UiResult {
             .tree()
             .matches(name, None)
             .into_iter()
-            .filter(|n| n.role != Role::Label && props.is_some_and(|p| p.contains(n.rect.center())))
+            // In the Properties column, scrolled into view or not.
+            .filter(|n| {
+                let c = n.rect.center();
+                n.role != Role::Label && props.is_some_and(|p| p.x_range().contains(c.x) && c.y >= p.top())
+            })
             .collect();
         !controls.is_empty() && controls.iter().all(|n| n.disabled)
     });
