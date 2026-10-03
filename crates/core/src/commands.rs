@@ -208,14 +208,18 @@ impl Command for SetText {
 
     fn apply(&self, doc: &mut Document) -> EditResult {
         let l = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
+        // The name follows the text until the user gives it one of its own.
+        let auto = l
+            .text_layer()
+            .is_some_and(|t| lumenply_doc::text_layer_name(&t.text) == l.name);
         let t = l
             .text_layer_mut()
             .ok_or_else(|| EditError::Invalid(format!("layer {} is not a text layer", self.layer)))?;
         *t = self.text.clone();
         lumenply_render::text::refresh_cache(t);
-        let first_line: String = t.text.lines().next().unwrap_or("Text").chars().take(24).collect();
-        if !first_line.is_empty() {
-            l.name = first_line;
+        let name = lumenply_doc::text_layer_name(&t.text);
+        if auto {
+            l.name = name;
         }
         Ok(())
     }
@@ -4444,6 +4448,43 @@ mod tests {
             .count();
         assert!(off_segments >= 2, "curved points near the corner: {off_segments}");
         assert_eq!(smooth_stroke(&pts[..2]).len(), 2, "two points stay a line");
+    }
+
+    #[test]
+    fn a_renamed_text_layer_keeps_its_name_through_edits() {
+        let mut doc = Document::new(400, 200);
+        AddTextLayer {
+            text: TextLayer::new("", 20.0, 100.0, 48.0, [0.0, 0.0, 0.0, 1.0]),
+            above: None,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let id = doc.layers()[0].id;
+        assert_eq!(doc.layer(id).unwrap().name, "Text");
+        let edit = |doc: &mut Document, f: &dyn Fn(&mut TextLayer)| {
+            let mut t = doc.layer(id).unwrap().text_layer().unwrap().clone();
+            f(&mut t);
+            SetText { layer: id, text: t }.apply(doc).unwrap();
+        };
+        // Typing names it after the first line, 24 characters at most.
+        edit(&mut doc, &|t| t.text = "One".into());
+        assert_eq!(doc.layer(id).unwrap().name, "One");
+        edit(&mut doc, &|t| {
+            t.text = "One two three four five six\nseven".into()
+        });
+        assert_eq!(doc.layer(id).unwrap().name, "One two three four five ");
+        // A name the user gave stays through style and text edits.
+        RenameLayer {
+            layer: id,
+            name: "Heading".into(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        edit(&mut doc, &|t| t.bold = true);
+        assert_eq!(doc.layer(id).unwrap().name, "Heading");
+        edit(&mut doc, &|t| t.text = "Other words".into());
+        assert_eq!(doc.layer(id).unwrap().name, "Heading");
+        assert!(doc.layer(id).unwrap().text_layer().unwrap().bold);
     }
 
     #[test]
