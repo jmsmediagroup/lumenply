@@ -2,7 +2,8 @@
 //! while the Move tool drags a layer (or free transform moves its box),
 //! magenta lines show where its left, centre or right edge (and top,
 //! middle or bottom) lines up with another visible layer's bounds or with
-//! the canvas, drawn across both objects, and the drag snaps there. A pill
+//! the canvas, drawn across both objects, and the drag snaps there. Between
+//! two neighbours it also snaps to equal gaps, shown as brackets. A pill
 //! by the pointer reads the move offset. Holding Cmd (Ctrl elsewhere)
 //! while dragging turns all snapping off.
 //!
@@ -133,6 +134,78 @@ pub(crate) fn aligned_lines(moving: Bx, targets: &[Bx], eps: f32) -> Vec<GuideLi
     out
 }
 
+/// One gap of an equal-spacing match, drawn as a bracket: along x from
+/// `from` to `to` at height `at` when `across_x`, else along y at x = `at`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Gap {
+    pub across_x: bool,
+    pub at: f32,
+    pub from: f32,
+    pub to: f32,
+}
+
+/// A box seen along one axis: (start, end, cross start, cross end).
+type Span = (f32, f32, f32, f32);
+/// A gap along one axis: (cross position, start, end).
+type GapSpan = (f32, f32, f32);
+
+/// Equal spacing on one axis. `lo..hi` is the moving box along the axis,
+/// `cross` its extent across it; `others` the same for each target. The
+/// nearest neighbour on each side that overlaps it across the axis gives
+/// two gaps; when they differ by at most `2 × tol`, the nudge that makes
+/// them equal and the two gaps after it.
+fn spacing_axis(
+    lo: f32,
+    hi: f32,
+    cross: (f32, f32),
+    others: &[Span],
+    tol: f32,
+) -> Option<(f32, [GapSpan; 2])> {
+    let overlaps = |o: &Span| o.2 < cross.1 && o.3 > cross.0;
+    let mid = |o: &Span| (o.2.max(cross.0) + o.3.min(cross.1)) / 2.0;
+    let before = others
+        .iter()
+        .filter(|o| overlaps(o) && o.1 <= lo + tol)
+        .max_by(|a, b| a.1.total_cmp(&b.1))?;
+    let after = others
+        .iter()
+        .filter(|o| overlaps(o) && o.0 >= hi - tol)
+        .min_by(|a, b| a.0.total_cmp(&b.0))?;
+    let (g0, g1) = (lo - before.1, after.0 - hi);
+    let d = (g1 - g0) / 2.0;
+    if g0 + d <= 0.0 || d.abs() > tol {
+        return None;
+    }
+    Some((
+        d,
+        [(mid(before), before.1, lo + d), (mid(after), hi + d, after.0)],
+    ))
+}
+
+/// Equal spacing between neighbours, each axis on its own: the nudge that
+/// centres `moving` between its nearest neighbours left and right (and
+/// above and below) when it is within `tol` of that, and the gaps shown.
+pub(crate) fn equal_spacing(moving: Bx, others: &[Bx], tol: f32) -> (Option<f32>, Option<f32>, Vec<Gap>) {
+    let along_x: Vec<Span> = others.iter().map(|o| (o.x0, o.x1, o.y0, o.y1)).collect();
+    let along_y: Vec<Span> = others.iter().map(|o| (o.y0, o.y1, o.x0, o.x1)).collect();
+    let mut gaps = Vec::new();
+    let sx = spacing_axis(moving.x0, moving.x1, (moving.y0, moving.y1), &along_x, tol);
+    let sy = spacing_axis(moving.y0, moving.y1, (moving.x0, moving.x1), &along_y, tol);
+    for (across_x, s) in [(true, sx), (false, sy)] {
+        if let Some((_, pair)) = s {
+            for (at, from, to) in pair {
+                gaps.push(Gap {
+                    across_x,
+                    at,
+                    from,
+                    to,
+                });
+            }
+        }
+    }
+    (sx.map(|s| s.0), sy.map(|s| s.0), gaps)
+}
+
 /// The painted bounds of every visible layer outside `skip` (groups by
 /// their children): what a moving layer can line up with.
 fn layer_boxes(doc: &lumenply_doc::Document, skip: &[LayerId]) -> Vec<Bx> {
@@ -164,6 +237,8 @@ pub(crate) struct SmartGuides {
     targets: Option<Vec<Bx>>,
     /// The lines to draw this frame.
     lines: Vec<GuideLine>,
+    /// Equal-spacing gaps to draw this frame.
+    gaps: Vec<Gap>,
     /// The moved layer's bounds at its current offset.
     moving: Option<Bx>,
     /// The move so far, for the readout pill.
@@ -201,7 +276,12 @@ impl App {
         } else {
             guides::SNAP_PX / self.zoom.max(1e-4)
         };
-        let (dx, dy, _) = smart_snap(moved, targets, self.canvas_box(), tol);
+        let (dx, dy, lines) = smart_snap(moved, targets, self.canvas_box(), tol);
+        // Equal spacing on an axis no alignment took.
+        let aligned = |v: bool| lines.iter().any(|l| l.vertical == v);
+        let (ex, ey, _) = equal_spacing(moved, targets, tol);
+        let dx = if aligned(true) { dx } else { ex.unwrap_or(0.0) };
+        let dy = if aligned(false) { dy } else { ey.unwrap_or(0.0) };
         (if held[0] { 0.0 } else { dx }, if held[1] { 0.0 } else { dy })
     }
 
@@ -213,8 +293,11 @@ impl App {
         let all: Vec<Bx> = std::iter::once(self.canvas_box())
             .chain(targets.iter().copied())
             .collect();
+        let lines = aligned_lines(at, &all, ALIGNED);
+        let (_, _, gaps) = equal_spacing(at, targets, ALIGNED);
         let s = &mut self.aids.smart;
-        s.lines = aligned_lines(at, &all, ALIGNED);
+        s.lines = lines;
+        s.gaps = gaps;
         s.moving = Some(at);
         s.offset = Some(offset);
     }
@@ -268,6 +351,23 @@ impl App {
                 let y = to_screen(0.0, l.at).y.round() + 0.5;
                 let (a, b) = (to_screen(l.from, 0.0).x, to_screen(l.to, 0.0).x);
                 painter.hline(a..=b, y, st);
+            }
+        }
+        // Equal gaps: a bracket across each, ticks at both ends.
+        for g in &s.gaps {
+            let (a, b) = if g.across_x {
+                (to_screen(g.from, g.at), to_screen(g.to, g.at))
+            } else {
+                (to_screen(g.at, g.from), to_screen(g.at, g.to))
+            };
+            painter.line_segment([a, b], st);
+            let tick = if g.across_x {
+                egui::vec2(0.0, 4.0)
+            } else {
+                egui::vec2(4.0, 0.0)
+            };
+            for p in [a, b] {
+                painter.line_segment([p - tick, p + tick], st);
             }
         }
         // The readout: beside the pointer, else by the moved layer's corner.
@@ -453,6 +553,61 @@ mod tests {
                 },
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod spacing_tests {
+    use super::*;
+
+    #[test]
+    fn a_box_between_two_snaps_to_equal_gaps() {
+        // Left 0..100, right 300..400, both rows 0..50. Moving 173..223:
+        // gaps 73 and 77 differ by 4, so +2 makes both 75.
+        let others = [Bx::new(0.0, 0.0, 100.0, 50.0), Bx::new(300.0, 0.0, 400.0, 50.0)];
+        let (ex, ey, gaps) = equal_spacing(Bx::new(173.0, 10.0, 223.0, 40.0), &others, 3.0);
+        assert_eq!((ex, ey), (Some(2.0), None));
+        assert_eq!(
+            gaps,
+            vec![
+                Gap {
+                    across_x: true,
+                    at: 25.0,
+                    from: 100.0,
+                    to: 175.0,
+                },
+                Gap {
+                    across_x: true,
+                    at: 25.0,
+                    from: 225.0,
+                    to: 300.0,
+                },
+            ]
+        );
+        // 148..198: gaps 48 and 102, far from equal: nothing.
+        let (ex, _, gaps) = equal_spacing(Bx::new(148.0, 10.0, 198.0, 40.0), &others, 3.0);
+        assert_eq!(ex, None);
+        assert!(gaps.is_empty());
+    }
+
+    #[test]
+    fn spacing_needs_neighbours_beside_it_and_works_per_axis() {
+        // The same boxes, but the moving one sits below them: no overlap
+        // across the axis, so no horizontal spacing.
+        let others = [Bx::new(0.0, 0.0, 100.0, 50.0), Bx::new(300.0, 0.0, 400.0, 50.0)];
+        let (ex, _, _) = equal_spacing(Bx::new(173.0, 60.0, 223.0, 90.0), &others, 3.0);
+        assert_eq!(ex, None);
+        // Vertically: above 0..100, below 300..400 (columns 0..50);
+        // moving 176..226 has gaps 76 and 74: -1 makes both 75.
+        let others = [Bx::new(0.0, 0.0, 50.0, 100.0), Bx::new(0.0, 300.0, 50.0, 400.0)];
+        let (ex, ey, gaps) = equal_spacing(Bx::new(10.0, 176.0, 40.0, 226.0), &others, 3.0);
+        assert_eq!((ex, ey), (None, Some(-1.0)));
+        assert_eq!(gaps.len(), 2);
+        assert_eq!(
+            (gaps[0].across_x, gaps[0].at, gaps[0].from, gaps[0].to),
+            (false, 25.0, 100.0, 175.0)
+        );
+        assert_eq!((gaps[1].from, gaps[1].to), (225.0, 300.0));
     }
 }
 
