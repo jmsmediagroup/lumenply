@@ -78,6 +78,8 @@ pub(crate) struct CasState {
     stale: bool,
     drag: Option<(Grip, [f32; 4], (f32, f32))>,
     hover: Option<Grip>,
+    /// Where the box was drawn last frame, in screen points.
+    screen_box: egui::Rect,
     pub(crate) carve_ms: f32,
 }
 
@@ -371,6 +373,7 @@ impl App {
             stale: true,
             drag: None,
             hover: None,
+            screen_box: egui::Rect::NOTHING,
             carve_ms: 0.0,
         }));
     }
@@ -589,6 +592,7 @@ impl App {
                     to_screen((st.bx[0], st.bx[1])),
                     to_screen((st.bx[2], st.bx[3])),
                 );
+                st.screen_box = box_rect;
                 st.hover = resp.hover_pos().and_then(|p| CasState::grip_at(box_rect, p));
                 if pressed && resp.hovered() {
                     if let (Some(g), Some(p)) = (st.hover, pointer) {
@@ -881,6 +885,67 @@ mod tests {
         );
         app.run_menu_action("content-aware-scale");
         assert!(app.cas.is_none());
+    }
+
+    /// Runs one frame of the whole app with these input events.
+    fn frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(raw, |ctx| app.frame(ctx));
+    }
+
+    fn button(p: Pos2, pressed: bool) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(p),
+            egui::Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            },
+        ]
+    }
+
+    #[test]
+    fn dragging_the_right_handle_narrows_the_box_from_the_left_edge() {
+        let mut app = launch_photo();
+        app.run_menu_action("content-aware-scale");
+        let ctx = crate::a11y_tests::ctx();
+        frame(&mut app, &ctx, vec![]);
+        let b = app.cas.as_ref().unwrap().screen_box;
+        assert!(b.width() > 100.0, "the box is on screen: {b:?}");
+        let disp = b.width() / 120.0;
+        let from = egui::pos2(b.max.x, b.center().y);
+        let to = from - egui::vec2(36.0 * disp, 0.0);
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(from)]);
+        frame(&mut app, &ctx, button(from, true));
+        for k in 1..=4 {
+            let p = from + (to - from) * (k as f32 / 4.0);
+            frame(&mut app, &ctx, vec![egui::Event::PointerMoved(p)]);
+        }
+        frame(&mut app, &ctx, button(to, false));
+        frame(&mut app, &ctx, vec![]);
+        let st = app.cas.as_ref().unwrap();
+        assert_eq!(st.target(), (0, 0, 84, 60), "{:?}", st.bx);
+        // Enter commits.
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Key {
+                key: Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+        );
+        assert!(app.cas.is_none());
+        assert_eq!(app.editor.history().last(), Some(&"Content-Aware Scale"));
+        let px = app.editor.doc().layers()[0].pixels().unwrap();
+        assert_eq!(px.content_bounds(), Some(Rect::new(0, 0, 84, 60)));
     }
 
     #[test]
