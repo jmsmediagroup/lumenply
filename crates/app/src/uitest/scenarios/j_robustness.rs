@@ -266,7 +266,7 @@ fn long_session(s: &mut Session) -> UiResult {
     )?;
     let t = std::time::Instant::now();
     let mut presses = 0;
-    while s.history()?.len() > 0 && presses < 120 {
+    while !s.history()?.is_empty() && presses < 120 {
         s.describe("Undo with Cmd+Z, all the way back");
         s.key("Cmd+Z")?;
         presses += 1;
