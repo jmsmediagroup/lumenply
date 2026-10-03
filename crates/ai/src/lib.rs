@@ -22,6 +22,8 @@
 
 mod birefnet;
 mod error;
+pub mod memory;
+mod onnx_check;
 mod prep;
 mod refine;
 mod registry;
@@ -29,10 +31,10 @@ mod runtime;
 mod sam;
 mod store;
 
-pub use birefnet::Matter;
+pub use birefnet::{Detail, Matter};
 pub use error::{AiError, Result};
 pub use refine::{refine, RefineOptions};
-pub use registry::{models, ModelFile, ModelId, ModelInfo};
+pub use registry::{models, HighDetail, ModelFile, ModelId, ModelInfo};
 pub use runtime::{ModelReport, Placement, Provider, Runtime, LOG_ENV, PROVIDER_ENV};
 pub use sam::{Embedding, Prediction, Prompt, Segmenter};
 pub use store::{sha256_file, ModelStore};

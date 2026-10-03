@@ -79,9 +79,10 @@ impl RefineOptions {
     }
 
     /// For a soft matte at `scale` image pixels per model pixel
-    /// (BiRefNet: the image's longer side over 1024). [`crate::Matter`]
-    /// fits it with the guided filter as an upsampler, in windows of two
-    /// model pixels; `radius` is the band [`refine`] would use.
+    /// (BiRefNet: the image's longer side over 768, or 1024 at high
+    /// detail). [`crate::Matter`] fits it with the guided filter as an
+    /// upsampler, in windows of two model pixels; `radius` is the band
+    /// [`refine`] would use.
     pub fn matte(scale: f32) -> RefineOptions {
         let scale = if scale.is_finite() { scale.max(0.0) } else { 1.0 };
         RefineOptions {

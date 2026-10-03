@@ -32,6 +32,10 @@ ort = { version = "=2.0.0-rc.13", default-features = false, features = [
     "api-27",
 ] }
 
+[target.'cfg(unix)'.dependencies]
+# Available memory (macOS sysctl) and peak resident size (getrusage).
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["coreml"] }
 

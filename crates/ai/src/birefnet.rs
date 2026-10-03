@@ -1,12 +1,13 @@
 //! Subject matte with BiRefNet lite (Select Subject, Remove Background).
 //!
-//! The image is resized to 1024² (aspect not kept, as the model was
-//! trained), sRGB-encoded and normalised with ImageNet's mean and
-//! deviation (the model's `preprocessor_config.json`), NCHW. The model
-//! answers 1024² logits; their sigmoid is the matte at the model's
-//! resolution, carried to the image's by the guided filter used as an
-//! upsampler (its local colour model fitted where the matte matches the
-//! image the model saw, then applied to the full-resolution colours).
+//! The image is resized to the model's square, 768² (1024² at high
+//! detail; aspect not kept, as the model was trained), sRGB-encoded and
+//! normalised with ImageNet's mean and deviation (the model's
+//! `preprocessor_config.json`), NCHW. The model answers logits of the same
+//! size; their sigmoid is the matte at the model's resolution, carried to
+//! the image's by the guided filter used as an upsampler (its local colour
+//! model fitted where the matte matches the image the model saw, then
+//! applied to the full-resolution colours).
 
 use std::path::Path;
 
@@ -22,52 +23,88 @@ use crate::runtime::{Load, Model, ModelReport, Runtime};
 use crate::store::ModelStore;
 use crate::{AiError, Matte, Result};
 
-/// The model's input side.
-pub const SIZE: usize = 1024;
+/// How finely the subject model looks at the image.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Detail {
+    /// The model's standard size (BiRefNet lite: 768²).
+    #[default]
+    Standard,
+    /// Its high-detail size (1024²): finer hair and fur edges, about twice
+    /// the time and memory.
+    High,
+}
 
-/// BiRefNet lite.
+/// A BiRefNet: the subject's matte.
 pub struct Matter {
     model: Model,
     size: usize,
 }
 
+/// A dynamic-size export's input dimensions are named `h` and `w`; they
+/// are pinned to the size the model is run at (a static export has no
+/// such names, and the override is ignored).
+fn size_dims(size: usize) -> [(&'static str, i64); 2] {
+    [("h", size as i64), ("w", size as i64)]
+}
+
 impl Matter {
-    /// Load BiRefNet lite from the store.
+    /// Load BiRefNet lite at its standard size (768²).
     pub fn load(rt: &Runtime, store: &ModelStore) -> Result<Matter> {
+        Matter::load_detail(rt, store, Detail::Standard)
+    }
+
+    /// Load BiRefNet lite at `detail`: [`Detail::High`] runs the same file
+    /// at 1024², for finer edges at about 5 GB of memory a run.
+    pub fn load_detail(rt: &Runtime, store: &ModelStore, detail: Detail) -> Result<Matter> {
         let id = ModelId::BiRefNetLite;
         if !store.installed(id) {
             return Err(AiError::NotInstalled(id.to_string()));
         }
         let info = id.info();
-        let path = store.file_path(id, &info.files[0]);
+        let file = &info.files[0];
+        let (name, size, run_bytes) = match (detail, info.high_detail) {
+            (Detail::High, Some(hd)) => (hd.name, hd.input_size, hd.run_bytes),
+            _ => (info.name, info.input_size, file.run_bytes),
+        };
+        let size = size as usize;
         let cache = store.compile_cache(id);
+        let dims = size_dims(size);
         Ok(Matter {
             model: rt.load(
-                &path,
+                &store.file_path(id, file),
                 Load {
-                    avoid: info.files[0].avoid,
+                    avoid: file.avoid,
                     cache: Some(&cache),
-                    dims: &[],
+                    dims: &dims,
                     arena: false,
+                    name,
+                    run_bytes,
                 },
             )?,
-            size: SIZE,
+            size,
         })
     }
 
-    /// Load from an explicit file whose input is `size`² (tests, tools),
-    /// on any provider.
+    /// Load from an explicit file run at `size`² (tests, tools), on any
+    /// provider, without the memory check.
     pub fn load_file(rt: &Runtime, path: &Path, size: usize) -> Result<Matter> {
+        let dims = size_dims(size);
         Ok(Matter {
             model: rt.load(
                 path,
                 Load {
                     arena: false,
+                    dims: &dims,
                     ..Load::default()
                 },
             )?,
             size,
         })
+    }
+
+    /// The side of the square the model sees.
+    pub fn input_size(&self) -> usize {
+        self.size
     }
 
     /// What the model runs on, e.g. "CoreML (… nodes)".

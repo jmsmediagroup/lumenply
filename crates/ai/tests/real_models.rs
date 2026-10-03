@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use lumenply_ai::{Matter, ModelId, ModelStore, Prompt, RefineOptions, Runtime, Segmenter};
+use lumenply_ai::{Detail, Matter, ModelId, ModelStore, Prompt, RefineOptions, Runtime, Segmenter};
 use lumenply_tiles::{Raster, Rgba};
 
 const ENV: &str = "LUMENPLY_AI_MODELS";
@@ -165,22 +165,35 @@ fn birefnet_mattes_the_subject_and_drops_the_background() {
     };
     let (img, cx, cy, r) = ball_photo();
     let rt = Runtime::new().unwrap();
-    let t = Instant::now();
-    let matter = Matter::load(&rt, &store).unwrap();
-    println!("BiRefNet loaded in {:?} on {}", t.elapsed(), matter.provider());
-    let t = Instant::now();
-    let m = matter.matte(&img).unwrap();
-    println!("matted in {:?}", t.elapsed());
-    let inside = ring(&m, cx, cy, 0.0, r - 4.0);
-    let edge_in = ring(&m, cx, cy, r - 4.0, r);
-    let edge_out = ring(&m, cx, cy, r, r + 4.0);
-    let outside = ring(&m, cx, cy, r + 4.0, 1e9);
-    println!("inside {inside:.4}, edge in {edge_in:.4}, edge out {edge_out:.4}, outside {outside:.5}");
-    assert!(inside > 0.99, "inside {inside}");
-    assert!(edge_in > 0.8, "edge inside {edge_in}");
-    assert!(edge_out < 0.2, "edge outside {edge_out}");
-    assert!(outside < 0.005, "outside {outside}");
-    // Far from the ball the matte is exactly clear.
-    assert_eq!(m.get(5, 5), 0.0);
-    assert_eq!(m.get(cx as u32, cy as u32), 1.0);
+    let mut mattes = Vec::new();
+    for detail in [Detail::Standard, Detail::High] {
+        let t = Instant::now();
+        let matter = Matter::load_detail(&rt, &store, detail).unwrap();
+        println!(
+            "BiRefNet {detail:?} ({}²) loaded in {:?} on {}",
+            matter.input_size(),
+            t.elapsed(),
+            matter.provider()
+        );
+        let t = Instant::now();
+        let m = matter.matte(&img).unwrap();
+        println!("  matted in {:?}", t.elapsed());
+        let inside = ring(&m, cx, cy, 0.0, r - 4.0);
+        let edge_in = ring(&m, cx, cy, r - 4.0, r);
+        let edge_out = ring(&m, cx, cy, r, r + 4.0);
+        let outside = ring(&m, cx, cy, r + 4.0, 1e9);
+        println!("  inside {inside:.4}, edge in {edge_in:.4}, edge out {edge_out:.4}, outside {outside:.5}");
+        assert!(inside > 0.99, "inside {inside}");
+        assert!(edge_in > 0.8, "edge inside {edge_in}");
+        assert!(edge_out < 0.2, "edge outside {edge_out}");
+        assert!(outside < 0.005, "outside {outside}");
+        // Far from the ball the matte is exactly clear.
+        assert_eq!(m.get(5, 5), 0.0);
+        assert_eq!(m.get(cx as u32, cy as u32), 1.0);
+        mattes.push(m);
+    }
+    // Standard and high detail agree but for the edge.
+    let agree = agreement(&mattes[0], &mattes[1]);
+    println!("standard vs high detail: {:.4} % of pixels agree", agree * 100.0);
+    assert!(agree > 0.999, "{agree}");
 }

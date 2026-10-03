@@ -218,6 +218,9 @@ impl Runtime {
         if !path.is_file() {
             return Err(AiError::NotInstalled(path.display().to_string()));
         }
+        if crate::onnx_check::uses_external_data(path)? {
+            return Err(AiError::ExternalData(path.display().to_string()));
+        }
         let started = Instant::now();
         let attempts: Vec<Provider> = self
             .order
@@ -248,6 +251,8 @@ impl Runtime {
             nodes,
             fallback,
             load_time: started.elapsed(),
+            name: how.name.to_string(),
+            run_bytes: how.run_bytes,
         })
     }
 }
@@ -266,6 +271,11 @@ pub(crate) struct Load<'a> {
     /// repeated runs, but a session then keeps its largest run's memory
     /// for as long as it lives.
     pub arena: bool,
+    /// The model's name in messages.
+    pub name: &'a str,
+    /// Memory a run needs beyond the loaded model (measured); a run is
+    /// refused when the system has less available. 0 skips the check.
+    pub run_bytes: u64,
 }
 
 impl Default for Load<'_> {
@@ -275,6 +285,8 @@ impl Default for Load<'_> {
             cache: None,
             dims: &[],
             arena: true,
+            name: "model",
+            run_bytes: 0,
         }
     }
 }
@@ -458,12 +470,18 @@ pub(crate) struct Model {
     /// Providers that were tried first and failed, with the reason.
     pub fallback: Vec<String>,
     pub load_time: Duration,
+    name: String,
+    run_bytes: u64,
 }
 
 impl Model {
     /// Run `f` with the session (ONNX Runtime sessions run one call at a
-    /// time).
+    /// time), unless the run would not fit in the memory available now
+    /// ([`AiError::OutOfMemory`]).
     pub(crate) fn with<T>(&self, f: impl FnOnce(&mut Session) -> Result<T>) -> Result<T> {
+        if self.run_bytes > 0 {
+            crate::memory::check(&self.name, self.run_bytes, crate::memory::available())?;
+        }
         let mut s = self
             .session
             .lock()
@@ -595,6 +613,34 @@ mod tests {
             )
             .unwrap();
         assert_eq!(m.provider, Provider::Cpu);
+        // A model keeping data in another file is refused before ONNX
+        // Runtime opens it (it would load: external_data.bin is there).
+        assert!(fixture("external_data.bin").is_file());
+        match rt.load(&fixture("external_data.onnx"), Load::default()) {
+            Err(AiError::ExternalData(p)) => assert!(p.ends_with("external_data.onnx"), "{p}"),
+            Err(e) => panic!("{e}"),
+            Ok(_) => panic!("external data must be refused"),
+        }
+        // A run that wouldn't fit in the memory available now is refused
+        // before it starts, with the numbers.
+        let greedy = rt
+            .load(
+                &fixture("affine.onnx"),
+                Load {
+                    name: "Affine",
+                    run_bytes: u64::MAX,
+                    ..Load::default()
+                },
+            )
+            .unwrap();
+        if crate::memory::available().is_some() {
+            match greedy.with(|_| Ok(())) {
+                Err(AiError::OutOfMemory { model, needed, .. }) => {
+                    assert_eq!((model.as_str(), needed), ("Affine", u64::MAX));
+                }
+                other => panic!("expected OutOfMemory, got {:?}", other.err()),
+            }
+        }
         // A missing file is "not installed", not a runtime failure.
         assert!(matches!(
             rt.load(&fixture("missing.onnx"), Load::default()),
@@ -654,6 +700,8 @@ mod tests {
             nodes: Placement::default(),
             fallback: failed,
             load_time: Duration::ZERO,
+            name: "affine".into(),
+            run_bytes: 0,
         };
         assert_eq!(run_affine(&m), vec![1.0, 3.0, 5.0, 7.0, 9.0, 11.0]);
     }

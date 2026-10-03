@@ -288,6 +288,7 @@ mod tests {
             bytes: HELLO.len() as u64,
             sha256: HELLO_SHA,
             avoid: &[],
+            run_bytes: 0,
         }
     }
 

@@ -6,7 +6,9 @@ use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
-use lumenply_ai::{models, Matte, Matter, ModelId, ModelStore, Prompt, RefineOptions, Runtime, Segmenter};
+use lumenply_ai::{
+    models, Detail, Matte, Matter, ModelId, ModelStore, Prompt, RefineOptions, Runtime, Segmenter,
+};
 use lumenply_tiles::Raster;
 
 #[derive(Subcommand)]
@@ -30,6 +32,12 @@ pub enum AiCmd {
         /// export with the same interface, for comparisons).
         #[arg(long, hide = true)]
         model_file: Option<PathBuf>,
+        /// With --model-file: the side of the square it runs at.
+        #[arg(long, hide = true, default_value_t = 1024)]
+        model_size: usize,
+        /// Run BiRefNet at its high-detail size (1024² instead of 768²).
+        #[arg(long)]
+        high_detail: bool,
         #[command(flatten)]
         tune: Tune,
         /// Run the model this many times and report each time.
@@ -121,17 +129,32 @@ pub fn run(cmd: AiCmd, models_dir: Option<PathBuf>, cpu: bool) -> Result<()> {
             out,
             mask,
             model_file,
+            model_size,
+            high_detail,
             tune,
             runs,
         } => {
             let rt = runtime()?;
             let t = Instant::now();
             let matter = match model_file {
-                Some(f) => Matter::load_file(&rt, &f, 1024)?,
-                None => Matter::load(&rt, &store)
-                    .with_context(|| format!("loading BiRefNet from {}", store.dir().display()))?,
+                Some(f) => Matter::load_file(&rt, &f, model_size)?,
+                None => {
+                    let detail = if high_detail {
+                        Detail::High
+                    } else {
+                        Detail::Standard
+                    };
+                    Matter::load_detail(&rt, &store, detail)
+                        .with_context(|| format!("loading BiRefNet from {}", store.dir().display()))?
+                }
             };
-            eprintln!("load {:.0} ms: {}", ms(t), matter.provider());
+            eprintln!(
+                "load {:.0} ms: {} at {}²; {}",
+                ms(t),
+                matter.provider(),
+                matter.input_size(),
+                memory_line()
+            );
             remove_bg(&matter, &input, &out, mask.as_deref(), tune, runs)
         }
         AiCmd::Select {
@@ -165,6 +188,16 @@ fn model(name: &str) -> Result<ModelId> {
     })
 }
 
+/// "peak 1.2 GB, 9.8 GB available" for measurements.
+fn memory_line() -> String {
+    let gb = |b: Option<u64>| b.map_or("?".into(), |b| format!("{:.2} GB", b as f64 / 1e9));
+    format!(
+        "peak resident {}, {} available",
+        gb(lumenply_ai::memory::peak_resident()),
+        gb(lumenply_ai::memory::available())
+    )
+}
+
 fn mb(bytes: u64) -> String {
     format!("{:.1} MB", bytes as f64 / 1e6)
 }
@@ -188,6 +221,12 @@ fn list(store: &ModelStore) -> Result<()> {
                 let names: Vec<&str> = f.avoid.iter().map(|p| p.name()).collect();
                 println!("      not run on {}", names.join(", "));
             }
+        }
+        if let Some(hd) = m.high_detail {
+            println!(
+                "  {} (--high-detail): input {}², same download",
+                hd.name, hd.input_size
+            );
         }
         if let Some(note) = m.note {
             println!("  note: {note}");
@@ -305,7 +344,7 @@ fn select(
     let t = Instant::now();
     let seg = Segmenter::load(rt, store)
         .with_context(|| format!("loading MobileSAM from {}", store.dir().display()))?;
-    eprintln!("load {:.0} ms: {}", ms(t), seg.provider());
+    eprintln!("load {:.0} ms: {}; {}", ms(t), seg.provider(), memory_line());
     for r in seg.reports() {
         for f in &r.fallback {
             eprintln!("  fell back from {f}");
@@ -328,12 +367,13 @@ fn select(
     let refine_ms = ms(t);
     eprintln!(
         "{}×{}: embed {embed_ms:.0} ms, decode {decode_ms:.1} ms, upscale + refine {refine_ms:.0} ms; \
-         mask {} (score {:.3}), covers {:.1} %",
+         mask {} (score {:.3}), covers {:.1} %; {}",
         img.width,
         img.height,
         pred.index,
         pred.score,
-        m.coverage(0, 0, m.width, m.height) * 100.0
+        m.coverage(0, 0, m.width, m.height) * 100.0,
+        memory_line()
     );
     save_mask(out, &m)?;
     println!("wrote {}", out.display());
@@ -378,16 +418,17 @@ fn remove_bg(
     if !times.is_empty() {
         eprintln!("model ms per run: {}", list_ms(&times));
     }
-    let scale = img.width.max(img.height) as f32 / 1024.0;
+    let scale = img.width.max(img.height) as f32 / matter.input_size() as f32;
     let opts = tune.apply(RefineOptions::matte(scale));
     let t = Instant::now();
     let m = matter.matte_with(&img, opts)?;
     eprintln!(
-        "{}×{}: model + upscale + refine {:.0} ms, subject covers {:.1} %",
+        "{}×{}: model + upscale + refine {:.0} ms, subject covers {:.1} %; {}",
         img.width,
         img.height,
         ms(t),
-        m.coverage(0, 0, m.width, m.height) * 100.0
+        m.coverage(0, 0, m.width, m.height) * 100.0,
+        memory_line()
     );
     let mut cut = img.clone();
     for (p, &a) in cut.pixels.iter_mut().zip(&m.alpha) {
