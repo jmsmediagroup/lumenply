@@ -25,7 +25,10 @@ cargo test --release -p lumenply-app --features uitest uitest_ -- --ignored
 `--uitest --help` lists the options: `--list`, `--size WxH` (default 1440x900),
 `--ppp N` (1 or 2), `--fps N` (30), `--every N` (record every Nth frame), `--hold S`
 (how long each step's last frame stays on, 0.6 s), `--video-scale X`, `--no-video`,
-`--stop-on-fail`. Two helpers for writing scenarios:
+`--stop-on-fail`, `--models-from DIR` (or `LUMENPLY_UITEST_MODELS`: AI models in
+`DIR/<model>/` are linked into the scratch profile before launch, so the session
+starts with them installed; under `cargo test` sessions then run the real AI
+engine). Two helpers for writing scenarios:
 
 - `--uitest --tree [APP ARGS]` launches (`--demo` opens the demo) and prints every named
   control, with its role and position.
@@ -104,7 +107,8 @@ given. `--tree` and `s.dump_tree("label")` list them.
   When the same kind appears twice, the one drawn last (on top) is used;
   `s.within("Properties", |s| s.drag_slider("Opacity", 0.5))` limits the search to
   one panel.
-- Layer rows are `"Layer <name>"`, history steps are their labels, tools are their
+- Layer rows are `"Layer <name>"`, history steps are
+  `"History step <n>: <label>"` (0 is the opened state, `"History step 0: Open"`), tools are their
   names ("Brush", "Rectangular Marquee").
 - A control must look the same for two frames before it is used (a menu's first frame
   is an invisible sizing pass), and the harness waits up to a dozen frames for one to

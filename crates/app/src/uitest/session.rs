@@ -77,6 +77,12 @@ pub(crate) struct Options {
     pub splash: bool,
     /// The longest one frame may take before the app counts as hung.
     pub frame_timeout: Duration,
+    /// AI models to have installed at launch, as if downloaded earlier:
+    /// every file directly inside `DIR/<model>/` (`mobile-sam/`,
+    /// `birefnet-lite/`) is hard-linked (or copied) into the profile's
+    /// `models/`. `None`: a fresh profile without models. `--models-from`,
+    /// or `LUMENPLY_UITEST_MODELS`.
+    pub models_from: Option<PathBuf>,
 }
 
 impl Options {
@@ -95,8 +101,41 @@ impl Options {
             args: Vec::new(),
             splash: false,
             frame_timeout: Duration::from_secs(90),
+            models_from: std::env::var_os("LUMENPLY_UITEST_MODELS")
+                .filter(|d| !d.is_empty())
+                .map(PathBuf::from),
         }
     }
+}
+
+/// Install the model files of `src/<model>/` into `models` (the profile's
+/// model store), hard-linked where possible. Subfolders (a compile cache)
+/// are left out, so the app meets the models as a fresh download.
+fn preinstall_models(src: &Path, models: &Path) -> Result<Vec<String>, String> {
+    let mut done = Vec::new();
+    let dirs = std::fs::read_dir(src).map_err(|e| format!("models from {}: {e}", src.display()))?;
+    for model in dirs.flatten().filter(|e| e.path().is_dir()) {
+        let dest = models.join(model.file_name());
+        std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+        for f in std::fs::read_dir(model.path())
+            .map_err(|e| e.to_string())?
+            .flatten()
+        {
+            if !f.path().is_file() {
+                continue;
+            }
+            let to = dest.join(f.file_name());
+            if std::fs::hard_link(f.path(), &to).is_err() {
+                std::fs::copy(f.path(), &to).map_err(|e| format!("{}: {e}", f.path().display()))?;
+            }
+            done.push(format!(
+                "{}/{}",
+                model.file_name().to_string_lossy(),
+                f.file_name().to_string_lossy()
+            ));
+        }
+    }
+    Ok(done)
 }
 
 /// One line of the session log.
@@ -324,6 +363,7 @@ impl Session {
         }
         let expect = (!cfg!(test)).then(|| profile.clone());
         let args = opts.args.clone();
+        let models_from = opts.models_from.clone();
         let clipboard: SharedClip = Default::default();
         let (data_tx, data_rx) = std::sync::mpsc::channel();
         let make = move || {
@@ -338,15 +378,25 @@ impl Session {
             }
             let _ = std::fs::remove_dir_all(&data);
             let _ = std::fs::create_dir_all(&data);
-            let _ = data_tx.send(data);
+            let installed = models_from
+                .as_ref()
+                .map(|src| preinstall_models(src, &data.join("models")));
+            let _ = data_tx.send((data.clone(), installed));
             let ctx = egui::Context::default();
             crate::theme::install(&ctx);
             ctx.enable_accesskit();
-            let app = App::launch(&args);
+            #[allow(unused_mut)]
+            let mut app = App::launch(&args);
+            // `cargo test` builds keep a stand-in AI service; a session runs
+            // the real engine over its profile's models, as the app does.
+            #[cfg(all(feature = "ai", test))]
+            app.ai_use_service(std::sync::Arc::new(crate::ai_engine::Engine::new(
+                data.join("models"),
+            )));
             UiState { app, ctx }
         };
         let ui = UiThread::start(format!("uitest-{name}"), clipboard.clone(), make)?;
-        let data_dir = data_rx.recv().unwrap_or_default();
+        let (data_dir, installed) = data_rx.recv().unwrap_or_default();
 
         let ppp = opts.pixels_per_point;
         let px = [
@@ -354,6 +404,11 @@ impl Session {
             (opts.size.y * ppp).round() as u32,
         ];
         let mut notes = Vec::new();
+        match installed {
+            Some(Ok(files)) => notes.push(format!("models installed before launch: {}", files.join(", "))),
+            Some(Err(e)) => return Err(UiError(e)),
+            None => {}
+        }
         let gpu = if opts.record {
             match Gpu::new(px) {
                 Ok(g) => Some(g),
@@ -887,6 +942,11 @@ impl Session {
 
     pub(crate) fn screen(&self) -> egui::Rect {
         egui::Rect::from_min_size(Pos2::ZERO, self.opts.size)
+    }
+
+    /// The window's size in points.
+    pub(crate) fn window_size(&self) -> Vec2 {
+        self.opts.size
     }
 
     fn visible(&self, n: &Node) -> bool {
@@ -1444,7 +1504,14 @@ impl Session {
         self.step("action", format!("Click {shown}"), |s| {
             let (first, rest) = parts.split_first().ok_or("an empty menu path")?;
             // Open the menu bar menu, unless it is open already.
-            let open = rest.first().is_some_and(|next| s.has_node(next));
+            // (An item is a button: a section title such as Properties'
+            // "HISTOGRAM" must not pass for an open Window menu.)
+            let open = rest.first().is_some_and(|next| {
+                s.tree
+                    .matches(next, Some(Role::Button))
+                    .iter()
+                    .any(|n| s.visible(n))
+            });
             if !open {
                 // The menu bar's button: the topmost of that name (a
                 // history step can be called "Select" too).
@@ -1779,6 +1846,14 @@ impl Session {
         })
     }
 
+    /// [`Session::wait_idle`] for work that can take longer than 30 s (a
+    /// model download), failing after `secs`.
+    pub(crate) fn wait_idle_for(&mut self, secs: u64) -> UiResult {
+        self.step("wait", "Wait until Lumenply is idle".into(), |s| {
+            s.settle_idle(Duration::from_secs(secs))
+        })
+    }
+
     /// Let `n` frames pass with no input.
     pub(crate) fn wait_frames(&mut self, n: usize) -> UiResult {
         for _ in 0..n {
@@ -2100,6 +2175,86 @@ impl Session {
     ) -> UiResult<bool> {
         let (ok, actual) = self.doc(f)?;
         self.check(what, ok, expected, actual)
+    }
+
+    // ---- the window, held keys, relaunching ------------------------------------
+
+    /// The window's size in points (`--size`).
+    pub(crate) fn window_size(&self) -> Vec2 {
+        self.opts.size
+    }
+
+    /// Press and hold a key that is not a modifier (Space for panning);
+    /// [`Session::key_up`] lets it go. Steps in between see it held.
+    pub(crate) fn key_down(&mut self, name: &str) -> UiResult {
+        let key = input::key_named(name).ok_or_else(|| format!("unknown key {name:?}"))?;
+        self.step("action", format!("Hold down {name}"), |s| s.hold(key, true))
+    }
+
+    /// Let go of a key held with [`Session::key_down`].
+    pub(crate) fn key_up(&mut self, name: &str) -> UiResult {
+        let key = input::key_named(name).ok_or_else(|| format!("unknown key {name:?}"))?;
+        self.step("action", format!("Let go of {name}"), |s| s.hold(key, false))
+    }
+
+    fn hold(&mut self, key: egui::Key, pressed: bool) -> UiResult {
+        self.events.push(Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed,
+            repeat: false,
+            modifiers: self.modifiers,
+        });
+        self.frame()?;
+        self.settle(10)
+    }
+
+    /// Rest the pointer on a document point of the canvas (no click), as
+    /// when reading the Info panel or the status bar.
+    pub(crate) fn canvas_hover(&mut self, at: (f32, f32)) -> UiResult {
+        self.step(
+            "action",
+            format!("Point at the canvas at ({:.0}, {:.0})", at.0, at.1),
+            |s| {
+                let p = s.doc_to_screen(at.0, at.1)?;
+                s.aim_canvas(p, at)?;
+                s.settle(10)
+            },
+        )
+    }
+
+    /// Quit Lumenply the way a user does (the app's exit hook runs) and
+    /// start it again from the Dock with the same profile: prefs, recent
+    /// files and anything else in the data folder are kept.
+    pub(crate) fn relaunch(&mut self) -> UiResult {
+        self.step("launch", "Quit Lumenply and start it again".into(), |s| {
+            if s.dialog.is_some() {
+                return Err("a system file panel is still open".into());
+            }
+            if s.crashed.is_none() {
+                s.call(|st| eframe::App::on_exit(&mut st.app, None))?;
+            }
+            let clipboard = s.clipboard_image.clone();
+            let make = || {
+                let ctx = egui::Context::default();
+                crate::theme::install(&ctx);
+                ctx.enable_accesskit();
+                let app = App::launch(&[]);
+                UiState { app, ctx }
+            };
+            let fresh = UiThread::start(format!("uitest-{}", s.name), clipboard, make)?;
+            // The old app is dropped on its own thread, after the new one
+            // has read the profile.
+            drop(std::mem::replace(&mut s.ui, fresh));
+            s.quit = false;
+            s.crashed = None;
+            s.pressed = None;
+            s.modifiers = Modifiers::NONE;
+            s.tree = Tree::default();
+            s.prev_tree = Tree::default();
+            s.title.clear();
+            s.settle_idle(Duration::from_secs(60))
+        })
     }
 }
 

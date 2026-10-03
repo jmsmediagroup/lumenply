@@ -56,6 +56,8 @@ pub(crate) struct PanelPrefs {
     pub navigator: bool,
     /// Window ▸ Info.
     pub info: bool,
+    /// Window ▸ Histogram.
+    pub histogram: bool,
 }
 
 /// What the canvas shows: the composite, one colour channel alone as
@@ -390,8 +392,9 @@ impl App {
                     ChannelView::Green => "green",
                     _ => "blue",
                 },
+                // Written as every other shortcut in the app is.
                 if cfg!(target_os = "macos") {
-                    "⌘2"
+                    "Cmd+2"
                 } else {
                     "Ctrl+2"
                 }
@@ -531,6 +534,10 @@ impl App {
                 self.prefs.panels.info = !self.prefs.panels.info;
                 self.save_panel_prefs();
             }
+            "histogram-panel" => {
+                self.prefs.panels.histogram = !self.prefs.panels.histogram;
+                self.save_panel_prefs();
+            }
             "make-work-path" => {
                 self.run(&lumenply_core::path_ops::SelectionToWorkPath { tolerance: 2.0 });
                 if self.editor.doc().work_path.is_some() {
@@ -548,7 +555,8 @@ impl App {
         Some(match id {
             "make-work-path" if self.editor.doc().selection.is_none() => Some("Make a selection first"),
             "panel-layers" | "panel-channels" | "panel-paths" | "channel-rgb" | "channel-red"
-            | "channel-green" | "channel-blue" | "navigator" | "info-panel" | "make-work-path" => None,
+            | "channel-green" | "channel-blue" | "navigator" | "info-panel" | "histogram-panel"
+            | "make-work-path" => None,
             _ => return None,
         })
     }
@@ -565,10 +573,14 @@ impl App {
         Some(shortcut_text(ctx, egui::Modifiers::COMMAND, key))
     }
 
-    /// The channel keys (called from `App::shortcuts`).
+    /// The channel keys, and Cmd+, for Preferences as on every Mac app
+    /// (called from `App::shortcuts`).
     pub(crate) fn panel_keys(&mut self, ctx: &egui::Context) {
         let mut fired = None;
         ctx.input_mut(|i| {
+            if i.consume_key(egui::Modifiers::COMMAND, Key::Comma) {
+                fired = Some("prefs");
+            }
             for (k, id) in [
                 (Key::Num2, "channel-rgb"),
                 (Key::Num3, "channel-red"),
@@ -595,6 +607,8 @@ impl App {
         let (nav, info) = (self.prefs.panels.navigator, self.prefs.panels.info);
         self.act_check(ui, "Navigator", "navigator", nav);
         self.act_check(ui, "Info", "info-panel", info);
+        let hist = self.prefs.panels.histogram;
+        self.act_check(ui, "Histogram", "histogram-panel", hist);
         let actions = self.actions.shown;
         self.act_check(ui, "Actions", crate::actions_panel::ACTIONS_PANEL, actions);
         menu_separator(ui);

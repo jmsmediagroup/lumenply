@@ -895,6 +895,12 @@ impl App {
                             ui.add_space(4.0);
                             section_title(ui, "SHORTCUTS");
                             note(ui, "Click a shortcut, then press the new keys (Esc cancels).");
+                            // Why the last keys pressed were not taken (another
+                            // command's chord, or a bare key).
+                            let refused_id = egui::Id::new("prefs-shortcut-refused");
+                            if let Some(why) = ui.data(|d| d.get_temp::<String>(refused_id)) {
+                                ui.label(RichText::new(why).color(ACCENT));
+                            }
                             // Click a binding, press the new keys; Esc cancels.
                             if let Some(active) = capturing.clone() {
                                 let got = ui.input(|i| {
@@ -912,14 +918,22 @@ impl App {
                                     if key == Key::Escape {
                                         *capturing = None;
                                     } else if !matches!(key, Key::Tab | Key::Enter | Key::Space) {
-                                        p.shortcuts.insert(
-                                            active,
-                                            session::Chord {
-                                                cmd: m.command,
-                                                shift: m.shift,
-                                                key: key.name().to_string(),
-                                            },
-                                        );
+                                        let chord = session::Chord {
+                                            cmd: m.command,
+                                            shift: m.shift,
+                                            alt: m.alt,
+                                            key: key.name().to_string(),
+                                        };
+                                        // A chord another command holds would
+                                        // never reach this one: refuse it and say
+                                        // why, keeping the old binding.
+                                        match session::chord_conflict(ui.ctx(), p, &active, &chord) {
+                                            Some(why) => ui.data_mut(|d| d.insert_temp(refused_id, why)),
+                                            None => {
+                                                ui.data_mut(|d| d.remove::<String>(refused_id));
+                                                p.shortcuts.insert(active, chord);
+                                            }
+                                        }
                                         *capturing = None;
                                     }
                                 }
@@ -949,21 +963,28 @@ impl App {
                                                     1.0,
                                                     if highlight { ACCENT } else { LINE },
                                                 ));
-                                            if ui
-                                                .add(btn)
-                                                .on_hover_text(format!(
-                                                    "Click, then press the new keys for {label}"
-                                                ))
+                                            let r = ui.add(btn);
+                                            // Spoken as the command and its keys, not
+                                            // the keys alone.
+                                            let spoken = format!(
+                                                "Shortcut for {label}: {}",
+                                                session::chord_label(ui.ctx(), p, id)
+                                            );
+                                            a11y_name(&r, &spoken);
+                                            if r.on_hover_text(format!("Click, then press the new keys for {label}"))
                                                 .clicked()
                                             {
                                                 *capturing = Some(id.to_string());
+                                                ui.data_mut(|d| d.remove::<String>(refused_id));
                                             }
-                                            if p.shortcuts.contains_key(*id)
-                                                && ui
-                                                    .small_button("Reset")
-                                                    .on_hover_text("Back to the default shortcut")
-                                                    .clicked()
-                                            {
+                                            let reset = p.shortcuts.contains_key(*id).then(|| {
+                                                let r = ui.small_button("Reset");
+                                                a11y_name(&r, &format!("Reset shortcut for {label}"));
+                                                r
+                                            });
+                                            if reset.is_some_and(|r| {
+                                                r.on_hover_text("Back to the default shortcut").clicked()
+                                            }) {
                                                 p.shortcuts.remove(*id);
                                             }
                                         });
@@ -1267,8 +1288,11 @@ impl App {
                     // The history strip's fold state lives in the prefs but
                     // isn't edited here; keep whatever it is now.
                     let folded = self.prefs.history_collapsed;
+                    // The AI models page applies its setting at once.
+                    let detail = self.prefs.ai_high_detail;
                     self.prefs = p.clone();
                     self.prefs.history_collapsed = folded;
+                    self.prefs.ai_high_detail = detail;
                     self.prefs.apply(&mut self.editor);
                     self.prefs.save();
                     self.status = "Preferences saved".into();

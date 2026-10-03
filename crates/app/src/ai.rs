@@ -98,12 +98,23 @@ pub(crate) trait AiService: Send + Sync {
     fn unavailable(&self) -> Option<String> {
         None
     }
+    /// Object Selection's model is loaded and ready, so a click doesn't
+    /// first wait for it to load (seconds; the first time on a machine,
+    /// CoreML compiles it for longer).
+    fn select_ready(&self) -> bool {
+        true
+    }
+    /// Load Object Selection's model ahead of the first click (called on a
+    /// worker when the tool is picked); a no-op when it is loaded.
+    fn prepare_select(&self) {}
     /// Object Selection (MobileSAM): the mask for these prompts. Calls
     /// `encoding()` first when the image has to be encoded (the slow part;
     /// later calls on the same image reuse the cached embedding).
     fn select(&self, image: &Raster, prompts: &[AiPrompt], encoding: &dyn Fn()) -> Result<Vec<f32>, String>;
-    /// Subject matte (BiRefNet): the foreground's coverage.
-    fn matte(&self, image: &Raster) -> Result<Vec<f32>, String>;
+    /// Subject matte (BiRefNet): the foreground's coverage; `high_detail`
+    /// runs the model at its larger size (finer hair, about twice the time
+    /// and memory).
+    fn matte(&self, image: &Raster, high_detail: bool) -> Result<Vec<f32>, String>;
 }
 
 /// The models of ADR 0028, as the UI lists them; nothing installed.
@@ -167,7 +178,7 @@ impl AiService for NoEngine {
     fn select(&self, _: &Raster, _: &[AiPrompt], _: &dyn Fn()) -> Result<Vec<f32>, String> {
         Err(NO_ENGINE.into())
     }
-    fn matte(&self, _: &Raster) -> Result<Vec<f32>, String> {
+    fn matte(&self, _: &Raster, _: bool) -> Result<Vec<f32>, String> {
         Err(NO_ENGINE.into())
     }
 }
@@ -194,6 +205,12 @@ pub(crate) struct FakeAi {
     pub(crate) encode_delay: Duration,
     /// Time every `select` and `matte` takes.
     pub(crate) run_delay: Duration,
+    /// Object Selection's model isn't loaded yet: the first `select`
+    /// loads it, taking `load_delay` longer.
+    pub(crate) cold: AtomicBool,
+    pub(crate) load_delay: Duration,
+    /// The last `matte` asked for high detail.
+    pub(crate) high_detail: AtomicBool,
 }
 
 impl FakeAi {
@@ -210,6 +227,9 @@ impl FakeAi {
             tick: Duration::ZERO,
             encode_delay: Duration::ZERO,
             run_delay: Duration::ZERO,
+            cold: AtomicBool::new(false),
+            load_delay: Duration::ZERO,
+            high_detail: AtomicBool::new(false),
         }
     }
 
@@ -277,8 +297,21 @@ impl AiService for FakeAi {
         "Simulated (no model)".into()
     }
 
+    fn select_ready(&self) -> bool {
+        !self.cold.load(Ordering::Relaxed)
+    }
+
+    fn prepare_select(&self) {
+        if self.is_installed(ModelKey::MobileSam) && self.cold.swap(false, Ordering::Relaxed) {
+            std::thread::sleep(self.load_delay);
+        }
+    }
+
     fn select(&self, image: &Raster, prompts: &[AiPrompt], encoding: &dyn Fn()) -> Result<Vec<f32>, String> {
         self.require(ModelKey::MobileSam)?;
+        if self.cold.swap(false, Ordering::Relaxed) {
+            std::thread::sleep(self.load_delay);
+        }
         let key = raster_hash(image);
         if self.encoded.lock().expect("fake state").insert(key) {
             encoding();
@@ -307,8 +340,9 @@ impl AiService for FakeAi {
         Ok(out)
     }
 
-    fn matte(&self, image: &Raster) -> Result<Vec<f32>, String> {
+    fn matte(&self, image: &Raster, high_detail: bool) -> Result<Vec<f32>, String> {
         self.require(ModelKey::BiRefNetLite)?;
+        self.high_detail.store(high_detail, Ordering::Relaxed);
         std::thread::sleep(self.run_delay);
         let (w, h) = (image.width, image.height);
         let border: Vec<[f32; 3]> = (0..w)
@@ -489,7 +523,7 @@ mod tests {
     #[test]
     fn the_fake_matte_is_what_differs_from_the_border() {
         let ai = FakeAi::new(&[ModelKey::BiRefNetLite]);
-        let m = ai.matte(&card()).unwrap();
+        let m = ai.matte(&card(), false).unwrap();
         assert_eq!(m.len(), 800);
         assert_eq!(count(&m), 60.0);
         assert_eq!((m[4 * 40 + 5], m[4 * 40 + 4], m[0]), (1.0, 0.0, 0.0));

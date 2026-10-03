@@ -858,7 +858,7 @@ fn tool_hint(tool: Tool) -> Option<&'static str> {
         Tool::PolyLasso => "Click to add points, double-click to close",
         Tool::Pen => "Click corners, drag curves; click the first point to close",
         Tool::Shape => "Shift constrains, Alt draws from the centre",
-        Tool::Hand => "Drag to pan, scroll to zoom",
+        Tool::Hand => "Drag or scroll to pan; Alt+scroll zooms",
         _ => return None,
     })
 }
@@ -907,7 +907,10 @@ mod tests {
 
     #[test]
     fn hints_cover_the_tools_that_need_one() {
-        assert_eq!(tool_hint(Tool::Hand), Some("Drag to pan, scroll to zoom"));
+        assert_eq!(
+            tool_hint(Tool::Hand),
+            Some("Drag or scroll to pan; Alt+scroll zooms")
+        );
         assert_eq!(tool_hint(Tool::Lasso), Some("Shift adds, Alt subtracts"));
         assert_eq!(tool_hint(Tool::Brush), None);
         assert_eq!(tool_hint(Tool::Text), None);

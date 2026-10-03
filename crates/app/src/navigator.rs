@@ -110,6 +110,22 @@ impl App {
         if self.prefs.panels.info {
             let h = self.info_ui(ctx, at);
             ctx.data_mut(|d| d.insert_temp(info_h_id, h));
+            if self.prefs.panels.histogram {
+                // Under Info, or in the next column when it would run
+                // onto the zoom pill.
+                let hist_h = ctx
+                    .data(|d| d.get_temp::<f32>(egui::Id::new("histogram-panel-h")))
+                    .unwrap_or(170.0);
+                if at.y + h + 10.0 + hist_h > canvas.max.y - 56.0 {
+                    at.x -= NAV_W + 30.0;
+                } else {
+                    at.y += h + 10.0;
+                }
+            }
+        }
+        if self.prefs.panels.histogram {
+            let h = self.histogram_panel_ui(ctx, at);
+            ctx.data_mut(|d| d.insert_temp(egui::Id::new("histogram-panel-h"), h));
         }
     }
 
@@ -178,9 +194,10 @@ impl App {
                                 .frame(false)
                                 .min_size(egui::vec2(16.0, 20.0)),
                         );
-                        a11y_name(&out, "Zoom out");
+                        // Named apart from the zoom pill's buttons.
+                        a11y_name(&out, "Navigator zoom out");
                         if out.on_hover_text("Zoom out").clicked() {
-                            zoom_to = Some(self.zoom / 1.25);
+                            zoom_to = Some(crate::canvas::zoom_step(self.zoom, false));
                         }
                         let mut pct = self.zoom * 100.0;
                         let r = ui.add(
@@ -197,9 +214,9 @@ impl App {
                                 .frame(false)
                                 .min_size(egui::vec2(16.0, 20.0)),
                         );
-                        a11y_name(&zin, "Zoom in");
+                        a11y_name(&zin, "Navigator zoom in");
                         if zin.on_hover_text("Zoom in").clicked() {
-                            zoom_to = Some(self.zoom * 1.25);
+                            zoom_to = Some(crate::canvas::zoom_step(self.zoom, true));
                         }
                         let mut typed = self.zoom * 100.0;
                         let f = num_field(
