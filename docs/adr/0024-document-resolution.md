@@ -36,8 +36,11 @@ and units.
   - Values read from files snap to the whole number they came from when
     within 0.02 ppi (PNG's 11811 px/m reads 300, not 299.9994), else keep
     two decimals.
+  - OpenRaster: the `xres`/`yres` attributes of `<image>` (ppi), read
+    and written.
+  - PDF: the page is the print size, `width / ppi` inches.
 - Not stored: TIFF export (the `image` crate's TIFF encoder has no
-  resolution tags), WebP and GIF (no standard field), ORA.
+  resolution tags), WebP and GIF (no standard field).
 
 ## Consequences
 

@@ -513,6 +513,21 @@ mod tests {
     }
 
     #[test]
+    fn ora_round_trip() {
+        let dir = std::env::temp_dir().join("lumenply-resolution-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut doc = lumenply_doc::Document::new(12, 8);
+        doc.add_pixel_layer("p");
+        doc.resolution = 240.0;
+        let ora = dir.join("r.ora");
+        crate::ora::save(&ora, &doc).unwrap();
+        assert_eq!(crate::ora::load(&ora).unwrap().value.resolution, 240.0);
+        doc.resolution = 72.5;
+        crate::ora::save(&ora, &doc).unwrap();
+        assert_eq!(crate::ora::load(&ora).unwrap().value.resolution, 72.5);
+    }
+
+    #[test]
     fn old_projects_load_as_72_ppi() {
         // A manifest written before the field existed: rewrite one without it.
         let dir = std::env::temp_dir().join("lumenply-resolution-test");
