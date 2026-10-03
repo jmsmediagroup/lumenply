@@ -475,7 +475,8 @@ pub fn equalize_curve(hist: &[f64; EQ_LEVELS]) -> Option<[f32; EQ_LEVELS]> {
 }
 
 /// Equalize one premultiplied pixel: its gamma luma goes through `curve`
-/// (linear between levels), its chroma and hue are kept.
+/// (linear between levels); the chroma scales with the luma (at most 4×),
+/// so colours keep their saturation and exactly their hue.
 pub fn equalize_pixel(p: Rgba, curve: &[f32; EQ_LEVELS]) -> Rgba {
     if p.a <= 0.0 {
         return p;
@@ -487,7 +488,8 @@ pub fn equalize_pixel(p: Rgba, curve: &[f32; EQ_LEVELS]) -> Rgba {
     let i = (x as usize).min(EQ_LEVELS - 2);
     let t = x - i as f32;
     let l2 = curve[i] + (curve[i + 1] - curve[i]) * t;
-    let rgb = decode3(fit_chroma(l2, [g[0] - l, g[1] - l, g[2] - l]));
+    let k = (l2 / l.max(1e-4)).clamp(0.0, 4.0);
+    let rgb = decode3(fit_chroma(l2, [(g[0] - l) * k, (g[1] - l) * k, (g[2] - l) * k]));
     Rgba::from_straight(rgb[0], rgb[1], rgb[2], p.a)
 }
 
@@ -1009,17 +1011,21 @@ mod tests {
             histogram_add(&mut hist, grey(g), 1.0);
         }
         let curve = equalize_curve(&hist).unwrap();
-        // Gamma (0.4, 0.3, 0.2): luma 0.30562 -> level 78, between 0.3
-        // (level 77, cdf 2 -> 1/3) and 0.5 (cdf 3): curve[78] = 1/3.
+        // Gamma (0.4, 0.3, 0.2): luma 0.31404 -> level 80.08, between 0.3
+        // (level 77, cdf 2 -> 1/3) and 0.5 (level 128): the curve is 1/3.
         let c = [srgb_decode(0.4), srgb_decode(0.3), srgb_decode(0.2)];
         let out = gamma_of(equalize_pixel(Rgba::from_straight(c[0], c[1], c[2], 1.0), &curve));
         let l = gamma_luma(out);
-        let want_l = curve[78] + (curve[79] - curve[78]) * (0.30562 * 255.0 - 78.0);
+        let want_l = 1.0 / 3.0;
+        assert_eq!((curve[80], curve[81]), (1.0 / 3.0, 1.0 / 3.0));
         assert!(close(l, want_l, 1e-3), "luma {l} want {want_l}");
-        // Chroma kept: (0.4,0.3,0.2) minus its luma.
+        // The chroma scales with the luma: by (1/3) / 0.31404 = 1.0614,
+        // so the hue (the chroma's direction) is exactly kept.
         let lin = 0.2126 * 0.4 + 0.7152 * 0.3 + 0.0722 * 0.2;
+        let k = (1.0 / 3.0) / lin;
+        assert!(close(k, 1.0614, 1e-3));
         for (o, i) in out.iter().zip([0.4f32, 0.3, 0.2]) {
-            assert!(close(o - l, i - lin, 1e-3), "chroma {o} vs {i}");
+            assert!(close(o - l, (i - lin) * k, 1e-3), "chroma {o} vs {i}");
         }
     }
 

@@ -95,6 +95,41 @@ fn px_row(ui: &mut egui::Ui, label: &str, v: &mut f32) -> bool {
     *v != before
 }
 
+/// Shadows/Highlights starting points: Photoshop's defaults, then
+/// typical recoveries of a backlit or high-contrast photo.
+pub(crate) fn sh_presets() -> Vec<(&'static str, ShadowsHighlights)> {
+    let z = |amount: f32, tone: f32, radius: f32| ToneZone { amount, tone, radius };
+    let sh = |s: ToneZone, h: ToneZone, color: f32, midtone: f32| ShadowsHighlights {
+        shadows: s,
+        highlights: h,
+        color,
+        midtone,
+    };
+    vec![
+        ("Default", ShadowsHighlights::default()),
+        (
+            "Lift shadows",
+            sh(z(0.6, 0.55, 40.0), z(0.0, 0.5, 30.0), 0.25, 0.0),
+        ),
+        (
+            "Recover highlights",
+            sh(z(0.0, 0.5, 30.0), z(0.5, 0.45, 40.0), 0.15, 0.0),
+        ),
+        (
+            "Backlit subject",
+            sh(z(0.75, 0.6, 60.0), z(0.3, 0.4, 60.0), 0.3, 0.1),
+        ),
+        (
+            "Balanced tones",
+            sh(z(0.4, 0.5, 80.0), z(0.4, 0.5, 80.0), 0.2, 0.15),
+        ),
+        (
+            "Detail punch",
+            sh(z(0.5, 0.45, 20.0), z(0.45, 0.45, 20.0), 0.3, 0.35),
+        ),
+    ]
+}
+
 fn zone_rows(ui: &mut egui::Ui, z: &mut ToneZone) {
     pct(ui, "Amount", &mut z.amount, 0.0..=1.0, " %");
     pct(ui, "Tone", &mut z.tone, 0.0..=1.0, " %");
@@ -430,17 +465,35 @@ impl App {
                     raise_controls(ui);
                     ui.set_min_width(300.0);
                     ui.set_max_width(320.0);
-                    ui.spacing_mut().item_spacing.y = 5.0;
+                    // Tighter rows in short windows (the tallest dialog
+                    // still fits 900×600).
+                    let short = ui.ctx().screen_rect().height() < 700.0;
+                    ui.spacing_mut().item_spacing.y = if short { 2.0 } else { 5.0 };
                     match &mut st.kind {
                         AdjxKind::ShadowsHighlights(p) => {
+                            ui.horizontal(|ui| {
+                                row_label(ui, "Preset", LABEL_W);
+                                let presets = sh_presets();
+                                let cur = presets.iter().find(|(_, q)| q == p).map_or("Custom", |(n, _)| *n);
+                                let r = egui::ComboBox::from_id_salt("adjx-sh-preset")
+                                    .selected_text(cur)
+                                    .width(190.0)
+                                    .show_ui(ui, |ui| {
+                                        popup_style(ui);
+                                        for (n, q) in &presets {
+                                            if ui.selectable_label(q == p, *n).clicked() {
+                                                *p = *q;
+                                            }
+                                        }
+                                    });
+                                a11y_name(&r.response, "Shadows/Highlights preset");
+                            });
                             section_title(ui, "SHADOWS");
                             zone_rows(ui, &mut p.shadows);
                             section_title(ui, "HIGHLIGHTS");
                             zone_rows(ui, &mut p.highlights);
                             section_title(ui, "ADJUSTMENTS");
-                            let before = p.color;
                             slider_row_scaled(ui, "Color", &mut p.color, -1.0..=1.0, 100.0, "");
-                            let _ = before;
                             slider_row_scaled(ui, "Midtone", &mut p.midtone, -1.0..=1.0, 100.0, "");
                         }
                         AdjxKind::Equalize { entire } => {
@@ -489,9 +542,7 @@ impl App {
                                 segmented(ui, show_image, &[(false, "Selection"), (true, "Image")]);
                             });
                             section_title(ui, "REPLACEMENT");
-                            let before = rc.hue;
                             slider_row_ex(ui, "Hue", &mut rc.hue, -180.0..=180.0, "°", RowOpts::default());
-                            let _ = before;
                             slider_row_scaled(ui, "Saturation", &mut rc.saturation, -1.0..=1.0, 100.0, "");
                             slider_row_scaled(ui, "Lightness", &mut rc.lightness, -1.0..=1.0, 100.0, "");
                         }
@@ -645,7 +696,12 @@ impl App {
         // Live preview: whenever the settings change, at most every 120 ms
         // while a slider is being dragged.
         let want = st.preview.then(|| format!("{:?}", st.kind));
-        if want != st.shown {
+        // A pending canvas refresh (an edit this frame) would paint over
+        // the preview: wait for it, then preview.
+        if self.dirty && want.is_some() {
+            st.shown = None;
+            ctx.request_repaint();
+        } else if want != st.shown {
             let dragging = ctx.input(|i| i.pointer.any_down());
             let due = st.last_preview.is_none_or(|t| t.elapsed().as_millis() >= 120);
             if !dragging || due {
