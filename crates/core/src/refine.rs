@@ -471,8 +471,9 @@ fn hmean(v: &[f32], w: usize, out: &mut [f32], r: usize) {
     }
 }
 
-/// Mean over a (2r+1)² box clipped to the buffer, in parallel.
-fn box_mean(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+/// Mean over a (2r+1)² box clipped to the buffer, in parallel (`v` is
+/// `w`×`h` row-major).
+pub fn box_mean(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
     let mut a = vec![0f32; w * h];
     a.par_chunks_mut(w)
         .zip(v.par_chunks(w))
@@ -734,7 +735,7 @@ const UNEXPLAINED: f32 = 0.35;
 
 /// The guided filter's ε (linear-light colour variance): below it a
 /// window counts as flat and the matte is averaged there.
-const GF_EPS: f32 = 4e-4;
+pub const GF_EPS: f32 = 4e-4;
 
 /// A filtered strip: first row, column span, values.
 type StripOut = (usize, usize, usize, Vec<f32>);
@@ -745,7 +746,14 @@ const STRIP: usize = 96;
 /// He et al.'s colour-guided filter of `p`, computed only around the
 /// unknown pixels (strips in parallel) and returned for every pixel
 /// (`p` elsewhere).
-fn guided_filter_band(
+///
+/// `guide` holds one colour per pixel (only the first three channels are
+/// read), `p` the input matte, both `w`×`h` row-major; `r` is the window
+/// radius and `eps` the regularisation, in the guide's colour units
+/// squared (Select and Mask uses linear light and [`GF_EPS`]). Values are
+/// not clamped. Also used by `lumenply-ai` to fit upscaled model masks to
+/// the full-resolution image.
+pub fn guided_filter_band(
     guide: &[[f32; 4]],
     p: &[f32],
     unknown: &[bool],
@@ -860,7 +868,7 @@ fn guided_filter_band(
 
 /// Solve the symmetric 3×3 system `s · a = b` (Cramer; `s` is positive
 /// definite thanks to the filter's ε).
-fn solve3(s: [[f32; 3]; 3], b: [f32; 3]) -> [f32; 3] {
+pub fn solve3(s: [[f32; 3]; 3], b: [f32; 3]) -> [f32; 3] {
     let det = |m: [[f32; 3]; 3]| {
         m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
             + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
