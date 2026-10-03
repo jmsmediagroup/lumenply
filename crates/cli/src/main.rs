@@ -83,7 +83,7 @@ enum Cmd {
     /// Photoshop's menu order with a blank line between its groups.
     Blends,
     /// Convert many files at once (Photoshop's Image Processor): images,
-    /// camera RAW, PSD and projects in; PNG, JPEG or WebP out.
+    /// camera RAW, PSD and projects in; PNG, JPEG, WebP, GIF or PDF out.
     ///
     /// e.g. `lumenply batch --out web --format jpeg --resize 2048 --auto *.CR3`
     Batch {
@@ -93,7 +93,7 @@ enum Cmd {
         /// Output folder (created if missing).
         #[arg(short, long)]
         out: PathBuf,
-        /// png, jpeg or webp (lossless).
+        /// png, jpeg, webp (lossless), gif or pdf (one page at the document's resolution).
         #[arg(long, default_value = "jpeg")]
         format: String,
         /// JPEG quality, 1-100.

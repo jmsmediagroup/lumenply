@@ -169,7 +169,7 @@ impl ActionHost for AppHost<'_> {
         if let Some(why) = self.app.action_block(id) {
             return Err(why.into());
         }
-        if matches!(id, "auto-contrast" | "auto-color") {
+        if matches!(id, "auto-contrast" | "auto-color" | "auto-tone") {
             // They read the composite; earlier steps changed it.
             self.app.last_flat = Some(lumenply_render::composite_raster(self.app.editor.doc()));
         }
@@ -900,6 +900,62 @@ mod tests {
                 id: "auto-color".into()
             }]
         );
+        let _ = std::fs::remove_file(app.actions.path.as_ref().unwrap());
+    }
+
+    #[test]
+    fn one_click_adjustments_record_and_replay_on_other_images() {
+        let mut app = app_with("adjx");
+        app.start_recording();
+        app.run_menu_action("adj-desaturate");
+        app.run_menu_action("adjd-invert");
+        app.stop_recording();
+        let recorded = app.actions.list.len() - 1;
+        assert_eq!(
+            app.actions.list[recorded].action.steps,
+            vec![
+                Step::Menu {
+                    id: "adj-desaturate".into()
+                },
+                Step::Menu {
+                    id: "adjd-invert".into()
+                },
+            ]
+        );
+        // Auto tone records as itself, not as this image's Levels values.
+        let mut tone = app_with("adjx-tone");
+        tone.start_recording();
+        tone.last_flat = Some(lumenply_render::composite_raster(tone.editor.doc()));
+        tone.run_menu_action("auto-tone");
+        tone.stop_recording();
+        assert_eq!(
+            tone.actions.list.last().unwrap().action.steps,
+            vec![Step::Menu {
+                id: "auto-tone".into()
+            }]
+        );
+        let _ = std::fs::remove_file(tone.actions.path.as_ref().unwrap());
+        // Played on a pink image: lightness (1.0 + 0.6) / 2 = 0.8 in
+        // gamma, inverted to 0.2 = 51/255.
+        let mut ed = Editor::new(Document::new(4, 4));
+        let pink =
+            lumenply_tiles::Rgba::from_straight(1.0, srgb_to_linear_f(0.6), srgb_to_linear_f(0.6), 1.0);
+        let _ = ed.execute(&AddPixelLayer::from_raster(
+            "Pink",
+            Raster::filled(4, 4, pink),
+            0,
+            0,
+        ));
+        app.open_in_new_tab(ed, None);
+        app.fix_active();
+        let before = app.editor.history().len();
+        app.play_action(recorded);
+        assert_eq!(app.editor.history().len(), before + 1, "one undo step");
+        let px = lumenply_render::composite_raster(app.editor.doc()).pixels[5].to_straight();
+        let rgb = [px[0], px[1], px[2]].map(lumenply_io::linear_to_srgb);
+        for c in rgb {
+            assert!(c.abs_diff(51) <= 1, "{rgb:?}");
+        }
         let _ = std::fs::remove_file(app.actions.path.as_ref().unwrap());
     }
 

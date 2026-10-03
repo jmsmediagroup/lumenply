@@ -98,6 +98,9 @@ pub const RECORDABLE_MENU: &[(&str, &str)] = &[
     ("reveal-all", "Reveal all"),
     ("auto-contrast", "Auto contrast"),
     ("auto-color", "Auto color"),
+    ("auto-tone", "Auto tone"),
+    ("adj-desaturate", "Desaturate"),
+    ("adjd-invert", "Invert"),
     ("fill", "Fill with foreground colour"),
     ("clear", "Clear"),
 ];
@@ -332,6 +335,20 @@ pub fn run_core_menu<H: ActionHost + ?Sized>(host: &mut H, id: &str) -> Result<(
             exec(host, &CropDocument { rect })
         }
         "reveal-all" => exec(host, &RevealAll),
+        "adj-desaturate" => {
+            let layer = host.active_layer().ok_or_else(need_layer)?;
+            exec(host, &crate::adjust_cmds::Desaturate { layer })
+        }
+        "adjd-invert" => {
+            let layer = host.active_layer().ok_or_else(need_layer)?;
+            exec(
+                host,
+                &crate::adjust_cmds::ApplyAdjustment {
+                    layer,
+                    adjustment: Adjustment::Invert,
+                },
+            )
+        }
         other if menu_recordable(other) => Err(format!("\"{}\" needs the app", menu_label(other))),
         other => Err(format!("\"{other}\" is not an action step")),
     }
@@ -619,6 +636,32 @@ mod tests {
         assert_eq!(doc.layers()[1].id, new_id, "the new layer is active and on top");
         approx(pixel(&ed, 1, 1), [1.0, 1.0, 1.0, 1.0]);
         assert_eq!(ed.history(), vec!["Action: Invert"]);
+    }
+
+    #[test]
+    fn desaturate_and_invert_steps_play_without_the_app() {
+        // Pink (1.0, 0.6, 0.6 in gamma): lightness (1.0 + 0.6) / 2 = 0.8,
+        // inverted to 0.2 in gamma = 0.0331 linear.
+        let g = |v: f32| ((v + 0.055) / 1.055).powf(2.4);
+        let mut ed = solid(4, 4, Rgba::new(1.0, g(0.6), g(0.6), 1.0));
+        let mut host = CoreHost::new(&mut ed);
+        let action = Action {
+            name: "Grey negative".into(),
+            steps: vec![
+                Step::Menu {
+                    id: "adj-desaturate".into(),
+                },
+                Step::Menu {
+                    id: "adjd-invert".into(),
+                },
+            ],
+            builtin: false,
+        };
+        assert_eq!(play(&mut host, &action), Ok(2));
+        let v = g(0.2);
+        approx(pixel(&ed, 2, 2), [v, v, v, 1.0]);
+        assert_eq!(ed.doc().layers().len(), 1, "applied to the pixels, no new layer");
+        assert_eq!(ed.history(), vec!["Action: Grey negative"]);
     }
 
     #[test]
