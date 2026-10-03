@@ -2511,6 +2511,7 @@ name = "lumenply-ai"
 version = "0.9.0"
 dependencies = [
  "blake3",
+ "libc",
  "lumenply-core",
  "lumenply-io",
  "lumenply-tiles",

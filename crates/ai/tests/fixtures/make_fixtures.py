@@ -23,6 +23,10 @@ compute something simple enough that the tests can predict every value:
 - matter.onnx: BiRefNet's interface at 64x64 (input_image [1, 3, 64, 64]
   ImageNet-normalised; output_image [1, 1, 64, 64] logits) as a 1x1
   convolution, logit = 10 (R - B): red reads as subject, blue as background.
+- external_data.onnx (+ external_data.bin): affine.onnx with its two
+  constants stored as ONNX external data. Valid ONNX that ONNX Runtime would
+  load, reading the .bin beside it; lumenply-ai refuses any model that keeps
+  data outside its own file.
 - coreml_refuses.onnx: matter.onnx without the Conv's optional `pads`
   attribute. Valid ONNX that ONNX Runtime 1.28's CoreML provider fails to
   compile as an ML Program ("Required param 'pad' is missing"), so loading
@@ -63,6 +67,32 @@ def affine():
         [const("two", np.float32(2.0)), const("one", np.float32(1.0))],
     )
     save(g, "affine.onnx")
+
+
+def external_data():
+    g = helper.make_graph(
+        [
+            helper.make_node("Mul", ["x", "two"], ["x2"]),
+            helper.make_node("Add", ["x2", "one"], ["y"]),
+        ],
+        "external_data",
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 3])],
+        [helper.make_tensor_value_info("y", TensorProto.FLOAT, [2, 3])],
+        [const("two", np.full([3], 2.0, np.float32)), const("one", np.full([3], 1.0, np.float32))],
+    )
+    model = helper.make_model(g, opset_imports=OPSET, producer_name="lumenply-ai fixtures")
+    model.ir_version = 8
+    onnx.checker.check_model(model, full_check=True)
+    path = os.path.join(HERE, "external_data.onnx")
+    onnx.save_model(
+        model,
+        path,
+        save_as_external_data=True,
+        all_tensors_to_one_file=True,
+        location="external_data.bin",
+        size_threshold=0,
+    )
+    print(f"external_data.onnx: {os.path.getsize(path)} bytes (+ external_data.bin)")
 
 
 def sam_encoder():
@@ -179,3 +209,4 @@ if __name__ == "__main__":
     sam_decoder()
     matter()
     matter("coreml_refuses.onnx", pads=False)
+    external_data()

@@ -20,8 +20,8 @@ use ort::value::TensorRef;
 
 use crate::prep::{content_key, longest_side, resize_raster, sam_input, upsample};
 use crate::refine::{refine_guided, Guide, RefineOptions};
-use crate::registry::ModelId;
-use crate::runtime::{Load, Model, ModelReport, Provider, Runtime};
+use crate::registry::{ModelFile, ModelId};
+use crate::runtime::{Load, Model, ModelReport, Runtime};
 use crate::store::ModelStore;
 use crate::{AiError, Matte, Result};
 
@@ -202,38 +202,50 @@ impl Segmenter {
         let [enc, dec] = [&info.files[0], &info.files[1]];
         Segmenter::open(
             rt,
-            (&store.file_path(id, enc), enc.avoid),
-            (&store.file_path(id, dec), dec.avoid),
+            (&store.file_path(id, enc), enc),
+            (&store.file_path(id, dec), dec),
             Some(&cache),
         )
     }
 
-    /// Load from explicit files (tests, tools), on any provider.
+    /// Load from explicit files (tests, tools), on any provider, without
+    /// the memory check.
     pub fn load_files(rt: &Runtime, encoder: &Path, decoder: &Path) -> Result<Segmenter> {
-        Segmenter::open(rt, (encoder, &[]), (decoder, &[]), None)
+        const ANY: ModelFile = ModelFile {
+            name: "",
+            url: "",
+            bytes: 0,
+            sha256: "",
+            avoid: &[],
+            run_bytes: 0,
+        };
+        Segmenter::open(rt, (encoder, &ANY), (decoder, &ANY), None)
     }
 
     fn open(
         rt: &Runtime,
-        (encoder, enc_avoid): (&Path, &[Provider]),
-        (decoder, dec_avoid): (&Path, &[Provider]),
+        (encoder, enc_file): (&Path, &ModelFile),
+        (decoder, dec_file): (&Path, &ModelFile),
         cache: Option<&Path>,
     ) -> Result<Segmenter> {
         // The encoder's input is `[image_height, image_width, 3]`; it is
         // always fed the padded frame, and CoreML only compiles it with
         // those sizes fixed.
         let frame = FRAME as i64;
+        let name = ModelId::MobileSam.info().name;
         let enc = Load {
-            avoid: enc_avoid,
+            avoid: enc_file.avoid,
             cache,
             dims: &[("image_height", frame), ("image_width", frame)],
             arena: true,
+            name,
+            run_bytes: enc_file.run_bytes,
         };
         let dec = Load {
-            avoid: dec_avoid,
-            cache,
+            avoid: dec_file.avoid,
             dims: &[],
-            arena: true,
+            run_bytes: dec_file.run_bytes,
+            ..enc
         };
         Ok(Segmenter {
             encoder: rt.load(encoder, enc)?,
