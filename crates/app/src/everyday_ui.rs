@@ -382,3 +382,68 @@ mod nudge_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod pick_tests {
+    use super::*;
+    use lumenply_tiles::Rgba;
+
+    fn frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>, alt: bool) {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+            events,
+            modifiers: if alt {
+                egui::Modifiers::ALT
+            } else {
+                egui::Modifiers::NONE
+            },
+            ..Default::default()
+        };
+        let _ = ctx.run(raw, |ctx| app.frame(ctx));
+    }
+
+    #[test]
+    fn alt_click_with_the_brush_picks_the_colour_and_paints_nothing() {
+        let mut doc = Document::new(40, 40);
+        let id = doc.add_pixel_layer("red");
+        for y in 0..40 {
+            for x in 0..40 {
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::new(1.0, 0.0, 0.0, 1.0),
+                );
+            }
+        }
+        let mut app = App::launch(&[]);
+        app.open_in_new_tab(Editor::new(doc), None);
+        app.dialog = None;
+        app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
+        app.set_active(Some(id));
+        app.tool = Tool::Brush;
+        app.brush_rgb = [0.0, 0.0, 1.0];
+        let ctx = crate::a11y_tests::ctx();
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![], false);
+        }
+        let p = egui::pos2(620.0, 450.0);
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(p)], true);
+        assert!(app.cursor_doc.is_some(), "the point is over the document");
+        let steps = app.editor.history().len();
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                &ctx,
+                vec![egui::Event::PointerButton {
+                    pos: p,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::ALT,
+                }],
+                true,
+            );
+        }
+        assert_eq!(app.brush_rgb, [1.0, 0.0, 0.0], "{}", app.status);
+        assert_eq!(app.editor.history().len(), steps, "no stroke");
+    }
+}

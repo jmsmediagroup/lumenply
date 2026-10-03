@@ -1236,6 +1236,25 @@ impl App {
                 if resp.hovered() {
                     ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
                 }
+                // Alt with a painting brush is Photoshop's temporary
+                // eyedropper: click or drag to pick the colour underneath.
+                let picking = self.tool == Tool::Brush
+                    && self.brush.mode == BrushMode::Paint
+                    && self.drag.is_none()
+                    && ctx.input(|i| i.modifiers.alt);
+                if picking {
+                    if resp.is_pointer_button_down_on() || resp.clicked_by(primary) {
+                        if let (Some(p), Some(flat)) = (resp.interact_pointer_pos(), &self.last_flat) {
+                            let (x, y) = to_doc(p);
+                            if let Some(c) = color_picker::sample_srgb(flat, x, y) {
+                                self.brush_rgb = c;
+                                let hex = color_picker::format_hex(c);
+                                self.status = format!("Picked {hex} (Alt-click with the brush)");
+                            }
+                        }
+                    }
+                    return;
+                }
                 let needs_source = self.tool == Tool::Clone
                     || (self.tool == Tool::Heal && self.retouch.heal_mode == retouch_ui::HealMode::Healing);
                 if needs_source {
