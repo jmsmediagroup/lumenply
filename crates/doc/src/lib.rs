@@ -426,21 +426,30 @@ pub fn box_radius(sigma_like: f32) -> i32 {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LayerEffects {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub drop_shadow: Option<ShadowFx>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub outer_glow: Option<GlowFx>,
     /// Flat colour painted over the layer's coverage.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub color_overlay: Option<ColorOverlayFx>,
     /// Linear gradient painted over the layer's coverage.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub gradient_overlay: Option<GradientOverlayFx>,
     /// Shadow cast by the coverage edge onto the layer's inside.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub inner_shadow: Option<ShadowFx>,
     /// Glow creeping inward from the coverage edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub inner_glow: Option<GlowFx>,
     /// Emboss lighting along the coverage edge (inner bevel).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bevel: Option<BevelFx>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke: Option<StrokeFx>,
     /// A pattern tiled over the layer's coverage (under the gradient and
     /// colour overlays, as in Photoshop).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pattern_overlay: Option<PatternOverlayFx>,
 }
 
