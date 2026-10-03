@@ -261,6 +261,8 @@ impl App {
                 AdjxKind::ReplaceColor {
                     rc: ReplaceColor {
                         color: swatch.map(lumenply_io::srgb_to_linear_f),
+                        added: Vec::new(),
+                        removed: Vec::new(),
                         fuzziness: 0.25,
                         hue: 0.0,
                         saturation: 0.0,
@@ -539,10 +541,24 @@ impl App {
                 .map(|s| s.get_pixel(x, y))
                 .filter(|p| p.a > 0.0);
             if let Some(p) = p {
+                // Photoshop's eyedroppers: Shift adds to the sample, Alt
+                // subtracts from it, a plain click starts over.
                 let [r, g, b, _] = p.to_straight();
-                rc.color = [r, g, b];
-                *swatch = [r, g, b].map(lumenply_doc::adjust::srgb_encode);
-                self.status = format!("Replace Color: sampled {}", color_picker::format_hex(*swatch));
+                let m = ctx.input(|i| i.modifiers);
+                let hex = color_picker::format_hex([r, g, b].map(lumenply_doc::adjust::srgb_encode));
+                if m.shift {
+                    rc.added.push([r, g, b]);
+                    self.status = format!("Replace Color: added {hex} to the sample");
+                } else if m.alt {
+                    rc.removed.push([r, g, b]);
+                    self.status = format!("Replace Color: took {hex} out of the sample");
+                } else {
+                    rc.color = [r, g, b];
+                    rc.added.clear();
+                    rc.removed.clear();
+                    *swatch = [r, g, b].map(lumenply_doc::adjust::srgb_encode);
+                    self.status = format!("Replace Color: sampled {hex}");
+                }
             }
         }
         // Match Color's source statistics follow the source picked.
@@ -646,6 +662,20 @@ impl App {
                                     rc.color = swatch.map(lumenply_io::srgb_to_linear_f);
                                 }
                                 ui.label(RichText::new("or click the image").small().color(MUTED));
+                            });
+                            let (na, nr) = (rc.added.len(), rc.removed.len());
+                            ui.horizontal(|ui| {
+                                row_label(ui, "", LABEL_W);
+                                let text = if na + nr == 0 {
+                                    "Shift-click adds colours, Alt-click removes".to_string()
+                                } else {
+                                    format!("+{na} added, −{nr} removed")
+                                };
+                                ui.label(RichText::new(text).small().color(MUTED));
+                                if na + nr > 0 && ui.small_button("Reset").clicked() {
+                                    rc.added.clear();
+                                    rc.removed.clear();
+                                }
                             });
                             pct(ui, "Fuzziness", &mut rc.fuzziness, 0.01..=1.0, " %");
                             if let Some(tex) = &thumb_tex {
@@ -859,7 +889,8 @@ impl App {
     /// `adjx:sh=SA:ST:SR:HA:HT:HR:COLOR:MID` sets Shadows/Highlights
     /// (percent, px); `adjx:replace=RRGGBB:FUZZ:HUE:SAT:LIGHT` (percent,
     /// degrees); `adjx:replace-image` shows the image thumbnail;
-    /// `adjx:pick=X:Y` samples Replace Color at a canvas pixel;
+    /// `adjx:pick=X:Y` samples Replace Color at a canvas pixel
+    /// (`adjx:pick-add=X:Y`, `adjx:pick-remove=X:Y` as Shift/Alt-clicks);
     /// `adjx:match=LUM:INT:FADE:NEUTRAL` and `adjx:match-source=DOC` (0 =
     /// this document, 1.. = other tabs); `adjx:ok` presses OK;
     /// `adjx:desaturate`, `adjx:equalize`, `adjx:auto-tone` run directly.
@@ -962,6 +993,26 @@ impl App {
                     rc.hue = g(1, 0.0);
                     rc.saturation = g(2, 0.0) / 100.0;
                     rc.lightness = g(3, 0.0) / 100.0;
+                }
+            }
+            "pick-add" | "pick-remove" => {
+                let (x, y) = (
+                    nums.first().copied().unwrap_or(0.0),
+                    nums.get(1).copied().unwrap_or(0.0),
+                );
+                let layer = self.adjx.as_ref().map(|s| s.layer);
+                let p = layer
+                    .and_then(|l| self.editor.doc().layer(l))
+                    .and_then(|l| l.pixels())
+                    .map(|s| s.get_pixel(x as i32, y as i32).to_straight());
+                if let (Some([r, g, b, _]), Some(AdjxKind::ReplaceColor { rc, .. })) =
+                    (p, self.adjx.as_mut().map(|s| &mut s.kind))
+                {
+                    if verb == "pick-add" {
+                        rc.added.push([r, g, b]);
+                    } else {
+                        rc.removed.push([r, g, b]);
+                    }
                 }
             }
             "pick" => {

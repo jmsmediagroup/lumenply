@@ -471,6 +471,8 @@ mod tests {
             layer: id,
             params: ReplaceColor {
                 color: [0.8, 0.05, 0.05],
+                added: Vec::new(),
+                removed: Vec::new(),
                 fuzziness: 0.25,
                 hue: 120.0,
                 saturation: 0.0,

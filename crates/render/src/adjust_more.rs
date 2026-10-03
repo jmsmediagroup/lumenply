@@ -529,6 +529,11 @@ pub fn color_range_weight(rgb: [f32; 3], target: [f32; 3], tolerance: f32) -> f3
 pub struct ReplaceColor {
     /// The colour to match, straight linear RGB.
     pub color: [f32; 3],
+    /// More colours to match (Photoshop's "add to sample" eyedropper).
+    pub added: Vec<[f32; 3]>,
+    /// Colours to leave alone ("subtract from sample"): they cut the mask
+    /// by their own soft match.
+    pub removed: Vec<[f32; 3]>,
     /// Fuzziness as a Color Range tolerance, 0..1.
     pub fuzziness: f32,
     /// Hue shift in degrees, saturation and lightness −1..1 (Hue/Saturation).
@@ -554,7 +559,22 @@ impl ReplaceColor {
             return 0.0;
         }
         let s = p.to_straight();
-        color_range_weight([s[0], s[1], s[2]], self.color, self.fuzziness)
+        let c = [s[0], s[1], s[2]];
+        let tol = self.fuzziness;
+        let w = self
+            .added
+            .iter()
+            .fold(color_range_weight(c, self.color, tol), |m, &a| {
+                m.max(color_range_weight(c, a, tol))
+            });
+        if w <= 0.0 {
+            return 0.0;
+        }
+        let cut = self
+            .removed
+            .iter()
+            .fold(0.0f32, |m, &r| m.max(color_range_weight(c, r, tol)));
+        w * (1.0 - cut)
     }
 }
 
@@ -1061,8 +1081,10 @@ mod tests {
 
     #[test]
     fn replace_color_weights_like_color_range() {
-        let rc = ReplaceColor {
+        let mut rc = ReplaceColor {
             color: [0.8, 0.1, 0.1],
+            added: Vec::new(),
+            removed: Vec::new(),
             fuzziness: 0.2,
             hue: 120.0,
             saturation: 0.0,
@@ -1074,6 +1096,13 @@ mod tests {
         assert!(close(rc.weight(px([0.95, 0.1, 0.1])), 0.5, 1e-5)); // halfway down the ramp
         assert_eq!(rc.weight(px([0.8, 0.5, 0.1])), 0.0);
         assert_eq!(rc.weight(Rgba::TRANSPARENT), 0.0);
+        // Added samples widen the match; removed ones cut it by their own
+        // soft weight (0.15 from the removed colour: half the ramp).
+        rc.added.push([0.8, 0.5, 0.1]);
+        assert_eq!(rc.weight(px([0.8, 0.5, 0.1])), 1.0);
+        rc.removed.push([0.95, 0.25, 0.1]);
+        assert!(close(rc.weight(px([0.8, 0.1, 0.1])), 0.5, 1e-5));
+        assert_eq!(rc.weight(px([0.95, 0.25, 0.1])), 0.0);
         // Hue +120 turns gamma red into gamma green.
         let red = decode3([1.0, 0.0, 0.0]);
         let out = rc.adjustment().compile().apply(red);
