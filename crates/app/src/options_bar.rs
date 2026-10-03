@@ -222,7 +222,14 @@ impl App {
                                 ui.separator();
                             }
                             let mut tol = self.tolerance * 100.0;
-                            if bar_slider(ui, "Tolerance", &mut tol, 0.0..=100.0, "%", false) {
+                            // A tight bar keeps the number field only, so
+                            // Contiguous and All layers still fit.
+                            let changed = if tier == Tier::Tight {
+                                bar_value(ui, "Tolerance", &mut tol, 0.0..=100.0, "%")
+                            } else {
+                                bar_slider(ui, "Tolerance", &mut tol, 0.0..=100.0, "%", false)
+                            };
+                            if changed {
                                 self.tolerance = tol / 100.0;
                             }
                             check(ui, &mut self.contiguous, "Contiguous")
@@ -392,16 +399,9 @@ impl App {
                             }
                             select_ops(ui, &mut self.select_op);
                             ui.separator();
-                            bar_slider(ui, "Feather", &mut self.feather, 0.0..=100.0, " px", false);
-                            let has_sel = self.editor.doc().selection.is_some();
-                            if ui
-                                .add_enabled(has_sel, egui::Button::new("Apply"))
-                                .on_hover_text("Feather the current selection by this radius")
-                                .on_disabled_hover_text("Make a selection first")
-                                .clicked()
-                            {
-                                self.run(&FeatherSelection { radius: self.feather });
-                            }
+                            // Softens each new selection, as in Photoshop; Select ▸
+                            // Modify ▸ Feather softens the current one.
+                            bar_slider(ui, "Feather", &mut self.feather, 0.0..=250.0, " px", false);
                             hint_label(ui, tier, self.tool);
                         }
                         Tool::Pen => {
@@ -770,7 +770,10 @@ fn tool_hint(tool: Tool) -> Option<&'static str> {
         Tool::Move => "Drag to move the active layer",
         Tool::Eyedropper => "Click to pick the brush colour from the image",
         Tool::Gradient => "Drag on the canvas; Shift snaps to 45°",
-        Tool::RectSelect | Tool::EllipseSelect | Tool::Lasso => "Shift adds, Alt subtracts",
+        Tool::RectSelect | Tool::EllipseSelect => {
+            "Shift adds, Alt subtracts; mid-drag Shift squares, Alt centres"
+        }
+        Tool::Lasso => "Shift adds, Alt subtracts",
         Tool::PolyLasso => "Click to add points, double-click to close",
         Tool::Pen => "Click corners, drag curves; click the first point to close",
         Tool::Shape => "Shift constrains, Alt draws from the centre",

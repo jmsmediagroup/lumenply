@@ -79,6 +79,7 @@ mod retouch_ui;
 #[cfg(test)]
 mod select_fill_tests;
 mod select_mask;
+mod selection_tools;
 mod session;
 mod shape_tool;
 mod smart_contents;
@@ -412,8 +413,6 @@ struct App {
     dialog: Option<Dialog>,
     filter_previewed: bool,
     status: String,
-    /// When `status` was set, so it clears once out of date (status.rs).
-    status_age: status::StatusAge,
     /// History length at the last save, for the unsaved-changes dot.
     saved_rev: usize,
     /// One thumbnail per history step (step 0 is the opened state).
@@ -563,7 +562,7 @@ impl App {
             brush_rgb: [0.10, 0.18, 0.55],
             bg_rgb: [1.0, 1.0, 1.0],
             select_op: CombineOp::Replace,
-            feather: 12.0,
+            feather: 0.0,
             tolerance: 0.12,
             contiguous: true,
             sample_merged: false,
@@ -662,7 +661,6 @@ impl App {
                 .unwrap_or_default(),
             filter_previewed: false,
             status: String::from("Ready"),
-            status_age: Default::default(),
             tabs: Vec::new(),
             cur_tab: 0,
             untitled: String::new(),
@@ -1058,7 +1056,7 @@ impl App {
             return;
         }
         let op = self.selection_op(ctx);
-        let shape = Selection::polygon(&pts);
+        let shape = self.feathered(Selection::polygon(&pts));
         if shape.is_empty() {
             self.run(&SetSelection { selection: None });
         } else {
@@ -1193,6 +1191,11 @@ impl App {
         if self.text_new_armed && ctx.input_mut(|i| i.consume_key(M::NONE, Key::Escape)) {
             self.text_new_armed = false;
             self.status = "New text cancelled".into();
+        }
+        // Esc drops an unfinished polygonal lasso and keeps the selection.
+        if !self.lasso.is_empty() && ctx.input_mut(|i| i.consume_key(M::NONE, Key::Escape)) {
+            self.lasso.clear();
+            self.status = "Polygon cancelled".into();
         }
         // Esc is "get me out": drop the selection (the polygonal lasso and
         // free transform consume it first for their own cancel).
@@ -1529,7 +1532,7 @@ impl eframe::App for App {
 impl App {
     /// One UI frame; `update` without the eframe window, so tests can run it.
     fn frame(&mut self, ctx: &egui::Context) {
-        self.expire_status();
+        self.settle_status(ctx);
         if self.liquify.is_some() {
             self.liquify_ui(ctx);
             self.debug_screenshot(ctx);
