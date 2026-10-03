@@ -849,6 +849,74 @@ fn high_detail_reaches_the_model_and_is_kept() {
     );
 }
 
+/// Shown again after another modal dialog, the first-use dialog still
+/// takes the mouse (it sits just above the backdrop, not under it).
+#[test]
+fn the_first_use_dialog_takes_clicks_after_another_dialog() {
+    let (mut app, _) = card_app(FakeAi {
+        steps: 1000,
+        tick: Duration::from_millis(20),
+        ..installed(&[])
+    });
+    let ctx = a11y_ctx();
+    let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0));
+    let frame = |app: &mut App, events: Vec<egui::Event>| {
+        let raw = egui::RawInput {
+            screen_rect: Some(screen),
+            events,
+            ..Default::default()
+        };
+        ctx.run(raw, |ctx| app.frame(ctx))
+            .platform_output
+            .accesskit_update
+            .expect("accesskit")
+    };
+    let rect_of = |update: &egui::accesskit::TreeUpdate, name: &str| {
+        update.nodes.iter().find_map(|(_, n)| {
+            (n.name() == Some(name)).then(|| n.bounds()).flatten().map(|b| {
+                egui::Rect::from_min_max(
+                    egui::pos2(b.x0 as f32, b.y0 as f32),
+                    egui::pos2(b.x1 as f32, b.y1 as f32),
+                )
+            })
+        })
+    };
+    app.debug_ai("ai:consent=sam");
+    for _ in 0..3 {
+        frame(&mut app, vec![]);
+    }
+    app.ai.consent = None;
+    app.run_menu_action(AI_MODELS);
+    for _ in 0..3 {
+        frame(&mut app, vec![]);
+    }
+    app.dialog = None;
+    frame(&mut app, vec![]);
+    app.debug_ai("ai:consent=sam");
+    let mut at = None;
+    for _ in 0..3 {
+        let u = frame(&mut app, vec![]);
+        at = rect_of(&u, "Download").or(at);
+    }
+    let p = at.expect("the Download button is shown").center();
+    let button = |pressed| egui::Event::PointerButton {
+        pos: p,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    frame(&mut app, vec![egui::Event::PointerMoved(p)]);
+    frame(&mut app, vec![button(true)]);
+    frame(&mut app, vec![button(false)]);
+    assert_eq!(
+        app.ai.consent.as_ref().map(|c| c.phase.clone()),
+        Some(ConsentPhase::Downloading),
+        "the click reached Download"
+    );
+    app.ai_consent_cancel();
+    app.ai_wait(WAIT);
+}
+
 #[test]
 fn the_first_use_dialog_fits_a_900_by_600_window() {
     let (mut app, _) = card_app(installed(&[]));

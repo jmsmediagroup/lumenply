@@ -800,6 +800,12 @@ impl App {
             });
         if let Some(shown) = shown {
             ctx.move_to_top(shown.response.layer_id);
+            // Always just above the modal backdrop (which moves to the top
+            // every frame): a window shown again after another dialog keeps
+            // its old place in the layer order, below the backdrop, out of
+            // the mouse's reach.
+            let backdrop = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("modal-backdrop"));
+            ctx.set_sublayer(backdrop, shown.response.layer_id);
             ctx.accesskit_node_builder(shown.response.id, |b| {
                 b.set_role(egui::accesskit::Role::Dialog);
                 b.set_name(title);
