@@ -525,8 +525,13 @@ impl App {
         size: f32,
     ) -> Result<(String, bool), String> {
         let id = format!("{prefix}-{:016x}", tip_hash(width, height, &gray));
-        if self.brushes.index_of(&id).is_some() {
-            return Ok((id, false));
+        if let Some(i) = self.brushes.index_of(&id) {
+            if self.brushes.tip(i).is_some() {
+                return Ok((id, false));
+            }
+            // The entry lost its file (deleted by hand, or by another
+            // window): install it afresh rather than keep a dead entry.
+            self.brushes.tips.remove(i);
         }
         let dir = brushes_dir().ok_or("no folder to keep brush tips in")?;
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

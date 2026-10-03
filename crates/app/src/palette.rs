@@ -727,7 +727,11 @@ impl App {
             self.status = why.into();
             return;
         }
-        if self.run_layer_action(id) || self.run_smart_filter_action(id) || self.run_crf_action(id) || self.run_pattern_action(id) {
+        if self.run_layer_action(id)
+            || self.run_smart_filter_action(id)
+            || self.run_crf_action(id)
+            || self.run_pattern_action(id)
+        {
             return;
         }
         if self.run_panel_action(id) || self.run_everyday_action(id) {
