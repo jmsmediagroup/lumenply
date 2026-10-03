@@ -40,6 +40,9 @@ What's in:
   RAW; export to PNG/JPEG/WebP/GIF/PDF; `lumenply batch` for whole folders.
 - **Actions**: record edits, play them back as one undo step, or run them
   over folders with `lumenply batch --action`.
+- **Print sizes**: document resolution (ppi) kept through PSD, PNG, JPEG,
+  TIFF, OpenRaster and PDF; Image Size in px/%/in/cm/mm with Resample on or
+  off; New-document presets such as A4 and US Letter at 300 ppi.
 - **View**: rulers, guides, grid and Smart Guides with snapping; CMYK
   soft-proofing (Proof Colors, Gamut Warning); Navigator and Info.
 - **Everyday**: command palette (Ctrl+K), Photoshop shortcuts, clipboard
