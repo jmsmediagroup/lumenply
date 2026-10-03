@@ -120,7 +120,7 @@ fn props(s: &mut Session, name: &str, f: impl FnOnce(&mut Session) -> UiResult) 
             .into_iter()
             .filter(|n| area.rect.x_range().contains(n.rect.center().x))
             .map(|n| n.rect)
-            .last();
+            .next_back();
         let Some(r) = target else { break };
         if area.rect.contains_rect(r) {
             break;
