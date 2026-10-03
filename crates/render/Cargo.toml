@@ -12,6 +12,7 @@ authors.workspace = true
 lumenply-tiles.workspace = true
 lumenply-doc.workspace = true
 rayon.workspace = true
+serde.workspace = true
 wgpu.workspace = true
 pollster.workspace = true
 fontdb.workspace = true

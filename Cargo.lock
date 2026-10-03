@@ -2589,6 +2589,7 @@ dependencies = [
  "lumenply-tiles",
  "pollster 0.3.0",
  "rayon",
+ "serde",
  "wgpu",
 ]
 
