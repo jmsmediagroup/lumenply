@@ -255,6 +255,7 @@ impl App {
                     width: cmd.width,
                     height: cmd.height,
                     resolution: cmd.resolution.filter(|&p| p != st.orig.2),
+                    keep_aspect: st.constrain,
                 },
                 None => return,
             },
@@ -523,10 +524,17 @@ impl App {
         };
         let max_list_h = (canvas.height() - 260.0 - extra).clamp(60.0, 420.0);
         let mut cmd: Option<PanelCmd> = None;
+        // Movable by its header or any empty part: on a small window it
+        // covers most of the canvas where it opens.
         egui::Area::new("actions-panel".into())
             .order(egui::Order::Middle)
-            .sense(BACKDROP_SENSE)
-            .fixed_pos(at)
+            .sense(Sense {
+                drag: true,
+                ..BACKDROP_SENSE
+            })
+            .default_pos(at)
+            .movable(true)
+            .constrain(true)
             .show(ctx, |ui| {
                 float_frame().show(ui, |ui| {
                     ui.set_width(PANEL_W);
@@ -554,7 +562,9 @@ impl App {
                         ui.separator();
                         ui.label(RichText::new(format!("Delete \u{201C}{name}\u{201D}?")).color(TEXT));
                         ui.horizontal(|ui| {
-                            if ui.button("Delete").clicked() {
+                            // Not just "Delete": the panel's own Delete
+                            // button is right above.
+                            if ui.button("Delete action").clicked() {
                                 cmd = Some(PanelCmd::Delete(i));
                             }
                             if ui.button("Cancel").clicked() {
@@ -579,10 +589,40 @@ impl App {
         }
     }
 
+    /// Why Play, Rename and Delete are greyed out (`None`: they aren't),
+    /// as their tooltips say it.
+    fn panel_blocks(&self) -> [Option<&'static str>; 3] {
+        let a = &self.actions;
+        let sel = a.selected.and_then(|i| a.list.get(i));
+        let builtin = sel.is_some_and(|e| e.action.builtin);
+        let play = if self.no_doc {
+            Some("Open a document first")
+        } else if sel.is_none() {
+            Some("Select an action to play")
+        } else if a.recording_into() == a.selected {
+            Some("Stop recording before playing this action")
+        } else {
+            None
+        };
+        let rename = match sel {
+            None => Some("Select one of your actions"),
+            Some(_) if builtin => Some("Built-in actions keep their names"),
+            Some(_) => None,
+        };
+        let delete = match sel {
+            None => Some("Select one of your actions"),
+            Some(_) if builtin => Some("Built-in actions can't be deleted"),
+            Some(_) if a.recording() => Some("Stop recording first"),
+            Some(_) => None,
+        };
+        [play, rename, delete]
+    }
+
     fn actions_buttons(&mut self, ui: &mut egui::Ui, cmd: &mut Option<PanelCmd>) {
         let sel = self.actions.selected;
         let user_sel = sel.filter(|i| self.actions.list.get(*i).is_some_and(|e| !e.action.builtin));
         let recording = self.actions.recording();
+        let [play_why, rename_why, delete_why] = self.panel_blocks();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
             ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
@@ -604,11 +644,10 @@ impl App {
                     *cmd = Some(PanelCmd::Record);
                 }
             }
-            let can_play = sel.is_some() && self.actions.recording_into() != sel && !self.no_doc;
             if ui
-                .add_enabled(can_play, egui::Button::new("Play"))
+                .add_enabled(play_why.is_none(), egui::Button::new("Play"))
                 .on_hover_text("Play the selected action on this document")
-                .on_disabled_hover_text("Select an action to play")
+                .on_disabled_hover_text(play_why.unwrap_or_default())
                 .clicked()
             {
                 *cmd = sel.map(PanelCmd::Play);
@@ -621,15 +660,17 @@ impl App {
                 *cmd = Some(PanelCmd::New);
             }
             if ui
-                .add_enabled(user_sel.is_some(), egui::Button::new("Rename"))
-                .on_disabled_hover_text("Built-in actions keep their names")
+                .add_enabled(rename_why.is_none(), egui::Button::new("Rename"))
+                .on_hover_text("Rename the selected action (or double-click its name)")
+                .on_disabled_hover_text(rename_why.unwrap_or_default())
                 .clicked()
             {
                 *cmd = user_sel.map(PanelCmd::BeginRename);
             }
             if ui
-                .add_enabled(user_sel.is_some() && !recording, egui::Button::new("Delete"))
-                .on_disabled_hover_text("Select one of your actions")
+                .add_enabled(delete_why.is_none(), egui::Button::new("Delete"))
+                .on_hover_text("Delete the selected action")
+                .on_disabled_hover_text(delete_why.unwrap_or_default())
                 .clicked()
             {
                 *cmd = user_sel.map(PanelCmd::AskDelete);
@@ -881,6 +922,7 @@ mod tests {
                     width: 24,
                     height: 16,
                     resolution: None,
+                    keep_aspect: false,
                 },
                 Step::Skipped {
                     what: "Add layer 'Paint here'".into()
@@ -1028,6 +1070,111 @@ mod tests {
             app.run_menu_action_unrecorded(id);
             assert!(!app.status.starts_with("Unknown command"), "{id}: {}", app.status);
         }
+    }
+
+    /// The panel can be dragged out of the way by its header.
+    #[test]
+    fn the_panel_moves_when_its_header_is_dragged() {
+        let mut app = app_with("move");
+        app.actions.shown = true;
+        let ctx = ctx();
+        let frame = |app: &mut App, events: Vec<egui::Event>| {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(900.0, 600.0))),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(raw, |ctx| app.frame(ctx));
+        };
+        for _ in 0..3 {
+            frame(&mut app, vec![]);
+        }
+        let id = egui::LayerId::new(egui::Order::Middle, egui::Id::new("actions-panel"));
+        let before = ctx.memory(|m| m.area_rect(id.id)).expect("the panel is up");
+        // The header's empty middle, right of the title.
+        let grab = before.min + egui::vec2(120.0, 20.0);
+        let to = grab + egui::vec2(300.0, 100.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut app, vec![egui::Event::PointerMoved(grab)]);
+        frame(&mut app, vec![button(grab, true)]);
+        for i in 1..=6 {
+            let p = grab + (to - grab) * (i as f32 / 6.0);
+            frame(&mut app, vec![egui::Event::PointerMoved(p)]);
+        }
+        frame(&mut app, vec![button(to, false)]);
+        frame(&mut app, vec![]);
+        let after = ctx.memory(|m| m.area_rect(id.id)).unwrap();
+        let moved = after.min - before.min;
+        assert!(
+            (moved.x - 300.0).abs() <= 3.0 && (moved.y - 100.0).abs() <= 3.0,
+            "moved by {moved:?}"
+        );
+        assert!(app.actions.shown, "a drag on the header doesn't close it");
+        let _ = std::fs::remove_file(app.actions.path.as_ref().unwrap());
+    }
+
+    /// Image Size with "Keep aspect ratio" on records a proportional step.
+    #[test]
+    fn image_size_with_kept_aspect_records_a_proportional_step() {
+        let mut app = app_with("aspect");
+        app.start_recording();
+        let mut st = crate::image_size_ui::ImageSizeState::for_doc(app.editor.doc());
+        assert!(st.constrain, "on by default");
+        st.set_width(crate::image_size_ui::SizeUnit::Pixels, 24.0);
+        app.record_dialog(&Dialog::ImageSize(st));
+        app.stop_recording();
+        assert_eq!(
+            app.actions.list.last().unwrap().action.steps,
+            vec![Step::ImageSize {
+                width: 24,
+                height: 16,
+                resolution: None,
+                keep_aspect: true,
+            }]
+        );
+        let _ = std::fs::remove_file(app.actions.path.as_ref().unwrap());
+    }
+
+    /// Each greyed-out button says why, for the case at hand (Delete on a
+    /// built-in used to say "Select one of your actions").
+    #[test]
+    fn greyed_out_buttons_give_the_right_reason() {
+        let mut app = app_with("blocks");
+        assert_eq!(
+            app.panel_blocks(),
+            [
+                Some("Select an action to play"),
+                Some("Select one of your actions"),
+                Some("Select one of your actions")
+            ]
+        );
+        app.actions.selected = app.actions.find("Vintage fade");
+        assert_eq!(
+            app.panel_blocks(),
+            [
+                None,
+                Some("Built-in actions keep their names"),
+                Some("Built-in actions can't be deleted")
+            ]
+        );
+        app.start_recording();
+        assert_eq!(
+            app.panel_blocks(),
+            [
+                Some("Stop recording before playing this action"),
+                None,
+                Some("Stop recording first")
+            ],
+            "recording into a new action, which is selected"
+        );
+        app.stop_recording();
+        assert_eq!(app.panel_blocks(), [None, None, None]);
+        let _ = std::fs::remove_file(app.actions.path.as_ref().unwrap());
     }
 
     #[test]
