@@ -2514,6 +2514,7 @@ dependencies = [
  "lumenply-io",
  "lumenply-render",
  "lumenply-tiles",
+ "serde_json",
 ]
 
 [[package]]
@@ -2557,6 +2558,7 @@ dependencies = [
 name = "lumenply-io"
 version = "0.9.0"
 dependencies = [
+ "blake3",
  "color_quant",
  "exr",
  "flate2",
@@ -2564,6 +2566,7 @@ dependencies = [
  "image 0.24.9",
  "image-webp",
  "lumenply-doc",
+ "lumenply-graph",
  "lumenply-render",
  "lumenply-tiles",
  "objc2-core-foundation",
@@ -2573,6 +2576,7 @@ dependencies = [
  "qcms",
  "quick-xml 0.36.2",
  "rawler",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

@@ -164,3 +164,36 @@ impl BlobStore {
         self.blobs.retain(|id, _| keep.contains(id));
     }
 }
+
+/// Every blob the graph's operations name, with the nodes naming it: any
+/// 64-hex-digit string in an op's parameters. Ops keep blob ids in fields
+/// of their own choosing (an image's `blob`, a brush tip, a pattern), so
+/// scanning the parameters finds every one without each op listing them;
+/// a string that only looks like a hash matches no blob and costs nothing.
+pub fn blob_refs(
+    graph: &crate::model::Graph,
+) -> std::collections::BTreeMap<BlobId, Vec<crate::model::NodeId>> {
+    fn walk(v: &serde_json::Value, found: &mut Vec<Hash>) {
+        match v {
+            serde_json::Value::String(s) => found.extend(Hash::from_hex(s)),
+            serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, found)),
+            serde_json::Value::Object(o) => o.values().for_each(|x| walk(x, found)),
+            _ => {}
+        }
+    }
+    let mut out: std::collections::BTreeMap<BlobId, Vec<crate::model::NodeId>> = Default::default();
+    for (id, node) in graph.nodes() {
+        let mut found = Vec::new();
+        walk(
+            &serde_json::to_value(&node.op).expect("ops always serialise"),
+            &mut found,
+        );
+        for h in found {
+            let users = out.entry(h).or_default();
+            if users.last() != Some(&id) {
+                users.push(id);
+            }
+        }
+    }
+    out
+}
