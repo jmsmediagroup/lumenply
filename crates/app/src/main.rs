@@ -1312,18 +1312,28 @@ impl App {
             self.select_tool_key(t, shift);
         }
         let quick = self.tool == Tool::Wand && self.quick.on;
-        if bigger {
-            if quick {
-                self.quick.radius = (self.quick.radius * 1.25).min(300.0);
-            } else {
-                self.brush.radius = (self.brush.radius * 1.25).min(200.0);
+        // Shift+[ / Shift+] step the brush hardness by 25%, as in Photoshop.
+        let hardness_keys = !quick && ctx.input(|i| i.modifiers.shift);
+        if hardness_keys {
+            if bigger || smaller {
+                let step = if bigger { 0.25 } else { -0.25 };
+                self.brush.hardness = (self.brush.hardness + step).clamp(0.0, 1.0);
+                self.status = format!("Hardness {:.0}%", self.brush.hardness * 100.0);
             }
-        }
-        if smaller {
-            if quick {
-                self.quick.radius = (self.quick.radius / 1.25).max(1.0);
-            } else {
-                self.brush.radius = (self.brush.radius / 1.25).max(1.0);
+        } else {
+            if bigger {
+                if quick {
+                    self.quick.radius = (self.quick.radius * 1.25).min(300.0);
+                } else {
+                    self.brush.radius = (self.brush.radius * 1.25).min(200.0);
+                }
+            }
+            if smaller {
+                if quick {
+                    self.quick.radius = (self.quick.radius / 1.25).max(1.0);
+                } else {
+                    self.brush.radius = (self.brush.radius / 1.25).max(1.0);
+                }
             }
         }
         if fit {

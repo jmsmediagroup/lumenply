@@ -608,6 +608,37 @@ mod pick_tests {
     }
 
     #[test]
+    fn shift_brackets_step_the_hardness_and_plain_brackets_the_size() {
+        let mut app = App::launch(&[]);
+        app.open_in_new_tab(Editor::new(Document::new(40, 40)), None);
+        app.dialog = None;
+        app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
+        app.tool = Tool::Brush;
+        app.brush.hardness = 0.5;
+        app.brush.radius = 10.0;
+        let ctx = crate::a11y_tests::ctx();
+        let key = |m: egui::Modifiers| egui::Event::Key {
+            key: Key::CloseBracket,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: m,
+        };
+        let raw = |events, m| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+            events,
+            modifiers: m,
+            ..Default::default()
+        };
+        let shift = egui::Modifiers::SHIFT;
+        let _ = ctx.run(raw(vec![key(shift)], shift), |c| app.frame(c));
+        assert_eq!((app.brush.hardness, app.brush.radius), (0.75, 10.0));
+        let none = egui::Modifiers::NONE;
+        let _ = ctx.run(raw(vec![key(none)], none), |c| app.frame(c));
+        assert_eq!((app.brush.hardness, app.brush.radius), (0.75, 12.5));
+    }
+
+    #[test]
     fn shift_click_paints_a_straight_line_from_the_last_stroke() {
         let mut doc = Document::new(200, 120);
         let id = doc.add_pixel_layer("ink");
