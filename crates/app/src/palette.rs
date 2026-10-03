@@ -195,6 +195,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Show or hide the Info panel", "info-panel"),
     ("Make work path from selection", "make-work-path"),
     ("Puppet Warp", "puppet-warp"),
+    ("Content-Aware Scale", "content-aware-scale"),
 ];
 
 impl App {
@@ -583,6 +584,7 @@ impl App {
             }
             "liquify" if !pixel => need_pixel,
             "puppet-warp" => self.puppet_block(),
+            "content-aware-scale" => self.cas_block(),
             "smart-edit" | "smart-replace" if !smart => Some("Select a smart object first"),
             "save-selection" if !selection => need_selection,
             "cut" if !pixel => need_pixel,
@@ -681,6 +683,7 @@ impl App {
             "quick-mask" => (M::NONE, Key::Q),
             "palette" => (M::COMMAND, Key::K),
             "select-mask" => (M::COMMAND | M::ALT, Key::R),
+            "content-aware-scale" => (M::COMMAND | M::SHIFT | M::ALT, Key::C),
             _ => return String::new(),
         };
         shortcut_text(ctx, m, k)
@@ -854,6 +857,7 @@ impl App {
             "paste-in-place" => self.paste_pixels(true),
             "liquify" => self.open_liquify(),
             "puppet-warp" => self.open_puppet(),
+            "content-aware-scale" => self.open_cas(),
             "export-as" => self.open_export_as(),
             "smart-edit" => self.edit_smart_contents(),
             "save-selection" => {
@@ -935,7 +939,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 142); // + puppet warp
+        assert_eq!(n, 143); // + content-aware scale
     }
 
     #[test]
