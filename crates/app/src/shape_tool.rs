@@ -860,7 +860,11 @@ pub(crate) mod test_frames {
             Some(prefix) => n.starts_with(prefix),
             None => n == name,
         };
-        nodes.into_iter().filter(|(n, _)| hit(n)).map(|(_, r)| r).next_back()
+        nodes
+            .into_iter()
+            .filter(|(n, _)| hit(n))
+            .map(|(_, r)| r)
+            .next_back()
     }
 
     /// Move to `p`, press and release, then settle.
