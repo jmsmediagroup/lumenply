@@ -2530,6 +2530,7 @@ dependencies = [
  "eframe",
  "image 0.24.9",
  "image-webp",
+ "lumenply-ai",
  "lumenply-core",
  "lumenply-doc",
  "lumenply-graph",

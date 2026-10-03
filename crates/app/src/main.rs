@@ -27,6 +27,8 @@ mod actions_panel;
 mod adjust_dialogs;
 mod adjust_ui;
 mod ai;
+#[cfg(feature = "ai")]
+mod ai_engine;
 mod ai_jobs;
 mod ai_ui;
 mod blend_ui;
@@ -679,6 +681,11 @@ impl App {
             app.place_image(p);
         }
         app.restore_brush();
+        // Tests keep the stand-in services they are written against.
+        #[cfg(all(feature = "ai", not(test)))]
+        if let Some(engine) = ai_engine::Engine::for_app() {
+            app.ai_use_service(std::sync::Arc::new(engine));
+        }
         if !session::autosave_backups().is_empty() {
             app.dialog = Some(Dialog::Recover);
         }

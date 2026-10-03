@@ -300,6 +300,13 @@ impl Segmenter {
         Ok(emb)
     }
 
+    /// The cached embedding of `image`, if it was embedded recently: lets
+    /// a caller tell the user an image is about to be analysed (the slow
+    /// part) only when it really is.
+    pub fn cached_embedding(&self, image: &Raster) -> Option<Embedding> {
+        self.cached(&content_key(image))
+    }
+
     fn cached(&self, key: &[u8; 32]) -> Option<Embedding> {
         let mut c = self.cache.lock().ok()?;
         let at = c.iter().position(|e| &e.inner.key == key)?;
