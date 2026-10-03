@@ -283,8 +283,14 @@ fn long_session(s: &mut Session) -> UiResult {
 }
 
 fn set_prefs(s: &mut Session, fields: &[(&str, &str)]) -> UiResult {
-    s.describe("Open Edit ▸ Preferences");
-    s.menu("Edit > Preferences...")?;
+    s.describe("Open the Edit menu");
+    s.click("Edit")?;
+    // In a small window the menu is taller than the room below the bar
+    // and scrolls; a user rolls the wheel down to its end.
+    s.describe("Scroll down the menu");
+    s.scroll("Cut", 600.0)?;
+    s.describe("Choose Preferences… at its end");
+    s.click("Preferences...")?;
     for (name, value) in fields {
         s.set_field(name, value)?;
     }
@@ -734,8 +740,10 @@ fn undo_selection_and_mask(s: &mut Session) -> UiResult {
         s.key("Shift+Cmd+I")
     })?);
     states.push(one_step(s, "feather", |s| {
-        s.describe("Select ▸ Feather 12 px");
-        s.menu("Select > Feather 12 px")
+        s.describe("Select ▸ Modify ▸ Feather… 12 px");
+        s.menu("Select > Modify > Feather...")?;
+        s.set_field("Feather radius", "12")?;
+        s.click("OK")
     })?);
     states.push(one_step(s, "mask", |s| {
         s.describe("Select ▸ Layer mask from selection");
@@ -911,10 +919,7 @@ fn unsaved_after_undo(s: &mut Session) -> UiResult {
 
     // The same with the history full: every edit drops the oldest step,
     // so the number of steps stays the same after saving.
-    s.describe("Open Edit ▸ Preferences");
-    s.menu("Edit > Preferences...")?;
-    s.set_field("Undo steps", "3")?;
-    s.click("Save")?;
+    set_prefs(s, &[("Undo steps", "3")])?;
     for y in [100.0, 300.0, 500.0] {
         s.describe("Paint a stroke");
         s.canvas_drag((100.0, y), (700.0, y + 30.0), 12, "")?;
@@ -1070,6 +1075,9 @@ fn undo_adjust_filter_text_shape(s: &mut Session) -> UiResult {
         s.describe("Add Curves from the quick-add chips");
         s.click_role(Role::Button, "Curves")
     })?);
+    // In a small window Properties is short: bring the curve into view.
+    s.describe("Scroll Properties down to the curve");
+    s.scroll("Properties", 120.0)?;
     states.push(one_step(s, "curve point", |s| {
         s.describe("Click the middle of the curve to add a point");
         s.click_in("Curve, *", 0.5, 0.5, "the middle of the curve")
@@ -1078,6 +1086,8 @@ fn undo_adjust_filter_text_shape(s: &mut Session) -> UiResult {
         s.describe("Drag the point up");
         s.drag_in("Curve, *", (0.5, 0.5), (0.5, 0.25), "the new point up")
     })?);
+    s.describe("Scroll Properties back up");
+    s.scroll("Properties", -300.0)?;
     states.push(one_step(s, "Curves opacity", |s| {
         s.describe("Drag the Curves layer's Opacity to 50%");
         s.within("Properties", |s| s.drag_slider("Opacity", 0.5))
@@ -1116,6 +1126,8 @@ fn undo_adjust_filter_text_shape(s: &mut Session) -> UiResult {
         s.describe("Drag out a rectangle");
         s.canvas_drag((500.0, 380.0), (700.0, 520.0), 12, "")
     })?);
+    s.describe("Scroll Properties down to the shape's settings");
+    s.scroll("Properties", 400.0)?;
     states.push(one_step(s, "shape corners", |s| {
         s.describe("Round its corners in Properties");
         s.within("Properties", |s| s.drag_slider("Corners", 0.3))
