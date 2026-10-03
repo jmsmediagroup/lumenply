@@ -767,3 +767,115 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One 900 × 600 frame with `events`; the named controls' rectangles.
+    fn frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) -> Vec<(String, egui::Rect)> {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 600.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let out = ctx.run(raw, |ctx| app.frame(ctx));
+        let update = out
+            .platform_output
+            .accesskit_update
+            .expect("accesskit is enabled");
+        update
+            .nodes
+            .iter()
+            .filter_map(|(_, n)| {
+                let b = n.bounds()?;
+                let r = egui::Rect::from_min_max(
+                    egui::pos2(b.x0 as f32, b.y0 as f32),
+                    egui::pos2(b.x1 as f32, b.y1 as f32),
+                );
+                Some((n.name()?.to_string(), r))
+            })
+            .collect()
+    }
+
+    fn named(nodes: &[(String, egui::Rect)], name: &str) -> Option<egui::Rect> {
+        nodes.iter().rev().find(|(n, _)| n == name).map(|(_, r)| *r)
+    }
+
+    #[test]
+    fn a_menu_taller_than_the_window_scrolls_instead_of_running_off_it() {
+        let mut app = crate::a11y_tests::launch(&["--demo".to_string()]);
+        let ctx = crate::a11y_tests::ctx();
+        let mut nodes = Vec::new();
+        for _ in 0..3 {
+            nodes = frame(&mut app, &ctx, vec![]);
+        }
+        let edit = named(&nodes, "Edit").expect("the Edit menu").center();
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(edit)]);
+        for pressed in [true, false] {
+            let click = egui::Event::PointerButton {
+                pos: edit,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(&mut app, &ctx, vec![click]);
+        }
+        for _ in 0..3 {
+            nodes = frame(&mut app, &ctx, vec![]);
+        }
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0));
+        // The first item is on screen, below the menu bar...
+        let undo = named(&nodes, "Undo").expect("Undo in the open Edit menu");
+        assert!(
+            undo.top() >= edit.y && screen.contains_rect(undo),
+            "Undo at {undo:?}"
+        );
+        // ...and the last one is reached by scrolling the menu.
+        let over = undo.center() + egui::vec2(0.0, 200.0);
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(over)]);
+        for _ in 0..6 {
+            let wheel = egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -200.0),
+                modifiers: egui::Modifiers::NONE,
+            };
+            nodes = frame(&mut app, &ctx, vec![wheel]);
+        }
+        for _ in 0..3 {
+            nodes = frame(&mut app, &ctx, vec![]);
+        }
+        let prefs = named(&nodes, "Preferences...").expect("Preferences in the Edit menu");
+        assert!(screen.contains_rect(prefs), "Preferences at {prefs:?}");
+        // Closed and opened again, it starts from the top.
+        let esc = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut app, &ctx, vec![esc]);
+        for _ in 0..2 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(edit)]);
+        for pressed in [true, false] {
+            let click = egui::Event::PointerButton {
+                pos: edit,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(&mut app, &ctx, vec![click]);
+        }
+        for _ in 0..3 {
+            nodes = frame(&mut app, &ctx, vec![]);
+        }
+        let undo = named(&nodes, "Undo").expect("Undo in the reopened Edit menu");
+        assert!(screen.contains_rect(undo), "reopened: Undo at {undo:?}");
+    }
+}

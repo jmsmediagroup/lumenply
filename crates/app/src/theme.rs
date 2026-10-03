@@ -697,9 +697,29 @@ pub(crate) fn menu_separator(ui: &mut egui::Ui) {
 
 /// A menu-bar menu, or a submenu inside another menu.
 pub(crate) fn menu<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+    // A menu taller than the window scrolls instead of running off it
+    // (egui slides it up, over the menu bar and beyond): the Edit menu in
+    // a 900 × 600 window lost Undo at the top or Preferences at the
+    // bottom. A menu-bar menu gets the room below the bar; a submenu,
+    // which egui moves up to fit, the window's height.
+    let screen = ui.ctx().screen_rect();
+    let margins = ui.style().spacing.menu_margin.sum().y + 12.0;
+    let top = if ui.layer_id().order == egui::Order::Foreground {
+        screen.top()
+    } else {
+        ui.max_rect().bottom() + ui.style().spacing.menu_spacing
+    };
+    let room = (screen.bottom() - top - margins).max(120.0);
     let r = ui.menu_button(title, |ui| {
         popup_style(ui);
-        add(ui)
+        let mut area = egui::ScrollArea::vertical()
+            .id_salt("menu-scroll")
+            .max_height(room);
+        // Each time it opens, from the top.
+        if !ui.ctx().memory(|m| m.areas().visible_last_frame(&ui.layer_id())) {
+            area = area.vertical_scroll_offset(0.0);
+        }
+        area.show(ui, add).inner
     });
     note_target(ui.ctx(), title, r.response.rect);
     r.inner
