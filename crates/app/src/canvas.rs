@@ -1002,6 +1002,11 @@ impl App {
                     ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
                 }
                 let mut path = self.editor.doc().work_path.clone().unwrap_or_default();
+                // An undo can take away the subpath being drawn: the next
+                // click starts a new one rather than extend a closed one.
+                if self.pen_open && path.subpaths.last().is_none_or(|sp| sp.closed) {
+                    self.pen_open = false;
+                }
                 let mut changed = false;
                 let hit_r = 8.0 / self.zoom.max(0.01);
                 let near =
@@ -1159,7 +1164,7 @@ impl App {
                     }
                 }
 
-                // Enter finishes the path; Esc drops the open subpath;
+                // Enter or Esc finishes the path, keeping it (Photoshop);
                 // Backspace removes the selected anchor.
                 let (enter, esc, back) = if ctx.wants_keyboard_input() {
                     (false, false, false)
@@ -1172,16 +1177,11 @@ impl App {
                         )
                     })
                 };
-                if enter && self.pen_open {
-                    self.pen_open = false;
-                    self.editor.end_coalescing();
-                    self.status = "Path finished — Fill, Stroke or Make selection in the bar".into();
-                }
-                if esc && self.pen_open {
-                    path.subpaths.pop();
+                if (enter || esc) && self.pen_open {
                     self.pen_open = false;
                     self.pen_sel = None;
-                    changed = true;
+                    self.editor.end_coalescing();
+                    self.status = "Path finished — Fill, Stroke or Make selection in the bar".into();
                 }
                 if back {
                     if let Some((si, ni)) = self.pen_sel.take() {
@@ -1203,6 +1203,11 @@ impl App {
                 if changed {
                     let path = Some(path).filter(|p| !p.subpaths.is_empty());
                     self.run_coalescing(&SetWorkPath { path }, "pen");
+                }
+                // One undo step per click, drag or key, as in Photoshop:
+                // Cmd+Z takes back the last anchor, not the whole path.
+                if resp.clicked_by(primary) || resp.drag_stopped() || back {
+                    self.editor.end_coalescing();
                 }
             }
             Tool::Crop => self.crop_input(ctx, resp, to_doc),
