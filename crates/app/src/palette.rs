@@ -206,6 +206,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Send layer to back", "layer-back"),
     ("Duplicate document", "duplicate-doc"),
     ("Fill with background colour", "fill-bg"),
+    ("Export PDF...", "export-pdf"),
     ("New fill layer: pattern...", "fill-pattern"),
     ("Define Pattern", "define-pattern"),
     ("Import patterns (.pat)...", "import-patterns"),
@@ -758,6 +759,7 @@ impl App {
             "save" => self.save_live(),
             "saveas" => self.pick_save(),
             "export-png" => self.pick_export_png(),
+            "export-pdf" => self.pick_export_pdf(),
             "export-jpeg" => self.pick_export_jpeg(),
             "export-psd" => self.pick_export_psd(),
             "export-psd16" => self.pick_export_psd16(),
@@ -978,7 +980,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 158); // + content-aware scale, perspective crop
+        assert_eq!(n, 159); // + content-aware scale, perspective crop
     }
 
     #[test]

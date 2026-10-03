@@ -368,6 +368,12 @@ mod tests {
             "the earlier hidden one stays hidden"
         );
         assert!(app.editor.doc().layer(others[1]).unwrap().visible);
+        // Export ▸ PDF writes a one-page PDF (opaque: JPEG inside).
+        let pdf = std::env::temp_dir().join(format!("lumenply-test-{}.pdf", std::process::id()));
+        app.export_pdf(&pdf.to_string_lossy());
+        let bytes = std::fs::read(&pdf).unwrap();
+        let _ = std::fs::remove_file(&pdf);
+        assert!(bytes.starts_with(b"%PDF-1.4"), "{}", app.status);
         // Duplicate the document into a new, unsaved tab.
         let tabs = app.tab_infos().len();
         app.run_menu_action("duplicate-doc");

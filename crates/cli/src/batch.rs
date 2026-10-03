@@ -103,7 +103,15 @@ fn encode(r: &Raster, o: &Options) -> Result<(Vec<u8>, &'static str)> {
         "jpg" | "jpeg" => (lumenply_io::encode_jpeg(r, o.quality)?, "jpg"),
         "webp" => (lumenply_io::encode_webp(r, !o.flatten)?, "webp"),
         "gif" => (lumenply_io::encode_gif(r, !o.flatten)?, "gif"),
-        other => bail!("unknown format '{other}' (png, jpeg, webp or gif)"),
+        "pdf" => {
+            let image = if o.flatten {
+                lumenply_io::pdf::PdfImage::Jpeg(o.quality)
+            } else {
+                lumenply_io::pdf::PdfImage::Lossless
+            };
+            (lumenply_io::pdf::encode_pdf(r, 72.0, image)?, "pdf")
+        }
+        other => bail!("unknown format '{other}' (png, jpeg, webp, gif or pdf)"),
     })
 }
 

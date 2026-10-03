@@ -176,6 +176,9 @@ None of these could be tested in the container.
       resampling in linear light (render::resample), a preview of the encoded
       result (JPEG decoded back, so artefacts show) and its real file size,
       encoded on a worker thread
+- [x] PDF export (File ▸ Export ▸ PDF, `lumenply batch --format pdf`): one
+      page at print size, JPEG 92 or lossless Flate with an alpha soft
+      mask, sRGB ICC-based colour; checked with qpdf, pdfinfo and PyMuPDF
 - [x] GIF, BMP, TGA, ICO, QOI and PNM open; GIF export (Export As, batch):
       an exact palette for up to 256 colours, NeuQuant above, hard
       transparency

@@ -415,6 +415,38 @@ impl App {
         }
     }
 
+    /// File ▸ Export ▸ PDF: one page at print size, JPEG-compressed
+    /// unless the image has transparency (then lossless, with a mask).
+    pub(crate) fn pick_export_pdf(&mut self) {
+        if let Some(p) = self.pick_save_path("Export PDF", "PDF document", &["pdf"]) {
+            self.export_pdf(&p);
+        }
+    }
+
+    pub(crate) fn export_pdf(&mut self, path: &str) {
+        use lumenply_io::pdf::{encode_pdf, PdfImage};
+        let flat = lumenply_render::composite_raster(self.editor.doc());
+        let clear = flat.pixels.iter().any(|p| p.a < 1.0);
+        let image = if clear {
+            PdfImage::Lossless
+        } else {
+            PdfImage::Jpeg(92)
+        };
+        let written =
+            encode_pdf(&flat, 72.0, image).and_then(|b| std::fs::write(path, b).map_err(Into::into));
+        match written {
+            Ok(()) => {
+                let how = if clear {
+                    "lossless, with transparency"
+                } else {
+                    "JPEG 92"
+                };
+                self.status = format!("Exported {path} ({how})");
+            }
+            Err(e) => self.status = format!("Could not export: {e}"),
+        }
+    }
+
     pub(crate) fn export_jpeg(&mut self, path: &str, quality: u8) {
         let flat = lumenply_render::composite_raster(self.editor.doc());
         match lumenply_io::save_jpeg(path, &flat, quality) {

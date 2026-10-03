@@ -376,6 +376,7 @@ impl App {
         menu_heading(ui, "FLATTENED IMAGE");
         self.act(ui, "PNG...", "export-png");
         self.act(ui, "JPEG...", "export-jpeg");
+        self.act(ui, "PDF...", "export-pdf");
         menu_heading(ui, "WITH LAYERS");
         self.act(ui, "Photoshop PSD...", "export-psd");
         self.act(ui, "Photoshop PSD (16-bit)...", "export-psd16");
