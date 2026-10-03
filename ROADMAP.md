@@ -158,8 +158,15 @@ None of these could be tested in the container.
       Whites, Blacks, Vibrance, Saturation, camera tone curve; Auto, Reset,
       before/after with P) that develops at full size into the new document
       (render::develop, hue-preserving tone on perceptual luminance, local
-      highlights/shadows from a blurred log-luminance base). Still open:
-      re-opening the develop later (a smart "Camera Raw filter" layer)
+      highlights/shadows from a blurred log-luminance base)
+- [x] Filter ▸ Camera Raw Filter (Shift+Cmd+A): the develop workspace on any
+      pixel layer or smart object — baked, as a smart filter that re-opens
+      with its settings (double-click its row or Properties ▸ Edit in Camera
+      Raw; OK is one step), or as a live filter layer; new Texture, Clarity,
+      Dehaze and Vignette (also when opening RAW); tile, chunk and
+      destructive renders agree within 1e-4 (ADR 0016). Still open: the
+      frame following crop/resize, faster live layers on huge canvases,
+      PSD Camera Raw smart filters
 - [x] Export As (File ▸ Export, palette): PNG / JPEG / lossless WebP, quality,
       transparency (or onto white), output size in px or % with Lanczos-3
       resampling in linear light (render::resample), a preview of the encoded
@@ -330,6 +337,12 @@ None of these could be tested in the container.
 - [x] Align (6 edges, to each other or to the selection or canvas) and
       distribute (3+ layers) as one undo step; Move tool bar and Layer ▸
       Align / Distribute
+- [x] Color Lookup adjustment (3D LUTs, ADR 0019): .cube (1D/3D/both) and
+      .3dl, tetrahedral on gamma values, seven built-in looks generated in
+      code, Load 3D LUT, tables embedded once per .lumen; PSD clrL both ways
+      with Photoshop's ICC device link (psd-tools and littleCMS checked);
+      File ▸ Export ▸ Color Lookup Table bakes the visible adjustment layers.
+      Still open: ICC-profile lookups, .look files, GPU path
 - [x] Curves per channel (Master/Red/Green/Blue in the editor; PSD both
       ways incl. channel-only curves and the 'Crv ' section) and
       Hue/Saturation Colorize (PSD both ways); Photo Filter colours in
@@ -397,7 +410,13 @@ None of these could be tested in the container.
       vector; Rasterize, Make work path, New shape from path; .lumen; PSD as
       Photoshop shape layers (SoCo/GdFl + vstk + vmsk) both ways,
       psd-tools-verified; ORA bakes (ADR 0010)
-- [ ] Pattern fills (PSD imports them as pixels)
+- [x] Patterns (ADR 0020): pattern fill layers and pattern-filled shapes
+      (scale, angle, phase from the canvas origin), Pattern Overlay effect,
+      Edit ▸ Define Pattern, a picker with 8 generated built-ins plus a user
+      library next to prefs, Photoshop .pat import; PSD Patt/Pat2/Pat3
+      read, PtFl and patternFill both ways (phase recovered from stored
+      pixels), psd-tools-verified (ag-psd pattern 13.2 → 0.9). Still open:
+      Pattern Stamp, pattern stroke effect, "Link with Layer" following moves
 - [~] Text: searchable font picker (system fonts via fontdb, .ttc face index
       honoured), bold/italic (real faces, else synthetic), tracking;
       missing fonts render in DejaVu Sans with a notice. On-canvas editing:
