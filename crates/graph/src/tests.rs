@@ -6,7 +6,7 @@ use lumenply_tiles::{Rect, Rgba, TileStore};
 use crate::*;
 
 /// A pixel layer painted with `color` (straight linear RGBA) over `area`.
-fn painted(doc: &mut Document, name: &str, area: Rect, color: [f32; 4]) -> Layer {
+pub(crate) fn painted(doc: &mut Document, name: &str, area: Rect, color: [f32; 4]) -> Layer {
     let mut l = Layer::pixel(doc.alloc_id(), name);
     let LayerContent::Pixel(store) = &mut l.content else {
         unreachable!()
@@ -21,7 +21,7 @@ fn painted(doc: &mut Document, name: &str, area: Rect, color: [f32; 4]) -> Layer
 }
 
 /// A half-revealing mask: the left half of `area` shown, the rest hidden.
-fn half_mask(area: Rect) -> Mask {
+pub(crate) fn half_mask(area: Rect) -> Mask {
     let mut m = Mask::hide_all();
     for y in area.y..area.bottom() {
         for x in area.x..area.x + area.w as i32 / 2 {
@@ -34,7 +34,7 @@ fn half_mask(area: Rect) -> Mask {
 /// A document using every compositing feature the lowering handles:
 /// blend modes, opacity, fill, masks, effects, adjustment and filter
 /// layers, isolated and pass-through groups, and a clip chain.
-fn busy_document() -> Document {
+pub(crate) fn busy_document() -> Document {
     let mut doc = Document::new(300, 280);
     let canvas = doc.canvas();
     let bg = painted(&mut doc, "Background", canvas, [0.9, 0.85, 0.7, 1.0]);

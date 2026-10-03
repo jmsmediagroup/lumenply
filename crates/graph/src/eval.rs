@@ -182,7 +182,7 @@ impl Renderer {
         self.keys.keys(graph, node)
     }
 
-    fn ctx<'a>(&'a self, graph: &'a Graph, blobs: &'a BlobStore, node: NodeId) -> Ctx<'a> {
+    pub(crate) fn ctx<'a>(&'a self, graph: &'a Graph, blobs: &'a BlobStore, node: NodeId) -> Ctx<'a> {
         Ctx {
             graph,
             blobs,

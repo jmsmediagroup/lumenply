@@ -12,6 +12,7 @@
 pub mod blob;
 pub mod cache;
 pub mod eval;
+pub mod gpu;
 pub mod history;
 pub mod key;
 pub mod lower;
@@ -23,6 +24,7 @@ pub mod whole;
 pub use blob::{BlobId, BlobStore, Hash, TileHasher};
 pub use cache::{CacheStats, TileCache};
 pub use eval::{Ctx, Renderer};
+pub use gpu::{GpuImage, GpuRenderer, GpuStats, GpuTile};
 pub use history::History;
 pub use key::{Key, KeyMemo};
 pub use lower::{lower, Lowered};

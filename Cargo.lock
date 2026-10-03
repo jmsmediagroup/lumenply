@@ -2547,10 +2547,12 @@ dependencies = [
  "lumenply-doc",
  "lumenply-render",
  "lumenply-tiles",
+ "pollster 0.3.0",
  "rayon",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "wgpu",
 ]
 
 [[package]]

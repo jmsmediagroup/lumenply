@@ -27,21 +27,12 @@ use crate::composite_rect as cpu_composite_rect;
 const MAX_SIDE: u32 = 4096;
 const WG: u32 = 8;
 
-const SHADER: &str = r#"
-struct Params {
-    mode: u32,     // blend mode index, matches BlendMode order
-    opacity: f32,
-    has_mask: u32,
-    _pad: u32,
-}
-
-@group(0) @binding(0) var acc_in: texture_2d<f32>;
-@group(0) @binding(1) var acc_out: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(2) var src_tex: texture_2d<f32>;
-@group(0) @binding(3) var mask_tex: texture_2d<f32>;
-@group(0) @binding(4) var<uniform> params: Params;
-@group(0) @binding(5) var<storage, read> lut: array<f32>;
-
+/// The blend maths in WGSL, mirroring the CPU path function for function
+/// (`blend_pixel`, `blend_channel`, `blend::blend_color`). It declares no
+/// bindings, so other compute shaders (the edit graph's GPU executor in
+/// `lumenply-graph`) prepend it to their own entry points instead of
+/// duplicating the maths.
+pub const BLEND_WGSL: &str = r#"
 fn hard_light(cb: f32, cs: f32) -> f32 {
     if cs <= 0.5 {
         return cb * 2.0 * cs;
@@ -231,6 +222,22 @@ fn blend_pixel(b: vec4f, source: vec4f, mode: u32, opacity: f32) -> vec4f {
     let rgb = s.rgb * (1.0 - b.a) + b.rgb * (1.0 - s.a) + both * mixed;
     return vec4f(rgb, s.a + b.a - both);
 }
+"#;
+
+const SHADER: &str = r#"
+struct Params {
+    mode: u32,     // blend mode index, matches BlendMode order
+    opacity: f32,
+    has_mask: u32,
+    _pad: u32,
+}
+
+@group(0) @binding(0) var acc_in: texture_2d<f32>;
+@group(0) @binding(1) var acc_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var src_tex: texture_2d<f32>;
+@group(0) @binding(3) var mask_tex: texture_2d<f32>;
+@group(0) @binding(4) var<uniform> params: Params;
+@group(0) @binding(5) var<storage, read> lut: array<f32>;
 
 fn mask_at(p: vec2u) -> f32 {
     if params.has_mask == 0u {
@@ -344,7 +351,7 @@ impl GpuCompositor {
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("compositor"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{BLEND_WGSL}{SHADER}").into()),
         });
         use wgpu::BindingType as BT;
         let tex = |binding| wgpu::BindGroupLayoutEntry {
