@@ -325,6 +325,10 @@ impl App {
                     finished |= slider_row_ex(ui, "Radius", radius, 1.0..=8.0, " px", o);
                     finished |= slider_row_ex(ui, "Threshold", threshold, 0.0..=255.0, " levels", o);
                 }
+                Filter::Develop { settings, .. } => crate::camera_raw_filter::develop_params(ui, settings),
+            }
+            if crate::camera_raw_filter::take_request(ui.ctx()) {
+                self.open_camera_raw_filter();
             }
             if f != before {
                 self.run_coalescing(&SetFilter { layer: id, filter: f }, &format!("filter-{id}"));

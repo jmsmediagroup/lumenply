@@ -610,6 +610,7 @@ impl App {
             menu_note(ui, "Filters below are added as smart filters");
         }
         menu_separator(ui);
+        self.act(ui, "Camera Raw Filter...", crate::camera_raw_filter::CRF_ACTION);
         self.act(ui, "Liquify...", "liquify");
         menu_separator(ui);
         // Photoshop's grouping: a submenu per kind of filter.

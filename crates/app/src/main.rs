@@ -27,6 +27,7 @@ mod blend_ui;
 mod brand;
 mod brush_panel;
 mod camera_raw;
+mod camera_raw_filter;
 mod canvas;
 mod channels_panel;
 mod clipboard;
@@ -1661,7 +1662,7 @@ fn filter_category(f: &Filter) -> &'static str {
         Filter::Mosaic { .. } => "Pixelate",
         Filter::Sharpen { .. } => "Sharpen",
         Filter::Emboss { .. } | Filter::FindEdges => "Stylize",
-        Filter::HighPass { .. } => "Other",
+        Filter::HighPass { .. } | Filter::Develop { .. } => "Other",
     }
 }
 

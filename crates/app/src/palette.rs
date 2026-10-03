@@ -195,6 +195,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Show or hide the Info panel", "info-panel"),
     ("Make work path from selection", "make-work-path"),
     ("Puppet Warp", "puppet-warp"),
+    ("Camera Raw Filter...", crate::camera_raw_filter::CRF_ACTION),
 ];
 
 impl App {
@@ -295,6 +296,7 @@ pub(crate) fn filter_id(f: &Filter) -> &'static str {
         Filter::SurfaceBlur { .. } => "filter-surface",
         Filter::LensBlur { .. } => "filter-lens",
         Filter::DustScratches { .. } => "filter-dust",
+        Filter::Develop { .. } => crate::camera_raw_filter::CRF_ACTION,
     }
 }
 
@@ -565,6 +567,9 @@ impl App {
         if let Some(block) = self.panel_action_block(id) {
             return block;
         }
+        if let Some(block) = self.crf_action_block(id) {
+            return block;
+        }
         match id {
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
             "redo" if !self.editor.can_redo() => Some("Nothing to redo"),
@@ -703,7 +708,7 @@ impl App {
             self.status = why.into();
             return;
         }
-        if self.run_layer_action(id) || self.run_smart_filter_action(id) {
+        if self.run_layer_action(id) || self.run_smart_filter_action(id) || self.run_crf_action(id) {
             return;
         }
         if self.run_panel_action(id) {
@@ -935,7 +940,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 142); // + puppet warp
+        assert_eq!(n, 143); // + Camera Raw Filter
     }
 
     #[test]

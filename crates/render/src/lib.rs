@@ -16,6 +16,7 @@
 pub mod blend;
 pub mod cache;
 pub mod develop;
+mod develop_filter;
 pub mod fill;
 pub mod filters;
 mod filters_more;

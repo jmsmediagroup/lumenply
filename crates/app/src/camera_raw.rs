@@ -8,22 +8,56 @@ use lumenply_render::develop::{auto_develop, develop, Develop};
 use rayon::prelude::*;
 
 /// Longest preview side in pixels.
-const PREVIEW_MAX: u32 = 1400;
+pub(crate) const PREVIEW_MAX: u32 = 1400;
 
 pub(crate) struct CameraRawState {
     path: String,
     full: Raster,
-    proxy: Raster,
+    pub(crate) proxy: Raster,
     pub(crate) dev: Develop,
     /// Show the image as decoded, without the sliders (P).
     pub(crate) before: bool,
     tex: Option<egui::TextureHandle>,
     hist: [u32; histogram::BINS],
-    shown: Option<(Develop, bool)>,
+    pub(crate) shown: Option<(Develop, bool)>,
+    /// Set when the workspace runs as Filter ▸ Camera Raw Filter on a layer
+    /// (camera_raw_filter.rs) instead of opening a RAW file.
+    pub(crate) filter: Option<crate::camera_raw_filter::CrfTarget>,
+}
+
+impl CameraRawState {
+    /// The workspace as the Camera Raw Filter: `proxy` is the layer's
+    /// pixels at preview size, `name` the layer's name.
+    pub(crate) fn for_filter(
+        name: &str,
+        proxy: Raster,
+        dev: Develop,
+        target: crate::camera_raw_filter::CrfTarget,
+    ) -> Self {
+        CameraRawState {
+            path: name.to_string(),
+            full: Raster::new(0, 0),
+            proxy,
+            dev,
+            before: false,
+            tex: None,
+            hist: [0; histogram::BINS],
+            shown: None,
+            filter: Some(target),
+        }
+    }
+
+    /// Pixel size of what OK develops: the RAW file, or the canvas.
+    fn size(&self) -> (u32, u32) {
+        match &self.filter {
+            Some(t) => (t.frame[2].max(0) as u32, t.frame[3].max(0) as u32),
+            None => (self.full.width, self.full.height),
+        }
+    }
 }
 
 /// Box-filtered copy of `src` whose longest side is at most `max`.
-fn shrink(src: &Raster, max: u32) -> Raster {
+pub(crate) fn shrink(src: &Raster, max: u32) -> Raster {
     let f = src.width.max(src.height).div_ceil(max).max(1);
     if f == 1 {
         return src.clone();
@@ -98,6 +132,7 @@ impl App {
                     tex: None,
                     hist: [0; histogram::BINS],
                     shown: None,
+                    filter: None,
                 }));
             }
             Err(e) => self.status = format!("Could not open {path}: {e}"),
@@ -150,21 +185,27 @@ impl App {
             st.shown = Some((st.dev, st.before));
         }
 
-        let name = file_name(&st.path);
+        let name = if st.filter.is_some() {
+            st.path.clone()
+        } else {
+            file_name(&st.path)
+        };
+        let (title, enter) = if st.filter.is_some() {
+            ("Camera Raw Filter", "P before / after  ·  Enter applies")
+        } else {
+            ("Camera Raw", "P before / after  ·  Enter opens")
+        };
+        let (fw, fh) = st.size();
         egui::TopBottomPanel::top("camera-raw-bar")
             .frame(bar_frame())
             .exact_height(40.0)
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    ui.label(RichText::new("Camera Raw").strong().color(TEXT));
+                    ui.label(RichText::new(title).strong().color(TEXT));
                     ui.label(RichText::new(&name).color(MUTED));
-                    ui.label(
-                        RichText::new(format!("{} × {} px", st.full.width, st.full.height))
-                            .monospace()
-                            .color(MUTED),
-                    );
+                    ui.label(RichText::new(format!("{fw} × {fh} px")).monospace().color(MUTED));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new("P before / after  ·  Enter opens").color(MUTED));
+                        ui.label(RichText::new(enter).color(MUTED));
                     });
                 });
             });
@@ -213,22 +254,37 @@ impl App {
                         st.dev = Develop {
                             temperature: st.dev.temperature,
                             tint: st.dev.tint,
+                            // The filter's input is a finished image: Auto
+                            // keeps its curve choice.
+                            tone_curve: if st.filter.is_some() {
+                                st.dev.tone_curve
+                            } else {
+                                a.tone_curve
+                            },
                             ..a
                         };
                     }
                     if ui
                         .button("Reset")
-                        .on_hover_text("Back to the camera's rendering")
+                        .on_hover_text(if st.filter.is_some() {
+                            "Back to the layer as it is"
+                        } else {
+                            "Back to the camera's rendering"
+                        })
                         .clicked()
                     {
-                        st.dev = Develop::default();
+                        st.dev = if st.filter.is_some() {
+                            Develop::NEUTRAL
+                        } else {
+                            Develop::default()
+                        };
                     }
                     check(ui, &mut st.before, "Before (P)");
                 });
                 ui.add_space(6.0);
-                egui::ScrollArea::vertical()
+                let scroll = egui::ScrollArea::vertical()
                     .id_salt("camera-raw-sliders")
-                    .max_height(ui.available_height() - 44.0)
+                    .max_height(ui.available_height() - if st.filter.is_some() { 76.0 } else { 44.0 })
                     .show(ui, |ui| {
                         let d = &mut st.dev;
                         section_title(ui, "WHITE BALANCE");
@@ -249,18 +305,29 @@ impl App {
                         check(ui, &mut d.tone_curve, "Camera tone curve")
                             .on_hover_text("The gentle contrast curve raw converters apply by default");
                         section_title(ui, "PRESENCE");
+                        basic_row(ui, "Texture", &mut d.texture, -100.0..=100.0, "");
+                        basic_row(ui, "Clarity", &mut d.clarity, -100.0..=100.0, "");
+                        basic_row(ui, "Dehaze", &mut d.dehaze, -100.0..=100.0, "");
                         basic_row(ui, "Vibrance", &mut d.vibrance, -100.0..=100.0, "");
                         basic_row(ui, "Saturation", &mut d.saturation, -100.0..=100.0, "");
+                        section_title(ui, "VIGNETTE");
+                        basic_row(ui, "Amount", &mut d.vignette, -100.0..=100.0, "");
+                        basic_row(ui, "Midpoint", &mut d.vignette_midpoint, 0.0..=100.0, "");
                     });
+                a11y_scroll(ui.ctx(), &scroll, "Camera Raw settings");
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Max), |ui| {
                     ui.horizontal(|ui| {
-                        if ui.add(primary_button("Open")).clicked() {
+                        let ok = if st.filter.is_some() { "OK" } else { "Open" };
+                        if ui.add(primary_button(ok)).clicked() {
                             done = Some(true);
                         }
                         if ui.add(footer_button("Cancel")).clicked() {
                             done = Some(false);
                         }
                     });
+                    if let Some(t) = st.filter.as_mut() {
+                        crate::camera_raw_filter::apply_as_row(ui, t);
+                    }
                 });
             });
 
@@ -294,8 +361,14 @@ impl App {
                 }
             });
 
+        if st.filter.is_some() {
+            // Filter mode: a changed "apply as" may change what it previews.
+            self.crf_refresh_source(&mut st);
+        }
         match done {
+            Some(true) if st.filter.is_some() => self.finish_camera_raw_filter(ctx, *st),
             Some(true) => self.finish_camera_raw(*st),
+            Some(false) if st.filter.is_some() => self.status = "Camera Raw Filter cancelled".into(),
             Some(false) => self.status = format!("Did not open {}", st.path),
             None => self.camera_raw = Some(st),
         }
@@ -339,6 +412,7 @@ mod tests {
             tex: None,
             hist: [0; histogram::BINS],
             shown: None,
+            filter: None,
         }
     }
 
