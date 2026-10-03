@@ -1111,7 +1111,7 @@ impl App {
                                 ui.add_space(LABEL_W + ui.spacing().item_spacing.x);
                                 check(ui, lock, "Keep aspect ratio");
                             });
-                            note(ui, "Resamples every layer bilinearly.");
+                            note(ui, "Resamples every layer: bilinear when enlarging, averaged when shrinking.");
                         }
                     }
                     if !primary.is_empty() {
