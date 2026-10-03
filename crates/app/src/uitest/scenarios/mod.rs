@@ -9,8 +9,11 @@
 use super::Scenario;
 
 mod adjust;
+mod b_layers;
 mod basics;
 mod c_selections;
+mod d_painting;
+mod e_transform;
 mod g_text_shapes;
 mod selection;
 
@@ -20,5 +23,8 @@ pub(crate) const AREAS: &[&[Scenario]] = &[
     adjust::SCENARIOS,
     selection::SCENARIOS,
     c_selections::SCENARIOS,
+    b_layers::SCENARIOS,
+    d_painting::SCENARIOS,
+    e_transform::SCENARIOS,
     g_text_shapes::SCENARIOS,
 ];
