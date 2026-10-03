@@ -1,127 +1,19 @@
-//! Brush modes that rework what is under the brush instead of laying
-//! colour down: Blur and Sharpen (`BrushMode::Blur` / `Sharpen` in a
-//! `PaintStroke`), and the History brush ([`HistoryStroke`]), which paints
-//! pixels back from a past state. Re-exported from [`crate::commands`].
+//! The History brush ([`HistoryStroke`]), which paints pixels back from a
+//! past state. Blur and Sharpen (`BrushMode::Blur` / `Sharpen` in a
+//! `PaintStroke`) live with the other brush modes in
+//! [`lumenply_render::paint`]. Re-exported from [`crate::commands`].
 
+#[cfg(test)]
 use lumenply_doc::adjust::{srgb_decode, srgb_encode};
-use lumenply_doc::{Document, LayerId, Selection};
+use lumenply_doc::{Document, LayerId};
+#[cfg(test)]
+use lumenply_render::paint::kernel_radius;
 use lumenply_tiles::{Rect, Rgba, TileStore};
 
-use crate::commands::{dab_coverage, interpolate_dabs, stroke_bounds, Brush, BrushMode, StrokePoint};
+#[cfg(test)]
+use crate::commands::BrushMode;
+use crate::commands::{dab_coverage, interpolate_dabs, stroke_bounds, Brush, StrokePoint};
 use crate::{Command, EditError, EditResult};
-
-/// Unsharp gain of a Sharpen dab at full strength and spacing 1 (see
-/// [`filter_stroke`] for how spacing scales it).
-pub const SHARPEN_GAIN: f32 = 0.6;
-
-/// Kernel radius: 3×3 for small brushes, 5×5 from a 24 px diameter up.
-pub fn kernel_radius(brush: &Brush) -> i32 {
-    if brush.radius >= 12.0 {
-        2
-    } else {
-        1
-    }
-}
-
-/// Blur or sharpen along a stroke. Every dab filters a snapshot of the
-/// pixels around it taken just before it lands, so a dab never reads its
-/// own writes (as Smudge does). Blur averages premultiplied pixels (a box
-/// of [`kernel_radius`]) and moves toward it by a = strength × coverage ×
-/// spacing; Sharpen adds `SHARPEN_GAIN` × a of the difference from that
-/// box average, on straight gamma-encoded colour, alpha kept. Dabs overlap
-/// about 2 / spacing times along a stroke, so scaling by the spacing makes
-/// a stroke at full strength lay about two full passes on each pixel
-/// however densely it is dabbed. Reads beyond the canvas repeat its edge.
-pub(crate) fn filter_stroke(
-    store: &mut TileStore,
-    brush: &Brush,
-    points: &[StrokePoint],
-    canvas: Rect,
-    sel: Option<&Selection>,
-) {
-    let strength = brush.color[3].clamp(0.0, 1.0) * brush.spacing.clamp(0.02, 1.0);
-    let kr = kernel_radius(brush);
-    let sharpen = brush.mode == BrushMode::Sharpen;
-    for d in interpolate_dabs(brush, points) {
-        let r = d.radius;
-        if r <= 0.0 {
-            continue;
-        }
-        let pad = r.ceil() as i32 + 1 + kr;
-        let region = Rect::new(
-            d.x.floor() as i32 - pad,
-            d.y.floor() as i32 - pad,
-            (2 * pad + 1) as u32,
-            (2 * pad + 1) as u32,
-        )
-        .intersect(&canvas);
-        if region.is_empty() {
-            continue;
-        }
-        let (w, h) = (region.w as i32, region.h as i32);
-        let snap = store.to_raster(region);
-        // Sharpen compares gamma-encoded straight colour.
-        let enc: Vec<[f32; 4]> = if sharpen {
-            snap.pixels
-                .iter()
-                .map(|p| {
-                    let [r, g, b, a] = p.to_straight();
-                    [srgb_encode(r), srgb_encode(g), srgb_encode(b), a]
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let at = |x: i32, y: i32| ((y.clamp(0, h - 1) * w) + x.clamp(0, w - 1)) as usize;
-        let n = ((2 * kr + 1) * (2 * kr + 1)) as f32;
-        dab_coverage(brush, d, canvas, sel, |px, py, cover| {
-            let k = (strength * cover).clamp(0.0, 1.0);
-            let (lx, ly) = (px - region.x, py - region.y);
-            let me = at(lx, ly);
-            if sharpen {
-                let c = enc[me];
-                if c[3] <= 0.0 {
-                    return;
-                }
-                let mut avg = [0f32; 3];
-                for dy in -kr..=kr {
-                    for dx in -kr..=kr {
-                        let q = enc[at(lx + dx, ly + dy)];
-                        for i in 0..3 {
-                            avg[i] += q[i];
-                        }
-                    }
-                }
-                let g = SHARPEN_GAIN * k;
-                let out = |i: usize| srgb_decode((c[i] + (c[i] - avg[i] / n) * g).clamp(0.0, 1.0));
-                store.set_pixel(px, py, Rgba::from_straight(out(0), out(1), out(2), c[3]));
-            } else {
-                let mut acc = [0f32; 4];
-                for dy in -kr..=kr {
-                    for dx in -kr..=kr {
-                        let q = snap.pixels[at(lx + dx, ly + dy)];
-                        acc[0] += q.r;
-                        acc[1] += q.g;
-                        acc[2] += q.b;
-                        acc[3] += q.a;
-                    }
-                }
-                let dst = snap.pixels[me];
-                let lerp = |a: f32, b: f32| a + (b / n - a) * k;
-                store.set_pixel(
-                    px,
-                    py,
-                    Rgba::new(
-                        lerp(dst.r, acc[0]),
-                        lerp(dst.g, acc[1]),
-                        lerp(dst.b, acc[2]),
-                        lerp(dst.a, acc[3]),
-                    ),
-                );
-            }
-        });
-    }
-}
 
 /// The history brush: paint a layer's pixels back from a past state.
 /// `source` is the layer's pixels in that state (`None` when the layer did

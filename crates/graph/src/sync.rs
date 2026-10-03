@@ -24,7 +24,7 @@
 //! two produce the same content key for the output.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use lumenply_doc::{
     Document, Guide, Layer, LayerContent, LayerId, Mask, NamedPath, Pattern, SavedSelection, Selection,
@@ -32,7 +32,7 @@ use lumenply_doc::{
 };
 use lumenply_tiles::{Tile, TileStore};
 
-use crate::blob::{BlobId, BlobStore, TileHasher};
+use crate::blob::{op_blob_refs, BlobId, BlobStore, TileHasher};
 use crate::eval::Renderer;
 use crate::lower::Step;
 use crate::model::{Graph, Node, NodeId};
@@ -574,8 +574,8 @@ fn content_pixels(
             if !float {
                 let mut sources: HashSet<*const Tile> = HashSet::new();
                 for id in graph.upstream(node) {
-                    for b in graph.node(id).into_iter().flat_map(|n| n.op.blob_refs()) {
-                        if let Some(s) = blobs.get(b) {
+                    for b in graph.node(id).map(|n| op_blob_refs(&n.op)).unwrap_or_default() {
+                        if let Some(s) = blobs.get(&b) {
                             sources.extend(s.coords().filter_map(|c| s.tile_arc(c)).map(Arc::as_ptr));
                         }
                     }
@@ -728,6 +728,7 @@ pub fn content_edit(
         }
         _ => None,
     };
+    let was_folded = folded.is_some();
     let top = match folded {
         Some(node) => graph.add(node),
         None => {
@@ -748,6 +749,17 @@ pub fn content_edit(
             graph.add(Node::new(edit.op.clone(), inputs))
         }
     };
+    // An op computing new values (a stroke) leaves 32-bit tiles. Outside
+    // float mode the editor keeps a layer at 16 bits after every command,
+    // and whatever comes next reads what the document holds, so the chain
+    // does the same: every stroke reads and leaves exactly the tiles the
+    // command would have.
+    let keeps_values = matches!(edit.op, Op::Translate { .. } | Op::Compact);
+    let top = if base.state.float_mode || keeps_values {
+        top
+    } else {
+        graph.add(Node::new(Op::Compact, vec![Some(top)]))
+    };
     // Point the compositing node's content port (never the backdrop) at the
     // new top of the chain.
     let mut rewired = 0;
@@ -764,7 +776,10 @@ pub fn content_edit(
     if rewired != 1 {
         return None;
     }
-    graph.collect_garbage();
+    if was_folded {
+        // The op folded into is no longer on the chain.
+        graph.collect_garbage();
+    }
     let mut state = base.state.clone();
     state.layer_mut(edit.layer)?.content = Some(top);
     let pixels = content_pixels(&graph, blobs, renderer, top, state.float_mode);
@@ -773,46 +788,60 @@ pub fn content_edit(
     Some(Edited { graph, state, doc })
 }
 
-impl Op {
-    /// The blobs this op names. The match lists every op on purpose:
-    /// dropping unused blobs relies on it, so a new op must say here which
-    /// blobs it reads.
-    pub fn blob_refs(&self) -> impl Iterator<Item = &BlobId> {
-        let blob = match self {
-            Op::Image { blob } => Some(blob),
-            Op::Mask { blob, .. } => blob.as_ref(),
-            Op::Fill { pattern_pixels, .. } | Op::Shape { pattern_pixels, .. } => {
-                pattern_pixels.as_ref().map(|p| &p.blob)
+/// A node, kept alive while memoised, and the blobs it names.
+type NodeRefs = (Arc<Node>, Arc<[BlobId]>);
+
+/// The blobs each node names (a scan of its parameters, see
+/// [`crate::blob_refs`]), memoised by the node's `Arc`: graph versions
+/// share every node an edit didn't change, so each is scanned once however
+/// many versions hold it.
+#[derive(Default)]
+pub struct BlobRefMemo {
+    refs: Mutex<HashMap<usize, NodeRefs>>,
+}
+
+impl BlobRefMemo {
+    pub fn node(&self, node: &Arc<Node>) -> Arc<[BlobId]> {
+        let addr = Arc::as_ptr(node) as usize;
+        if let Some((kept, refs)) = self.refs.lock().unwrap().get(&addr) {
+            if Arc::ptr_eq(kept, node) {
+                return refs.clone();
             }
-            Op::Empty
-            | Op::Layer { .. }
-            | Op::Adjustment { .. }
-            | Op::FilterLayer { .. }
-            | Op::PassThrough { .. }
-            | Op::ClipGroup { .. }
-            | Op::Text { .. }
-            | Op::Transform { .. }
-            | Op::SmartFilter { .. }
-            | Op::Translate { .. }
-            | Op::Compact => None,
-        };
-        blob.into_iter()
+        }
+        let refs: Arc<[BlobId]> = op_blob_refs(&node.op).into();
+        self.refs
+            .lock()
+            .unwrap()
+            .insert(addr, (node.clone(), refs.clone()));
+        refs
+    }
+
+    /// Every blob `graph` names.
+    pub fn graph(&self, graph: &Graph) -> HashSet<BlobId> {
+        let mut out = HashSet::new();
+        for (id, _) in graph.nodes() {
+            if let Some(n) = graph.node_arc(id) {
+                out.extend(self.node(n).iter().copied());
+            }
+        }
+        out
+    }
+
+    /// Forget nodes no graph version holds any more.
+    pub fn prune(&self) {
+        self.refs
+            .lock()
+            .unwrap()
+            .retain(|_, (n, _)| Arc::strong_count(n) > 1);
     }
 }
 
-/// Every blob `graph` names.
-pub fn graph_blobs(graph: &Graph) -> HashSet<BlobId> {
-    graph
-        .nodes()
-        .flat_map(|(_, n)| n.op.blob_refs().copied())
-        .collect()
-}
-
-/// Drop the blobs none of `graphs` names.
-pub fn collect_blobs<'a>(blobs: &mut BlobStore, graphs: impl IntoIterator<Item = &'a Graph>) {
+/// Drop the blobs none of `sets` names (brush tips included), each set
+/// being what one kept version names (see [`BlobRefMemo::graph`]).
+pub fn collect_blobs<'a>(blobs: &mut BlobStore, sets: impl IntoIterator<Item = &'a HashSet<BlobId>>) {
     let mut keep = HashSet::new();
-    for g in graphs {
-        keep.extend(graph_blobs(g));
+    for s in sets {
+        keep.extend(s.iter().copied());
     }
     blobs.retain(&keep);
 }
@@ -841,17 +870,22 @@ fn record_stores(state: &DocState) -> HashMap<(LayerId, u8), &TileStore> {
 }
 
 /// Estimated bytes of pixel data version `a` keeps alive that version `b`
-/// doesn't: the tiles of blobs only `a` names, and of record stores that
-/// changed from `a` to `b`, less any tile `b` holds too. This is what
-/// dropping `a` from a history whose next version is `b` frees. A shared
-/// tile counts once.
-pub fn released_bytes(a: (&Graph, &DocState), b: (&Graph, &DocState), blobs: &BlobStore) -> usize {
-    let (a_blobs, b_blobs) = (graph_blobs(a.0), graph_blobs(b.0));
+/// doesn't, each version given as the blobs its graph names and its state:
+/// the tiles of blobs only `a` names, and of record stores that changed
+/// from `a` to `b`, less any tile `b` holds too. This is what dropping `a`
+/// from a history whose next version is `b` frees. A shared tile counts
+/// once.
+pub fn released_bytes(
+    a: (&HashSet<BlobId>, &DocState),
+    b: (&HashSet<BlobId>, &DocState),
+    blobs: &BlobStore,
+) -> usize {
+    let (a_blobs, b_blobs) = (a.0, b.0);
     let (a_stores, b_stores) = (record_stores(a.1), record_stores(b.1));
     let tiles =
         |s: &TileStore| -> Vec<Arc<Tile>> { s.coords().filter_map(|c| s.tile_arc(c).cloned()).collect() };
     let mut kept: HashSet<*const Tile> = HashSet::new();
-    for id in b_blobs.difference(&a_blobs) {
+    for id in b_blobs.difference(a_blobs) {
         if let Some(s) = blobs.get(id) {
             kept.extend(tiles(s).iter().map(Arc::as_ptr));
         }
@@ -871,7 +905,7 @@ pub fn released_bytes(a: (&Graph, &DocState), b: (&Graph, &DocState), blobs: &Bl
             }
         }
     };
-    for id in a_blobs.difference(&b_blobs) {
+    for id in a_blobs.difference(b_blobs) {
         if let Some(s) = blobs.get(id) {
             count(s);
         }

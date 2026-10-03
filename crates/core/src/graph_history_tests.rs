@@ -64,7 +64,37 @@ fn assert_same_store(a: &TileStore, b: &TileStore, what: &str) {
     }
 }
 
+/// The same tiles, each pixel within `tol` per channel.
+fn assert_close_store(a: &TileStore, b: &TileStore, tol: f32, what: &str) {
+    let ca: BTreeSet<_> = a.coords().map(|c| (c.x, c.y)).collect();
+    let cb: BTreeSet<_> = b.coords().map(|c| (c.x, c.y)).collect();
+    assert_eq!(ca, cb, "{what}: tiles present");
+    for c in a.coords() {
+        let (p, q) = (a.tile(c).unwrap().pixels(), b.tile(c).unwrap().pixels());
+        let worst = p
+            .iter()
+            .zip(q.iter())
+            .flat_map(|(u, v)| [u.r - v.r, u.g - v.g, u.b - v.b, u.a - v.a])
+            .fold(0.0f32, |m, d| m.max(d.abs()));
+        assert!(worst <= tol, "{what}: tile {c:?} differs by {worst}");
+    }
+}
+
 fn assert_same_layers(a: &[Layer], b: &[Layer]) {
+    compare_layers(a, b, 0.0);
+}
+
+/// Layer trees with the same settings and pixels; caches derived from a
+/// layer's parameters (text, smart, fill and shape pixels, smart filter
+/// results) may differ by `derived` per channel (0: not at all).
+fn compare_layers(a: &[Layer], b: &[Layer], derived: f32) {
+    let derived_store = |p: &TileStore, q: &TileStore, n: &str| {
+        if derived == 0.0 {
+            assert_same_store(p, q, n)
+        } else {
+            assert_close_store(p, q, derived, n)
+        }
+    };
     assert_eq!(a.len(), b.len(), "layer count");
     for (x, y) in a.iter().zip(b) {
         let n = &x.name;
@@ -94,14 +124,36 @@ fn assert_same_layers(a: &[Layer], b: &[Layer]) {
             std::mem::discriminant(&y.content),
             "{n}"
         );
+        match (&x.smart_filters.cache, &y.smart_filters.cache) {
+            (Some(p), Some(q)) => derived_store(&p.store, &q.store, n),
+            (p, q) => assert_eq!(p.is_some(), q.is_some(), "{n}: smart filter cache"),
+        }
         match (&x.content, &y.content) {
-            (LayerContent::Group(p), LayerContent::Group(q)) => assert_same_layers(p, q),
+            (LayerContent::Group(p), LayerContent::Group(q)) => compare_layers(p, q, derived),
             (LayerContent::Adjustment(p), LayerContent::Adjustment(q)) => assert_eq!(p, q),
             (LayerContent::Filter(p), LayerContent::Filter(q)) => assert_eq!(p, q),
-            _ => match (x.content_store(), y.content_store()) {
-                (Some(p), Some(q)) => assert_same_store(p, q, n),
+            (LayerContent::Pixel(p), LayerContent::Pixel(q)) => assert_same_store(p, q, n),
+            (LayerContent::Text(p), LayerContent::Text(q)) => assert!(p == q, "{n}: text"),
+            (LayerContent::Fill(p), LayerContent::Fill(q)) => assert_eq!(p.fill, q.fill, "{n}"),
+            (LayerContent::Shape(p), LayerContent::Shape(q)) => {
+                assert_eq!(
+                    (&p.geometry, &p.fill, &p.stroke),
+                    (&q.geometry, &q.fill, &q.stroke),
+                    "{n}"
+                );
+                assert_eq!(p.transform, q.transform, "{n}");
+            }
+            (LayerContent::Smart(p), LayerContent::Smart(q)) => {
+                assert_same_store(&p.source, &q.source, n);
+                assert_eq!(p.transform, q.transform, "{n}");
+            }
+            _ => unreachable!("same kinds"),
+        }
+        if !matches!(x.content, LayerContent::Pixel(_) | LayerContent::Group(_)) {
+            match (x.content_store(), y.content_store()) {
+                (Some(p), Some(q)) => derived_store(p, q, n),
                 (p, q) => assert_eq!(p.is_some(), q.is_some(), "{n}"),
-            },
+            }
         }
     }
 }
@@ -228,16 +280,22 @@ fn an_edit_to_one_layer_reuses_every_other_layers_nodes() {
     let n1 = layer_nodes(&ed);
     let k1 = ed.renderer().keys(&g1, g1.output.unwrap());
 
-    // Exactly two nodes are new: the stroked layer's pixels (a new image
-    // node replacing the old one) and its compositing node (same id, new
-    // inputs). Every other node is the very same `Arc`.
+    // The stroke goes onto the layer's content chain: a `stroke` node on
+    // the old pixels and a `compact` node on it are new, the compositing
+    // node is re-made under its id with the new content, and every other
+    // node is the very same `Arc`.
     let (added, removed, rearced) = diff(&g0, &g1);
     let (m_node, m_content, m_mask) = n0[&middle];
-    assert_eq!(removed, vec![m_content.unwrap()]);
-    assert_eq!(added, vec![n1[&middle].1.unwrap()]);
+    let chain_top = n1[&middle].1.unwrap();
+    let stroke = g1.node(chain_top).unwrap().input(0).unwrap();
+    assert_eq!(g1.node(chain_top).unwrap().op, Op::Compact);
+    assert!(matches!(g1.node(stroke).unwrap().op, Op::Stroke { .. }));
+    assert_eq!(g1.node(stroke).unwrap().input(0), m_content);
+    assert_eq!(added, vec![stroke, chain_top]);
+    assert!(removed.is_empty());
     assert_eq!(rearced, vec![m_node]);
-    assert_eq!(n1[&middle], (m_node, n1[&middle].1, m_mask));
-    assert_eq!(g0.len(), g1.len());
+    assert_eq!(n1[&middle], (m_node, Some(chain_top), m_mask));
+    assert_eq!(g1.len(), g0.len() + 2);
 
     // Every other layer keeps its nodes, and its pixels and mask keep
     // their content keys.
@@ -273,6 +331,20 @@ fn an_edit_to_one_layer_reuses_every_other_layers_nodes() {
     let k2 = ed.renderer().keys(&g2, g2.output.unwrap());
     let changed: Vec<NodeId> = k1.keys().copied().filter(|n| k1[n] != k2[n]).collect();
     assert_eq!(changed, vec![top], "only the top layer's node changes key");
+
+    // A command that isn't a graph op (a fill) gives the layer new pixels:
+    // one `image` node replaces the whole chain.
+    ed.execute(&Fill {
+        layer: middle,
+        color: [0.1, 0.2, 0.3, 1.0],
+    })
+    .unwrap();
+    let g3 = ed.graph_arc();
+    let (added, removed, rearced) = diff(&g2, &g3);
+    assert_eq!(removed, vec![m_content.unwrap(), stroke, chain_top]);
+    assert_eq!(added.len(), 1);
+    assert!(matches!(g3.node(added[0]).unwrap().op, Op::Image { .. }));
+    assert_eq!(rearced, vec![m_node]);
 }
 
 fn text(s: &str) -> lumenply_doc::TextLayer {
@@ -402,16 +474,25 @@ fn history_memory_counts_the_pixels_each_step_replaced() {
     })
     .unwrap();
     assert_eq!(ed.history_bytes(), 0, "an empty layer and an empty canvas");
-    ed.execute(&dab(id, 100.0, 100.0, [1.0, 0.0, 0.0, 1.0])).unwrap();
-    assert_eq!(ed.history_bytes(), TILE, "the stroke replaced one tile");
+    // Filling one tile's worth of selection: a new image sharing seven
+    // tiles with the old one, which only the history now holds one of.
+    let fill_tile = |ed: &mut Editor, x: i32, y: i32, color: [f32; 4]| {
+        let sel = Selection::rect(Rect::new(x, y, 256, 256));
+        ed.execute(&SetSelection { selection: Some(sel) }).unwrap();
+        ed.execute(&Fill { layer: id, color }).unwrap();
+        ed.execute(&SetSelection { selection: None }).unwrap();
+    };
+    fill_tile(&mut ed, 0, 0, [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(ed.history_bytes(), TILE);
+    // Strokes, moves and properties are graph ops on top of that image,
+    // which stays: nothing is released.
+    ed.execute(&dab(id, 100.0, 100.0, [0.0, 1.0, 0.0, 1.0])).unwrap();
+    assert_eq!(ed.history_bytes(), TILE, "a stroke is a node, not pixels");
     ed.execute(&SetOpacity {
         layer: id,
         opacity: 0.5,
     })
     .unwrap();
-    assert_eq!(ed.history_bytes(), TILE, "a property costs no pixels");
-    // A native move keeps the moved pixels as the same blob under a
-    // `translate` node: nothing is released.
     ed.execute(&MoveLayer {
         layer: id,
         dx: 256,
@@ -419,13 +500,17 @@ fn history_memory_counts_the_pixels_each_step_replaced() {
     })
     .unwrap();
     assert_eq!(ed.history_bytes(), TILE);
-    assert_eq!(ed.blobs().len(), 2, "the fill and the stroked fill");
-    // Painting over the moved stroke replaces that one (moved) tile.
-    ed.execute(&dab(id, 356.0, 100.0, [0.0, 0.0, 1.0, 1.0])).unwrap();
-    assert_eq!(ed.history_bytes(), 2 * TILE);
+    assert_eq!(ed.blobs().len(), 2, "the fill and the refilled tile's image");
+    // A fill on the moved, stroked layer replaces its chain with an image.
+    // Of the image the chain started from, two tiles are gone: the one
+    // the stroke painted over and the one refilled (moved to (2, 1)).
+    fill_tile(&mut ed, 512, 256, [0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(ed.history_bytes(), 3 * TILE);
+    assert_eq!(ed.blobs().len(), 3);
     // Undone steps no longer count; a new edit drops them and their blobs.
-    ed.undo();
-    ed.undo();
+    for _ in 0..3 {
+        ed.undo();
+    }
     assert_eq!(ed.history_bytes(), TILE);
     ed.execute(&SetVisible {
         layer: id,
@@ -433,7 +518,7 @@ fn history_memory_counts_the_pixels_each_step_replaced() {
     })
     .unwrap();
     assert_eq!(ed.history_bytes(), TILE);
-    assert_eq!(ed.blobs().len(), 2, "the dropped stroke's blob went");
+    assert_eq!(ed.blobs().len(), 2, "the dropped fill's image went");
 }
 
 #[test]
@@ -535,8 +620,15 @@ fn moving_a_layer_through_the_graph_matches_the_command() {
         assert_eq!(translate_nodes(ed.graph()), chain - 1);
         ed.redo();
         assert_same_doc(ed.doc(), &after);
-        // Painting the moved layer turns its chain back into pixels.
+        // A stroke on the moved layer goes on top of the chain; a command
+        // that isn't a graph op (a fill) turns the chain back into pixels.
         ed.execute(&dab(id, 300.0, 300.0, [1.0, 1.0, 0.0, 1.0])).unwrap();
+        assert_eq!(translate_nodes(ed.graph()), chain);
+        ed.execute(&Fill {
+            layer: id,
+            color: [0.5, 0.5, 0.5, 0.5],
+        })
+        .unwrap();
         assert_eq!(translate_nodes(ed.graph()), 0);
     }
 
@@ -557,6 +649,199 @@ fn moving_a_layer_through_the_graph_matches_the_command() {
         id,
     );
     assert_eq!(translate_nodes(ed.graph()), 0);
+}
+
+fn stroke_nodes(g: &Graph) -> usize {
+    g.nodes()
+        .filter(|(_, n)| matches!(n.op, Op::Stroke { .. }))
+        .count()
+}
+
+#[test]
+fn painting_through_the_graph_matches_the_command() {
+    let modes = [
+        BrushMode::Paint,
+        BrushMode::Erase,
+        BrushMode::Dodge,
+        BrushMode::Smudge,
+        BrushMode::Blur,
+    ];
+    for float in [false, true] {
+        for selected in [false, true] {
+            let mut ed = Editor::new(Document::new(700, 500));
+            if float {
+                ed.execute(&SetFloatMode { on: true }).unwrap();
+            }
+            ed.execute(&AddPixelLayer::from_raster("L", raster(600, 420, 4), 30, 20))
+                .unwrap();
+            let id = id_of(&ed, "L");
+            if selected {
+                let sel = Selection::ellipse(Rect::new(100, 50, 400, 300));
+                ed.execute(&SetSelection { selection: Some(sel) }).unwrap();
+            }
+            for (i, mode) in modes.into_iter().enumerate() {
+                let k = i as f32;
+                let stroke = PaintStroke {
+                    layer: id,
+                    brush: Brush {
+                        radius: 12.0 + 4.0 * k,
+                        hardness: 0.7,
+                        color: [0.9, 0.2 * k, 0.1, 0.8],
+                        mode,
+                        ..Brush::default()
+                    },
+                    // Across the tile borders at x = 256 and y = 256.
+                    points: vec![
+                        StrokePoint::new(150.0 + 20.0 * k, 120.0, 1.0),
+                        StrokePoint::new(300.0, 280.0 + 10.0 * k, 0.7),
+                        StrokePoint::new(420.0, 200.0, 1.0),
+                    ],
+                };
+                assert_native_matches_apply(&mut ed, &stroke, id);
+                assert_eq!(stroke_nodes(ed.graph()), i + 1, "{mode:?}: on the chain");
+                let r = ed.renderer().render_canvas(ed.graph(), ed.blobs());
+                let d = max_diff(&r, &lumenply_render::composite(ed.doc()), ed.doc().canvas());
+                assert!(d <= 1e-6, "{mode:?}: {d}");
+            }
+            // Undo takes one stroke off; redo puts back the same pixels.
+            let after = ed.doc().clone();
+            ed.undo();
+            assert_eq!(stroke_nodes(ed.graph()), modes.len() - 1);
+            ed.redo();
+            assert_same_doc(ed.doc(), &after);
+        }
+    }
+}
+
+#[test]
+fn a_version_round_trips_through_the_project_meta() {
+    use lumenply_doc::{Guide, LayerLocks, PathNode, Pattern, SubPath, VectorPath};
+    let mut ed = layered_editor();
+    let (bottom, middle, base, top) = (
+        id_of(&ed, "Bottom"),
+        id_of(&ed, "Middle"),
+        id_of(&ed, "Base"),
+        id_of(&ed, "Top"),
+    );
+    // Strokes and a move: chains of ops on the layers' content.
+    ed.execute(&dab(top, 480.0, 280.0, [1.0, 0.0, 1.0, 1.0])).unwrap();
+    ed.execute(&MoveLayer {
+        layer: top,
+        dx: -30,
+        dy: 12,
+    })
+    .unwrap();
+    ed.execute(&dab(top, 470.0, 300.0, [0.0, 1.0, 1.0, 1.0])).unwrap();
+    // Text, a fill, a smart object, smart filters, a disabled mask, locks.
+    ed.execute(&AddTextLayer {
+        text: text("Saved"),
+        above: None,
+    })
+    .unwrap();
+    let mut fill = AddFillLayer::new(lumenply_doc::Fill::Solid {
+        color: [0.3, 0.1, 0.6],
+    });
+    fill.mask_selection = false;
+    ed.execute(&fill).unwrap();
+    let paint = ed.doc().layers().last().unwrap().id;
+    ed.execute(&SetOpacity {
+        layer: paint,
+        opacity: 0.3,
+    })
+    .unwrap();
+    ed.execute(&ConvertToSmartObject { layer: bottom }).unwrap();
+    ed.execute(&AddSmartFilter::new(base, Filter::GaussianBlur { radius: 2.0 }))
+        .unwrap();
+    ed.execute(&SetMaskEnabled {
+        layer: middle,
+        enabled: false,
+    })
+    .unwrap();
+    ed.execute(&crate::locks::SetLayerLocks {
+        layer: base,
+        locks: LayerLocks {
+            position: true,
+            ..LayerLocks::NONE
+        },
+    })
+    .unwrap();
+    let group = id_of(&ed, "Group");
+    ed.execute(&SetCollapsed {
+        layer: group,
+        collapsed: true,
+    })
+    .unwrap();
+    // Document state: a saved selection, a guide, a path, a pattern, the
+    // resolution.
+    let sel = Selection::rect(Rect::new(20, 30, 200, 100));
+    ed.execute(&SetSelection { selection: Some(sel) }).unwrap();
+    ed.execute(&crate::channels::SaveSelection { name: "Sky".into() })
+        .unwrap();
+    ed.execute(&SetSelection { selection: None }).unwrap();
+    ed.execute(&AddGuide {
+        guide: Guide::vertical(120.0),
+    })
+    .unwrap();
+    ed.execute(&crate::resolution::SetResolution { ppi: 300.0 })
+        .unwrap();
+    ed.execute(&DefinePattern {
+        pattern: Pattern::new("p-1", "Dots", raster(4, 4, 7)),
+    })
+    .unwrap();
+    let path = VectorPath {
+        subpaths: vec![SubPath {
+            nodes: vec![PathNode::corner(10.0, 10.0), PathNode::corner(90.0, 40.0)],
+            closed: false,
+        }],
+    };
+    ed.execute(&SetWorkPath {
+        path: Some(path.clone()),
+    })
+    .unwrap();
+
+    let (graph, meta, blobs) = ed.graph_project();
+    // Through JSON, as a file holds them, with only the blobs they name.
+    let graph = Graph::from_json(&graph.to_json()).unwrap();
+    let meta: serde_json::Value = serde_json::from_str(&meta.to_string()).unwrap();
+    let mut named: std::collections::HashSet<_> = lumenply_graph::blob_refs(&graph).into_keys().collect();
+    named.extend(serde_json::from_value::<Vec<lumenply_graph::BlobId>>(meta["blobs"].clone()).unwrap());
+    let mut kept = blobs.clone();
+    kept.retain(&named);
+    let mut opened = Editor::from_graph_project(&graph, &meta, kept).unwrap();
+
+    // The same document: settings, layers and pixels; caches derived from
+    // parameters within a 16-bit step (they render again at 32 bits, as
+    // when any project opens).
+    let (a, b) = (ed.doc(), opened.doc());
+    assert_eq!((b.width, b.height, b.next_id()), (a.width, a.height, a.next_id()));
+    assert_eq!((b.resolution, b.float_mode), (300.0, false));
+    assert_eq!(b.guides, vec![Guide::vertical(120.0)]);
+    assert_eq!(b.work_path, Some(path));
+    assert_eq!(b.patterns, a.patterns);
+    assert_eq!(b.saved_selections.len(), 1);
+    assert_eq!(b.saved_selections[0].name, "Sky");
+    assert_same_store(
+        &b.saved_selections[0].mask.tiles,
+        &a.saved_selections[0].mask.tiles,
+        "Sky",
+    );
+    assert!(b.selection.is_none(), "the selection is not saved");
+    compare_layers(a.layers(), b.layers(), 1.0 / 65535.0);
+    assert!(!b.layer(middle).unwrap().mask.as_ref().unwrap().enabled);
+    assert!(b.layer(base).unwrap().locks.position);
+    // The strokes and the move are still nodes, there to edit.
+    assert_eq!(stroke_nodes(opened.graph()), 2);
+    assert_eq!(translate_nodes(opened.graph()), 1);
+    // The graph renders the document, and editing goes on from there.
+    let r = opened.renderer().render_canvas(opened.graph(), opened.blobs());
+    assert!(max_diff(&r, &lumenply_render::composite(opened.doc()), b.canvas()) <= 1e-6);
+    assert!(!opened.can_undo());
+    opened
+        .execute(&dab(top, 450.0, 320.0, [1.0, 1.0, 1.0, 1.0]))
+        .unwrap();
+    assert_eq!(stroke_nodes(opened.graph()), 3);
+    opened.undo();
+    assert_eq!(stroke_nodes(opened.graph()), 2);
 }
 
 /// A tiny deterministic generator for the random sequence.
@@ -994,4 +1279,60 @@ fn sync_overhead_per_edit() {
         t.elapsed().as_secs_f64() * 1e3
     );
     sync_timings(&mut ed, "30 × 4000×3000", 150);
+
+    // A long session on one layer: its chain grows by a stroke and a
+    // compact node per stroke.
+    let layer = ed.doc().layers()[7].id;
+    let mut last = Vec::new();
+    for i in 0..1000u32 {
+        let (x, y) = ((i * 37 % 3800) as f32 + 50.0, (i * 53 % 2800) as f32 + 50.0);
+        ed.execute(&dab(layer, x, y, [0.2, 0.6, 0.9, 1.0])).unwrap();
+        if i >= 900 {
+            last.push(ed.last_sync_time());
+        }
+    }
+    eprintln!(
+        "30 × 4000×3000, strokes 900-1000 on one layer ({} nodes): {}",
+        ed.graph().len(),
+        spread(last)
+    );
+    let mut opacity = Vec::new();
+    for i in 0..50 {
+        ed.execute(&SetOpacity {
+            layer,
+            opacity: 0.5 + (i % 5) as f32 * 0.1,
+        })
+        .unwrap();
+        opacity.push(ed.last_sync_time());
+    }
+    eprintln!("  then opacity: {}", spread(opacity));
+    let time = |f: &mut dyn FnMut()| {
+        let t = std::time::Instant::now();
+        for _ in 0..20 {
+            f();
+        }
+        t.elapsed().as_secs_f64() * 1e3 / 20.0
+    };
+    let g = ed.graph_arc();
+    let keys = time(&mut || {
+        ed.renderer().keys(&g, g.output.unwrap());
+    });
+    let state = ed.doc_state().clone();
+    let doc = ed.doc().clone();
+    let mut blobs = ed.blobs().clone();
+    let sync = time(&mut || {
+        let base = lumenply_graph::Base {
+            graph: &g,
+            state: &state,
+            doc: &doc,
+        };
+        lumenply_graph::sync(Some(base), &doc, &mut blobs, &ed.renderer().hasher);
+    });
+    let refs = time(&mut || {
+        ed.blob_refs.graph(&g);
+    });
+    let versions = ed.history.versions().len();
+    eprintln!(
+        "  keys {keys:.3} ms, sync {sync:.3} ms, blob refs of one version {refs:.3} ms ({versions} versions)"
+    );
 }

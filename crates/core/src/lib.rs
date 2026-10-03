@@ -50,10 +50,11 @@ pub mod snap;
 #[cfg(test)]
 mod graph_history_tests;
 
+use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 use lumenply_doc::{Document, LayerId};
-use lumenply_graph::sync::{self as graph_sync, Base};
+use lumenply_graph::sync::{self as graph_sync, Base, BlobRefMemo};
 pub use lumenply_graph::sync::{ContentEdit, DocState, EditInput};
 use lumenply_graph::{BlobStore, Graph, History, Renderer};
 
@@ -111,14 +112,16 @@ pub trait Command {
     }
     /// The edit as an operation on one layer's content in the edit graph,
     /// for commands ported to it (ADR 0025). When this returns `Some`, the
-    /// editor appends the op to the layer's content chain and takes the
-    /// layer's pixels from the graph instead of calling
-    /// [`Command::apply`], so the op must produce exactly the pixels
-    /// `apply` would, in a case where `apply` can't fail. Layer locks are
-    /// still enforced on the result. When the graph doesn't hold the
-    /// layer's pixels (smart filters, say) the editor runs `apply` after
-    /// all.
-    fn graph_edit(&self, _doc: &Document) -> Option<ContentEdit> {
+    /// editor appends the op to the layer's content chain (and, outside
+    /// float mode, a `compact` node, so the layer rests at 16 bits as after
+    /// any command) and takes the layer's pixels from the graph instead of
+    /// calling [`Command::apply`]. The op must therefore paint exactly what
+    /// `apply` would, in a case where `apply` can't fail. Pixel data the op
+    /// names (a brush tip) goes into `blobs`; pixels feeding its other
+    /// ports (a selection) are [`EditInput`]s. Layer locks are still
+    /// enforced on the result. When the graph doesn't hold the layer's
+    /// pixels (smart filters, say) the editor runs `apply` after all.
+    fn graph_edit(&self, _doc: &Document, _blobs: &mut BlobStore) -> Option<ContentEdit> {
         None
     }
 }
@@ -135,17 +138,27 @@ struct Step {
     /// alive that this one doesn't: what dropping that version (this
     /// step's undo) frees.
     bytes: usize,
+    /// The blobs this version's graph names, found once when it is made:
+    /// dropping unused blobs is then a union of these, however long the
+    /// graph's chains grow.
+    blob_ids: HashSet<lumenply_graph::BlobId>,
     /// The document this version stands for, projected when
     /// [`Editor::state`] first asks for it.
     doc: OnceLock<Document>,
 }
 
 impl Step {
-    fn new(state: DocState, affected: Option<lumenply_tiles::Rect>, bytes: usize) -> Self {
+    fn new(
+        state: DocState,
+        blob_ids: HashSet<lumenply_graph::BlobId>,
+        affected: Option<lumenply_tiles::Rect>,
+        bytes: usize,
+    ) -> Self {
         Step {
             state: Arc::new(state),
             affected,
             bytes,
+            blob_ids,
             doc: OnceLock::new(),
         }
     }
@@ -232,6 +245,8 @@ pub struct Editor {
     doc: Document,
     history: History<Step>,
     blobs: BlobStore,
+    /// The blobs each graph node names, memoised (see [`BlobRefMemo`]).
+    blob_refs: BlobRefMemo,
     renderer: Arc<Renderer>,
     pub history_limit: usize,
     /// Rough cap on the bytes the undo stack may keep alive; the oldest
@@ -263,10 +278,24 @@ impl Editor {
         let renderer = Arc::new(Renderer::new());
         let mut blobs = BlobStore::new();
         let (graph, state) = graph_sync::sync(None, &doc, &mut blobs, &renderer.hasher);
+        Self::starting_at(doc, graph, state, blobs, renderer)
+    }
+
+    /// An editor whose history starts at one version.
+    fn starting_at(
+        doc: Document,
+        graph: Graph,
+        state: DocState,
+        blobs: BlobStore,
+        renderer: Arc<Renderer>,
+    ) -> Self {
+        let blob_refs = BlobRefMemo::default();
+        let ids = blob_refs.graph(&graph);
         Editor {
             doc,
-            history: History::with_payload(graph, Step::new(state, None, 0)),
+            history: History::with_payload(graph, Step::new(state, ids, None, 0)),
             blobs,
+            blob_refs,
             renderer,
             history_limit: 100,
             history_memory_limit: 1 << 30, // 1 GiB
@@ -275,6 +304,32 @@ impl Editor {
             last_target: None,
             last_sync: std::time::Duration::ZERO,
         }
+    }
+
+    /// Open a version read from a project file (format 3: its graph, its
+    /// `meta.json` and the blobs they name), ready to edit: derived pixels
+    /// are rebuilt, and pixel layers keep their chains of strokes and
+    /// moves. The history starts there.
+    pub fn from_graph_project(
+        graph: &Graph,
+        meta: &serde_json::Value,
+        mut blobs: BlobStore,
+    ) -> Result<Self, lumenply_graph::meta::MetaError> {
+        let renderer = Arc::new(Renderer::new());
+        let (graph, state, doc) = lumenply_graph::meta::open(graph, meta, &mut blobs, &renderer)?;
+        Ok(Self::starting_at(doc, graph, state, blobs, renderer))
+    }
+
+    /// The current version as a project file holds it (format 3): the
+    /// graph, its `meta.json` and the blobs they name (the store may hold
+    /// more; a save writes only what is named).
+    pub fn graph_project(&self) -> (Arc<Graph>, serde_json::Value, BlobStore) {
+        let mut blobs = self.blobs.clone();
+        let graph = self.history.current_arc();
+        let meta = self
+            .doc_state()
+            .to_meta(&graph, &mut blobs, &self.renderer.hasher);
+        (graph, meta, blobs)
     }
 
     /// Time the last successful edit spent keeping the graph in step: a
@@ -344,9 +399,9 @@ impl Editor {
             doc: &self.doc,
         };
         let started = std::time::Instant::now();
-        let edited = cmd
-            .graph_edit(&self.doc)
-            .and_then(|e| graph_sync::content_edit(current, &e, fold, &mut self.blobs, &self.renderer));
+        let edit = cmd.graph_edit(&self.doc, &mut self.blobs);
+        let edited =
+            edit.and_then(|e| graph_sync::content_edit(current, &e, fold, &mut self.blobs, &self.renderer));
         let mut graph_time = started.elapsed();
         let mut next = match &edited {
             Some(e) => e.doc.clone(),
@@ -372,16 +427,19 @@ impl Editor {
         })
     }
 
-    /// Bytes version `i` keeps alive that `next` doesn't.
-    fn released(&self, i: usize, next: (&Graph, &DocState)) -> usize {
-        let v = &self.history.versions()[i];
-        graph_sync::released_bytes((&v.graph, &v.payload.state), next, &self.blobs)
+    /// Bytes version `i` keeps alive that `next` (its blob ids and state)
+    /// doesn't.
+    fn released(&self, i: usize, next: (&HashSet<lumenply_graph::BlobId>, &DocState)) -> usize {
+        let v = &self.history.versions()[i].payload;
+        graph_sync::released_bytes((&v.blob_ids, &v.state), next, &self.blobs)
     }
 
     /// Drop the blobs no kept version names any more, and the memoised
     /// hashes of nodes and tiles nothing uses.
     fn collect_garbage(&mut self) {
-        graph_sync::collect_blobs(&mut self.blobs, self.history.graphs());
+        let sets = self.history.versions().iter().map(|v| &v.payload.blob_ids);
+        graph_sync::collect_blobs(&mut self.blobs, sets);
+        self.blob_refs.prune();
         self.renderer.prune();
     }
 
@@ -412,6 +470,7 @@ impl Editor {
             self.last_affected = smart_filter_cmds::widen_affected(&next.doc, cmd.affected(&self.doc));
             self.last_target = cmd.target_layer();
             let started = std::time::Instant::now();
+            let ids = self.blob_refs.graph(&next.graph);
             // The whole drag undoes in one go, so its undo step covers
             // every tick so far, and its memory estimate follows the
             // moving document.
@@ -423,12 +482,12 @@ impl Editor {
                         self.history.current_version().payload.affected,
                         self.last_affected,
                     ),
-                    self.released(cursor - 1, (&next.graph, &next.state)),
+                    self.released(cursor - 1, (&ids, &next.state)),
                 ),
             };
             let v = self.history.current_version_mut();
             v.graph = Arc::new(next.graph);
-            v.payload = Step::new(next.state, affected, bytes);
+            v.payload = Step::new(next.state, ids, affected, bytes);
             self.collect_garbage();
             self.last_sync = next.graph_time + started.elapsed();
             self.doc = next.doc;
@@ -474,13 +533,14 @@ impl Editor {
         self.last_affected = smart_filter_cmds::widen_affected(&next.doc, cmd.affected(&self.doc));
         self.last_target = cmd.target_layer();
         let started = std::time::Instant::now();
-        let bytes = self.released(self.history.cursor(), (&next.graph, &next.state));
+        let ids = self.blob_refs.graph(&next.graph);
+        let bytes = self.released(self.history.cursor(), (&ids, &next.state));
         let before = self.history.versions().len();
         self.history.limit = self.history_limit;
         self.history.commit_with(
             next.graph,
             cmd.label(),
-            Step::new(next.state, self.last_affected, bytes),
+            Step::new(next.state, ids, self.last_affected, bytes),
         );
         while self.history.cursor() > 1 && self.history_bytes() > self.history_memory_limit {
             self.history.drop_oldest();
@@ -627,7 +687,7 @@ impl Editor {
         let current = self.history.current_version();
         let bytes = self.released(
             self.history.cursor() - n,
-            (&current.graph, &current.payload.state),
+            (&current.payload.blob_ids, &current.payload.state),
         );
         let dropped = self.history.squash(n, label);
         let step = &mut self.history.current_version_mut().payload;

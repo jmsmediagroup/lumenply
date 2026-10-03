@@ -5,6 +5,7 @@ use lumenply_doc::{
     Adjustment, BlendMode, CombineOp, Document, Filter, Layer, LayerContent, LayerId, Mask, Selection,
     TextLayer,
 };
+use lumenply_graph::BlobStore;
 use lumenply_tiles::{Affine, Raster, Rect, Rgba, TileStore};
 
 use crate::{Command, EditError, EditResult, Motion};
@@ -30,6 +31,10 @@ pub use crate::smart_filter_cmds::{
 };
 
 pub use crate::brush_tip::{BrushDynamics, BrushTip, Dab};
+// The brush and the stroke painter live in `lumenply-render` (the edit
+// graph replays strokes with them); they keep their old paths here.
+pub(crate) use lumenply_render::paint::{dab_coverage, interpolate_dabs};
+pub use lumenply_render::paint::{smooth_stroke, stroke_bounds, Brush, BrushMode, StrokePoint};
 
 /// Add an empty pixel layer (or one filled from a raster) on top of the stack.
 pub struct AddPixelLayer {
@@ -812,8 +817,8 @@ impl Command for MoveLayer {
         self.as_transform().apply(doc)
     }
 
-    fn graph_edit(&self, doc: &Document) -> Option<crate::ContentEdit> {
-        self.as_transform().graph_edit(doc)
+    fn graph_edit(&self, doc: &Document, blobs: &mut BlobStore) -> Option<crate::ContentEdit> {
+        self.as_transform().graph_edit(doc, blobs)
     }
 }
 
@@ -870,7 +875,7 @@ impl Command for TransformLayer {
     /// its content: exactly `TileStore::translated`, which is what `apply`
     /// does for it. A layer with a mask or a smart-filter mask goes through
     /// `apply`, which moves those too.
-    fn graph_edit(&self, doc: &Document) -> Option<crate::ContentEdit> {
+    fn graph_edit(&self, doc: &Document, _blobs: &mut BlobStore) -> Option<crate::ContentEdit> {
         let (dx, dy) = self.transform.integer_translation()?;
         let l = doc.layer(self.layer)?;
         let plain = matches!(l.content, LayerContent::Pixel(_))
@@ -2700,151 +2705,11 @@ impl Command for SetVisible {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum BrushMode {
-    /// Lay colour down over what is there.
-    #[default]
-    Paint,
-    /// Remove coverage (the eraser); `color[3]` acts as strength.
-    Erase,
-    /// Lighten what is there (gamma-domain, like the classic tool);
-    /// `color[3]` acts as strength.
-    Dodge,
-    /// Darken what is there; `color[3]` acts as strength.
-    Burn,
-    /// Drag pixels along the stroke; `color[3]` acts as strength.
-    Smudge,
-    /// Boost saturation (the sponge); `color[3]` acts as strength.
-    Saturate,
-    /// Drain saturation; `color[3]` acts as strength.
-    Desaturate,
-    /// Soften what is there (a small box blur per dab); `color[3]` acts as
-    /// strength.
-    Blur,
-    /// Crisp up what is there (unsharp mask per dab); `color[3]` acts as
-    /// strength.
-    Sharpen,
-    /// Paint from a past state (the history brush). A `PaintStroke` cannot
-    /// carry the state, so it refuses this mode: use [`HistoryStroke`].
-    History,
-}
-
-/// A brush: the computed round tip or a sampled one, with Photoshop's
-/// tip shape (angle, roundness) and per-dab dynamics. Pressure scales the
-/// radius; `hardness` 1.0 is a crisp (antialiased) edge, 0.0 a fully soft
-/// falloff (round tip only). Not `Copy`: a sampled tip is shared image
-/// data, so clone it (cheap, the tip is an `Arc`).
-#[derive(Clone, Debug)]
-pub struct Brush {
-    pub radius: f32,
-    pub hardness: f32,
-    /// Straight linear RGBA.
-    pub color: [f32; 4],
-    /// Distance between dabs as a fraction of the radius.
-    pub spacing: f32,
-    /// Scatter: each dab lands up to `jitter × radius` off the stroke, in
-    /// a direction and distance hashed from its index, so replays are
-    /// deterministic. 0 keeps dabs on the line; at most
-    /// [`crate::brush_tip::MAX_SCATTER`].
-    pub jitter: f32,
-    pub mode: BrushMode,
-    /// A sampled tip (grayscale coverage), or `None` for the computed
-    /// round tip.
-    pub tip: Option<std::sync::Arc<BrushTip>>,
-    /// Tip angle in degrees, counter-clockwise.
-    pub angle: f32,
-    /// Tip roundness in `(0, 1]`: 1 keeps its proportions, less squashes
-    /// it across its angle.
-    pub roundness: f32,
-    /// Shape dynamics, count and transfer jitter.
-    pub dynamics: BrushDynamics,
-}
-
-impl Default for Brush {
-    fn default() -> Self {
-        Brush {
-            radius: 8.0,
-            hardness: 0.8,
-            color: [0.0, 0.0, 0.0, 1.0],
-            spacing: 0.2,
-            jitter: 0.0,
-            mode: BrushMode::Paint,
-            tip: None,
-            angle: 0.0,
-            roundness: 1.0,
-            dynamics: BrushDynamics::default(),
-        }
-    }
-}
-
-impl Brush {
-    /// How far past the dab radius a dab can reach at any angle, as a
-    /// multiple of it: 1 for the round tip, half the diagonal over half
-    /// the longer side for a sampled one.
-    pub fn reach(&self) -> f32 {
-        self.tip.as_ref().map_or(1.0, |t| t.reach())
-    }
-
-    /// Canvas pixels a sampled tip can reach beyond `radius × reach()`
-    /// when stamped small ([`crate::brush_tip::TIP_MARGIN`]); 0 for the
-    /// round tip.
-    pub fn margin(&self) -> f32 {
-        if self.tip.is_some() {
-            crate::brush_tip::TIP_MARGIN
-        } else {
-            0.0
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct StrokePoint {
-    pub x: f32,
-    pub y: f32,
-    /// Scales the dab radius (0..=1).
-    pub pressure: f32,
-    /// Scales the dab's coverage (0..=1): pen pressure mapped to opacity.
-    pub opacity: f32,
-}
-
-impl StrokePoint {
-    pub fn new(x: f32, y: f32, pressure: f32) -> Self {
-        StrokePoint {
-            x,
-            y,
-            pressure,
-            opacity: 1.0,
-        }
-    }
-
-    pub fn with_opacity(mut self, opacity: f32) -> Self {
-        self.opacity = opacity;
-        self
-    }
-}
-
 /// Paint a polyline of dabs onto a pixel layer.
 pub struct PaintStroke {
     pub layer: LayerId,
     pub brush: Brush,
     pub points: Vec<StrokePoint>,
-}
-
-/// Bounding box of a stroke's dabs, grown by the brush radius.
-pub fn stroke_bounds(brush: &Brush, points: &[StrokePoint], canvas: Rect) -> Rect {
-    let scatter = brush.jitter.clamp(0.0, crate::brush_tip::MAX_SCATTER);
-    let r = (brush.radius * (brush.reach() + scatter) + brush.margin()).ceil() as i32 + 2;
-    let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-    for p in points {
-        x0 = x0.min(p.x.floor() as i32 - r);
-        y0 = y0.min(p.y.floor() as i32 - r);
-        x1 = x1.max(p.x.ceil() as i32 + r);
-        y1 = y1.max(p.y.ceil() as i32 + r);
-    }
-    if x1 < x0 {
-        return Rect::default();
-    }
-    Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32).intersect(&canvas)
 }
 
 impl Command for PaintStroke {
@@ -2879,113 +2744,25 @@ impl Command for PaintStroke {
         let sel = doc.selection.clone();
         let layer = doc.layer_mut(self.layer).ok_or(EditError::NoLayer(self.layer))?;
         let store = layer.pixels_mut().ok_or(EditError::NotPixel(self.layer))?;
-        let [cr, cg, cb, ca] = self.brush.color;
-        let mode = self.brush.mode;
-        match mode {
-            BrushMode::Blur | BrushMode::Sharpen => {
-                crate::retouch_brush::filter_stroke(store, &self.brush, &self.points, canvas, sel.as_ref());
-                return Ok(());
-            }
-            BrushMode::History => {
-                return Err(EditError::Invalid(
-                    "the history brush needs a source state".into(),
-                ))
-            }
-            _ => {}
+        lumenply_render::paint::paint_stroke(store, &self.brush, &self.points, canvas, sel.as_ref())
+            .map_err(|e| EditError::Invalid(e.to_string()))
+    }
+
+    /// A `stroke` node on the layer's content, the selection (if any) as a
+    /// `mask` node on its second port: the op paints what `apply` paints,
+    /// bit for bit. History mode, an empty stroke and a layer that isn't a
+    /// pixel layer go through `apply`, which refuses them.
+    fn graph_edit(&self, doc: &Document, blobs: &mut BlobStore) -> Option<crate::ContentEdit> {
+        if self.points.is_empty() || self.brush.mode == BrushMode::History {
+            return None;
         }
-        if mode == BrushMode::Smudge {
-            // Each dab stamps the pixels from under the previous dab,
-            // sampled from a snapshot so a dab never reads its own writes.
-            let mut prev: Option<Dab> = None;
-            for d in interpolate_dabs(&self.brush, &self.points) {
-                if let Some(p) = prev {
-                    let (ox, oy) = ((d.x - p.x).round() as i32, (d.y - p.y).round() as i32);
-                    if ox != 0 || oy != 0 {
-                        let reach = self.brush.radius * self.brush.reach() + self.brush.margin();
-                        let r = (reach.ceil() as i32 + 2).max(1);
-                        let (sx, sy) = (d.x.round() as i32 - ox - r, d.y.round() as i32 - oy - r);
-                        let side = (2 * r + 1) as usize;
-                        let mut snap = vec![Rgba::TRANSPARENT; side * side];
-                        for (i, q) in snap.iter_mut().enumerate() {
-                            let (gx, gy) = (sx + (i % side) as i32, sy + (i / side) as i32);
-                            *q = store.get_pixel(gx, gy);
-                        }
-                        dab_coverage(&self.brush, d, canvas, sel.as_ref(), |px, py, cover| {
-                            let (lx, ly) = (px - ox - sx, py - oy - sy);
-                            if lx < 0 || ly < 0 || lx >= side as i32 || ly >= side as i32 {
-                                return;
-                            }
-                            let src = snap[ly as usize * side + lx as usize];
-                            let dst = store.get_pixel(px, py);
-                            let k = (ca * cover).clamp(0.0, 1.0);
-                            // Premultiplied pixels lerp component-wise.
-                            let mix = Rgba::new(
-                                dst.r + (src.r - dst.r) * k,
-                                dst.g + (src.g - dst.g) * k,
-                                dst.b + (src.b - dst.b) * k,
-                                dst.a + (src.a - dst.a) * k,
-                            );
-                            store.set_pixel(px, py, mix);
-                        });
-                    }
-                }
-                prev = Some(d);
-            }
-            return Ok(());
-        }
-        for d in interpolate_dabs(&self.brush, &self.points) {
-            // Colour dynamics give a dab its own colour.
-            let [cr, cg, cb] = d.color.unwrap_or([cr, cg, cb]);
-            dab_coverage(&self.brush, d, canvas, sel.as_ref(), |px, py, cover| {
-                let dst = store.get_pixel(px, py);
-                let out = match mode {
-                    BrushMode::Paint => Rgba::from_straight(cr, cg, cb, ca * cover).over(dst),
-                    BrushMode::Erase => dst.scale(1.0 - (ca * cover).clamp(0.0, 1.0)),
-                    BrushMode::Dodge | BrushMode::Burn => {
-                        if dst.a <= 0.0 {
-                            return;
-                        }
-                        let k = (ca * cover).clamp(0.0, 1.0);
-                        let [r, g, b, a] = dst.to_straight();
-                        let tone = |c: f32| {
-                            let e = lumenply_doc::adjust::srgb_encode(c);
-                            let e = if mode == BrushMode::Dodge {
-                                e + (1.0 - e) * k
-                            } else {
-                                e * (1.0 - k)
-                            };
-                            lumenply_doc::adjust::srgb_decode(e)
-                        };
-                        Rgba::from_straight(tone(r), tone(g), tone(b), a)
-                    }
-                    BrushMode::Saturate | BrushMode::Desaturate => {
-                        if dst.a <= 0.0 {
-                            return;
-                        }
-                        let k = (ca * cover).clamp(0.0, 1.0);
-                        // Scale chroma around the gamma-domain luminance,
-                        // like the sponge tool's perceptual behaviour.
-                        let scale = if mode == BrushMode::Saturate {
-                            1.0 + k
-                        } else {
-                            1.0 - k
-                        };
-                        let [r, g, b, a] = dst.to_straight();
-                        let enc = lumenply_doc::adjust::srgb_encode;
-                        let dec = lumenply_doc::adjust::srgb_decode;
-                        let (er, eg, eb) = (enc(r), enc(g), enc(b));
-                        let y = 0.2126 * er + 0.7152 * eg + 0.0722 * eb;
-                        let sat = |c: f32| dec((y + (c - y) * scale).clamp(0.0, 1.0));
-                        Rgba::from_straight(sat(er), sat(eg), sat(eb), a)
-                    }
-                    BrushMode::Smudge | BrushMode::Blur | BrushMode::Sharpen | BrushMode::History => {
-                        unreachable!("handled above")
-                    }
-                };
-                store.set_pixel(px, py, out);
-            });
-        }
-        Ok(())
+        doc.layer(self.layer)?.pixels()?;
+        let op = lumenply_graph::Op::stroke(&self.brush, self.points.clone(), blobs);
+        let edit = crate::ContentEdit::new(self.layer, op);
+        Some(match &doc.selection {
+            Some(s) => edit.with_input(crate::EditInput::Mask(s.coverage.clone())),
+            None => edit,
+        })
     }
 }
 
@@ -3037,173 +2814,6 @@ impl Command for PaintMask {
             });
         }
         Ok(())
-    }
-}
-
-/// Smooth sparse input points with a Catmull-Rom spline so strokes drawn
-/// with a mouse (few events per frame) don't look like polylines. Input with
-/// fewer than three points is returned unchanged.
-pub fn smooth_stroke(points: &[StrokePoint]) -> Vec<StrokePoint> {
-    if points.len() < 3 {
-        return points.to_vec();
-    }
-    let mut out = Vec::with_capacity(points.len() * 6);
-    let get = |i: isize| points[i.clamp(0, points.len() as isize - 1) as usize];
-    for i in 0..points.len() - 1 {
-        let (p0, p1, p2, p3) = (
-            get(i as isize - 1),
-            get(i as isize),
-            get(i as isize + 1),
-            get(i as isize + 2),
-        );
-        let seg_len = ((p2.x - p1.x).powi(2) + (p2.y - p1.y).powi(2)).sqrt();
-        let steps = (seg_len / 3.0).ceil().clamp(1.0, 24.0) as usize;
-        for k in 0..steps {
-            let t = k as f32 / steps as f32;
-            let (t2, t3) = (t * t, t * t * t);
-            let cr = |a: f32, b: f32, c: f32, d: f32| {
-                0.5 * ((2.0 * b)
-                    + (-a + c) * t
-                    + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2
-                    + (-a + 3.0 * b - 3.0 * c + d) * t3)
-            };
-            out.push(
-                StrokePoint::new(
-                    cr(p0.x, p1.x, p2.x, p3.x),
-                    cr(p0.y, p1.y, p2.y, p3.y),
-                    p1.pressure + (p2.pressure - p1.pressure) * t,
-                )
-                .with_opacity(p1.opacity + (p2.opacity - p1.opacity) * t),
-            );
-        }
-    }
-    out.push(*points.last().expect("non-empty"));
-    out
-}
-
-/// Dabs along a polyline, spaced by the pressure-scaled radius so thin
-/// stroke ends stay continuous, then varied by the brush's dynamics
-/// (scatter, count, size, angle, roundness, transfer). Each variation is
-/// a hash of the dab's index: deterministic, so undo previews and replays
-/// stamp identical pixels.
-pub(crate) fn interpolate_dabs(brush: &Brush, points: &[StrokePoint]) -> Vec<Dab> {
-    use crate::brush_tip::{size_curve, Station};
-    let smoothed = smooth_stroke(points);
-    let points = &smoothed[..];
-    // Direction of travel, counter-clockwise from rightwards (screen y
-    // points down); a lone dab faces right.
-    let heading = |a: StrokePoint, b: StrokePoint| (a.y - b.y).atan2(b.x - a.x);
-    let first_dir = points
-        .windows(2)
-        .find(|w| w[0].x != w[1].x || w[0].y != w[1].y)
-        .map_or(0.0, |w| heading(w[0], w[1]));
-    let station = |p: StrokePoint, direction: f32| Station {
-        x: p.x,
-        y: p.y,
-        pressure: p.pressure,
-        opacity: p.opacity,
-        direction,
-    };
-    let mut stations = vec![station(points[0], first_dir)];
-    let mut carry = 0.0f32;
-    let min_d = brush.dynamics.min_diameter;
-    for pair in points.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
-        let len = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
-        if len <= 0.0 {
-            continue;
-        }
-        let dir = heading(a, b);
-        let eff = brush.radius * size_curve(min_d, 0.5 * (a.pressure + b.pressure));
-        let step = (brush.spacing * eff).max(0.5);
-        let mut t = step - carry;
-        while t <= len {
-            let f = t / len;
-            let p = StrokePoint::new(
-                a.x + (b.x - a.x) * f,
-                a.y + (b.y - a.y) * f,
-                a.pressure + (b.pressure - a.pressure) * f,
-            )
-            .with_opacity(a.opacity + (b.opacity - a.opacity) * f);
-            stations.push(station(p, dir));
-            t += step;
-        }
-        carry = len - (t - step);
-    }
-    let mut dabs = crate::brush_tip::apply_dynamics(
-        brush.radius,
-        brush.jitter,
-        brush.angle,
-        brush.roundness,
-        &brush.dynamics,
-        &stations,
-    );
-    let [r, g, b, _] = brush.color;
-    crate::brush_tip::apply_color_dynamics(&mut dabs, [r, g, b], &brush.dynamics);
-    dabs
-}
-
-/// Call `f(x, y, coverage)` for every canvas pixel a dab touches, with the
-/// selection and the dab's opacity already applied to the coverage.
-pub(crate) fn dab_coverage(
-    brush: &Brush,
-    p: impl std::borrow::Borrow<Dab>,
-    canvas: Rect,
-    sel: Option<&Selection>,
-    mut f: impl FnMut(i32, i32, f32),
-) {
-    let p: &Dab = p.borrow();
-    let r = p.radius;
-    if r <= 0.0 {
-        return;
-    }
-    let depth = brush.dynamics.texture_depth.clamp(0.0, 1.0);
-    if brush.tip.is_some() || p.roundness < 1.0 || depth > 0.0 {
-        let scale = brush.dynamics.texture_scale;
-        crate::brush_tip::stamp(
-            brush.tip.as_deref(),
-            brush.hardness,
-            p,
-            canvas,
-            |px, py, mut c| {
-                if depth > 0.0 {
-                    c *= crate::brush_tip::grain_mask(crate::brush_tip::grain(px, py, scale), depth);
-                }
-                let cover = c * sel.map_or(1.0, |s| s.value(px, py)) * p.opacity;
-                if cover > 0.0 {
-                    f(px, py, cover);
-                }
-            },
-        );
-        return;
-    }
-    // The computed round tip (angle can't change a circle), exactly as it
-    // has always rendered.
-    let x0 = (p.x - r).floor() as i32;
-    let y0 = (p.y - r).floor() as i32;
-    let x1 = (p.x + r).ceil() as i32;
-    let y1 = (p.y + r).ceil() as i32;
-    let area = Rect::new(x0, y0, (x1 - x0 + 1) as u32, (y1 - y0 + 1) as u32).intersect(&canvas);
-    let hard = brush.hardness.clamp(0.0, 0.999);
-    for py in area.y..area.bottom() {
-        for px in area.x..area.right() {
-            let dx = px as f32 + 0.5 - p.x;
-            let dy = py as f32 + 0.5 - p.y;
-            let d = (dx * dx + dy * dy).sqrt() / r;
-            let edge = ((1.0 - d) * r + 0.5).clamp(0.0, 1.0);
-            let soft = if d <= hard {
-                1.0
-            } else {
-                1.0 - (d - hard) / (1.0 - hard)
-            };
-            let cover = edge
-                * soft.clamp(0.0, 1.0)
-                * sel.map_or(1.0, |s| s.value(px, py))
-                * p.opacity.clamp(0.0, 1.0);
-            if cover > 0.0 {
-                f(px, py, cover);
-            }
-        }
     }
 }
 

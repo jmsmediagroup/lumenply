@@ -210,6 +210,14 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "crate::ops_content::is_false")]
         float: bool,
     },
+    /// A brush stroke painted onto the input, in any mode but history
+    /// (see `ops_paint`). Ports: pixels, selection (coverage as alpha;
+    /// empty: no selection).
+    Stroke {
+        brush: crate::ops_paint::StrokeBrush,
+        #[serde(with = "crate::ops_paint::points_json")]
+        points: Vec<lumenply_render::paint::StrokePoint>,
+    },
     /// The input shifted by whole pixels (a pixel layer moved).
     /// Port: input.
     Translate { dx: i32, dy: i32 },
@@ -238,6 +246,7 @@ impl Op {
             Op::Shape { .. } => "shape",
             Op::Transform { .. } => "transform",
             Op::SmartFilter { .. } => "smart-filter",
+            Op::Stroke { .. } => "stroke",
             Op::Translate { .. } => "translate",
             Op::Compact => "compact",
         }
@@ -254,6 +263,7 @@ impl Op {
             Op::Text { .. } | Op::Fill { .. } | Op::Shape { .. } => &[],
             Op::Transform { .. } => &["input"],
             Op::SmartFilter { .. } => &["input", "mask"],
+            Op::Stroke { .. } => &["pixels", "selection"],
             Op::Translate { .. } | Op::Compact => &["input"],
         }
     }
@@ -371,6 +381,7 @@ pub(crate) fn extent(ctx: &Ctx, id: crate::NodeId) -> Option<Rect> {
         | Op::Shape { .. }
         | Op::Transform { .. }
         | Op::SmartFilter { .. } => crate::ops_content::extent(ctx, id, node),
+        Op::Stroke { .. } => crate::ops_paint::extent(ctx, id),
         Op::Translate { dx, dy } => input(0).map(|r| crate::pixel_ops::shift(r, *dx, *dy)),
         Op::Compact => input(0),
     }
@@ -467,6 +478,12 @@ pub(crate) fn input_needs(ctx: &Ctx, node: &Node, coord: TileCoord) -> Vec<(crat
         | Op::Shape { .. }
         | Op::Transform { .. }
         | Op::SmartFilter { .. } => {}
+        // The input and selection under the tile; a smudge, blur or sharpen
+        // region is painted before (see `ops_paint::prepare`).
+        Op::Stroke { .. } => {
+            out.extend(at(0, tile));
+            out.extend(at(1, tile));
+        }
         Op::Translate { dx, dy } => out.extend(at(0, crate::pixel_ops::shift(tile, -dx, -dy))),
         Op::Compact => out.extend(at(0, tile)),
     }
@@ -632,6 +649,7 @@ pub(crate) fn eval_tile(ctx: &Ctx, id: crate::NodeId, node: &Node, coord: TileCo
         | Op::Shape { .. }
         | Op::Transform { .. }
         | Op::SmartFilter { .. } => crate::ops_content::eval_tile(ctx, id, node, coord),
+        Op::Stroke { .. } => crate::ops_paint::tile(ctx, id, coord),
         Op::Translate { dx, dy } => crate::pixel_ops::tile(ctx, input(0), *dx, *dy, coord),
         Op::Compact => crate::pixel_ops::compact(ctx.tile(input(0), coord)),
     }

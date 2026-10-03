@@ -99,14 +99,28 @@ history; wgpu executes the graph on the GPU.
       layers lower to ops, bit-identical to the layer tree (corpus 482/482,
       max difference 0); whole-image ops computed once per content key
       before any tile is pulled; content keys include the canvas size
-- [ ] Stage 2a: brush strokes, erasers and retouch strokes as `stroke` nodes;
-      dab rasterisation moves to `render`
+- [x] Stage 2a: dab rasterisation in `lumenply_render::paint`; `stroke` op
+      (ports pixels, selection) with sampled tips as their own blob kind;
+      local modes painted per tile, smudge/blur/sharpen as prepared regions;
+      stroke tiles cached under tile keys so a later stroke that doesn't
+      overlap an edit keeps hitting; parity with `PaintStroke` in all 9
+      modes (108 cases, 0 differing bits); recolouring stroke 150 of 200
+      repaints 9 tiles, undo repaints none
+- [ ] `stroke_bounds` ignores Catmull-Rom overshoot, so `affected()` can be
+      a few pixels too small; derive it from `dabs_reach`
+- [ ] Blur/sharpen strokes with sampled tips read clamped neighbours outside
+      the dab's snapshot region
+- [x] `.lumen` format 3 (ADR 0026): graph.json + content-addressed blobs
+      (tiles in their resting format, re-hashed on load; a damaged blob
+      costs that blob) + optional render hints; atomic save; v1/`.nge`
+      convert with `load_any_as_graph`; all 482 corpus files save, reload
+      and render bit-identically, 45% smaller than the PSDs with hints
+- [ ] The app opens and saves format 3 (needs the graph-backed editor)
 - [ ] Pattern Overlay effect pixels as blobs in the graph (today only in
       memory); disabled smart filters and the stack's master switch in the
       graph
 - [ ] Stage 3, graph-backed editor: graph versions as the undo history,
-      the app renders through the graph cache (replacing `BelowCache`),
-      `.lumen` v3 (graph.json + blobs + optional render hints)
+      the app renders through the graph cache (replacing `BelowCache`)
 - [ ] Stage 4, GPU executor: per-op WGSL kernels with CPU parity tests,
       resident tiles, eframe on wgpu so the canvas needs no readback
 
