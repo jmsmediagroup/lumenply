@@ -42,8 +42,9 @@ so the JSON stays small and identical data is stored once.
 
 ### Content keys: invalidation without bookkeeping
 
-Every node has a **content key**: a BLAKE3 hash of its op's canonical JSON
-and the content keys of its inputs, computed bottom-up. Changing a
+Every node has a **content key**: a BLAKE3 hash of its op's canonical JSON,
+the canvas size (a fill covers the canvas, filters treat its edge
+specially) and the content keys of its inputs, computed bottom-up. Changing a
 parameter changes that node's key and therefore the key of everything
 downstream, and of nothing else. The render cache is keyed by
 `(content key, tile)`, so:
@@ -69,6 +70,20 @@ The cache holds tiles under a byte budget with least-recently-used
 eviction. Results can also be persisted in the project file as hints keyed
 by content key, so a document with a long history opens without replaying
 it.
+
+Some ops are whole-image computations: a text layer's glyphs, a fill or
+shape over the canvas, a smart object's transform, a stack of smart
+filters. They call the same `lumenply-render` function the layer tree's
+derived caches come from, so their pixels are bit-identical to it. Each
+makes its whole output once per content key (`Ctx::whole`, kept in a
+separate byte-budgeted cache) and serves tiles from it. A render first
+makes the whole outputs it will read, in dependency order and independent
+ones in parallel, and only then pulls tiles: a thread that blocked waiting
+for another's whole result inside rayon's work stealing could deadlock, so
+nothing ever waits for one. A run of smart filters is one node per filter
+but is evaluated as one fused, chunked pass, exactly as the layer tree does:
+the box blurs' running sums depend on where a pass starts, so filtering node
+by node would differ in the last bits.
 
 ### History
 
