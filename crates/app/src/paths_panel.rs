@@ -471,6 +471,7 @@ mod tests {
             vec![(vec![(50.0, 50.0), (200.0, 50.0), (200.0, 200.0)], false)]
         );
         assert_eq!(app.editor.history().len(), steps + 3, "one step per anchor");
+        assert_eq!(app.editor.history().last().copied(), Some("Add anchor"));
         // Undo takes back the last anchor only.
         assert!(app.editor.undo().is_some());
         assert_eq!(anchors(&app), vec![(vec![(50.0, 50.0), (200.0, 50.0)], false)]);

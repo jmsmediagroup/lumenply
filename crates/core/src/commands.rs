@@ -1917,6 +1917,30 @@ impl Command for SetWorkPath {
     }
 }
 
+/// One Pen edit of the work path, named for what it did ("Add anchor",
+/// "Move handle", "Close path"...) so History says more than "Edit path".
+pub struct PenEdit {
+    pub path: Option<lumenply_doc::VectorPath>,
+    pub label: &'static str,
+}
+
+impl Command for PenEdit {
+    fn label(&self) -> String {
+        self.label.into()
+    }
+
+    fn affected(&self, _doc: &Document) -> Option<Rect> {
+        Some(Rect::default())
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        SetWorkPath {
+            path: self.path.clone(),
+        }
+        .apply(doc)
+    }
+}
+
 /// Switch the document's 32-bit float (HDR) mode. On, tiles stop
 /// compacting so values outside [0, 1] survive edits; off, tiles return
 /// to 16-bit (clamping anything outside the range) lazily, as each one
@@ -3881,6 +3905,37 @@ mod tests {
         assert!(
             (p.to_straight()[0] - 3.5).abs() < 1e-5,
             "undo brings the HDR value back: {p:?}"
+        );
+    }
+
+    #[test]
+    fn pen_edits_name_their_history_step_and_set_the_work_path() {
+        use lumenply_doc::{PathNode, SubPath, VectorPath};
+        let one = VectorPath {
+            subpaths: vec![SubPath {
+                closed: false,
+                nodes: vec![PathNode::corner(4.0, 5.0)],
+            }],
+        };
+        let mut ed = crate::Editor::new(Document::new(32, 32));
+        ed.execute(&PenEdit {
+            path: Some(one.clone()),
+            label: "Add anchor",
+        })
+        .unwrap();
+        assert_eq!(ed.history().last().copied(), Some("Add anchor"));
+        assert_eq!(ed.doc().work_path, Some(one));
+        // An emptied path clears the work path, as SetWorkPath does.
+        ed.execute(&PenEdit {
+            path: Some(VectorPath::default()),
+            label: "Delete anchor",
+        })
+        .unwrap();
+        assert_eq!(ed.doc().work_path, None);
+        assert!(ed.undo().is_some());
+        assert_eq!(
+            ed.doc().work_path.as_ref().map(|p| p.subpaths[0].nodes.len()),
+            Some(1)
         );
     }
 
