@@ -572,9 +572,15 @@ impl App {
                 let picker_owns = self.picker_canvas_input(ctx, &resp, to_doc);
                 // ---- end colour picker hook ----------------------------------
 
+                // A press that closes a menu (the brush mode or preset list,
+                // say) only closes it, as in Photoshop: no dab, no fill.
+                let dismissing = dismissing_press(ctx);
+
                 // While Space pans, the active tool must not also fire.
                 if picker_owns {
                     // Handled by the colour picker above.
+                } else if dismissing {
+                    // The press closed a popup.
                 } else if self.xform.is_some() {
                     self.handle_xform(ctx, &resp, to_doc, to_screen);
                 } else if !space && !self.guides_canvas_input(ctx, &resp) {
@@ -713,7 +719,7 @@ impl App {
                             }
                             if ui
                                 .add_enabled(self.active_is_pixel(), egui::Button::new("Fill"))
-                                .on_hover_text("Fill the selection with the brush colour")
+                                .on_hover_text("Fill the selection with the foreground colour")
                                 .clicked()
                             {
                                 act = Some("fill");
@@ -1820,6 +1826,21 @@ impl App {
             Tool::Hand | Tool::Move | Tool::Eyedropper | Tool::Bucket | Tool::Wand => {}
         }
     }
+}
+
+/// Whether this frame's click closed an open menu (egui closes a combo
+/// box's list on a click elsewhere): that click only closes it and must
+/// not also paint a dab, fill or deselect on the canvas. Call once a frame
+/// from the canvas; it remembers whether a menu was open for the next.
+pub(crate) fn dismissing_press(ctx: &egui::Context) -> bool {
+    let open_id = egui::Id::new("canvas-popup-was-open");
+    let was_open = ctx.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+    // The bars and panels draw before the canvas, so a menu the click
+    // closed is already closed here. A panel that stays open while you
+    // paint (Brush settings) is not closed by it, and its clicks paint.
+    let open_now = ctx.memory(|m| m.any_popup_open());
+    ctx.data_mut(|d| d.insert_temp(open_id, open_now));
+    was_open && !open_now && ctx.input(|i| i.pointer.any_click())
 }
 
 /// Topmost visible text layer whose rendered glyphs sit under (x, y),

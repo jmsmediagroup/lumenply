@@ -632,7 +632,7 @@ impl App {
                                         let pick = |ui: &mut egui::Ui, on: bool, text: &str| {
                                             ui.radio(on, text).clicked()
                                         };
-                                        if pick(ui, !*aware, "Brush colour") {
+                                        if pick(ui, !*aware, "Foreground colour") {
                                             *aware = false;
                                         }
                                         let r = ui.add_enabled_ui(can_aware, |ui| pick(ui, *aware, "Content-Aware"));
@@ -654,9 +654,9 @@ impl App {
                                          far around it, on the active layer.",
                                     );
                                 } else if can_aware {
-                                    note(ui, "Fills the selection with the brush colour.");
+                                    note(ui, "Fills the selection with the foreground colour.");
                                 } else {
-                                    note(ui, "Fills the layer with the brush colour. Select an area to use Content-Aware.");
+                                    note(ui, "Fills the layer with the foreground colour. Select an area to use Content-Aware.");
                                 }
                             }
                         }

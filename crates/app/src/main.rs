@@ -63,6 +63,8 @@ mod macos_open;
 mod menu;
 mod navigator;
 mod options_bar;
+#[cfg(test)]
+mod paint_ux_tests;
 mod palette;
 mod panels;
 mod paths_panel;
@@ -1380,6 +1382,8 @@ impl App {
             let shift = ctx.input(|i| i.modifiers.shift);
             self.select_tool_key(t, shift);
         }
+        // O / Shift+O and Y: the toning tools and the History Brush.
+        self.brush_mode_keys(ctx);
         let quick = self.tool == Tool::Wand && self.quick.on;
         // Shift+[ / Shift+] step the brush hardness by 25%, as in Photoshop.
         let hardness_keys = !quick && ctx.input(|i| i.modifiers.shift);

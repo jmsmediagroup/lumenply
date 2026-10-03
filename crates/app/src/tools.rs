@@ -91,7 +91,10 @@ impl Tool {
     pub(crate) fn tip(self) -> &'static str {
         match self {
             Tool::Move => "Move (V)",
-            Tool::Brush => "Brush (B)",
+            Tool::Brush => {
+                "Brush (B) — its modes are Photoshop's retouching brushes: Dodge, Burn and Sponge (O), \
+                 Smudge, Blur, Sharpen and the History Brush (Y)"
+            }
             Tool::Eraser => "Eraser (E) — Shift+E cycles Eraser, Background and Magic",
             Tool::Clone => "Clone Stamp (S) — Alt+click or 'Pick source' to set the source",
             Tool::Heal => {

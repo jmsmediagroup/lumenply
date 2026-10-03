@@ -74,7 +74,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Free transform", "xform"),
     ("Perspective transform", "perspective"),
     ("Warp", "warp"),
-    ("Fill with brush colour", "fill"),
+    ("Fill with foreground colour", "fill"),
     ("Clear", "clear"),
     ("Preferences...", "prefs"),
     ("Select all", "select-all"),
@@ -186,6 +186,10 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Blur tool (Brush ▸ Blur)", "tool-blur"),
     ("Sharpen tool (Brush ▸ Sharpen)", "tool-sharpen"),
     ("History Brush (Brush ▸ History)", "tool-history-brush"),
+    ("Dodge tool (Brush ▸ Dodge)", "tool-dodge"),
+    ("Burn tool (Brush ▸ Burn)", "tool-burn"),
+    ("Sponge tool (Brush ▸ Saturate / Desaturate)", "tool-sponge"),
+    ("Smudge tool (Brush ▸ Smudge)", "tool-smudge"),
     ("Background Eraser (Eraser ▸ Background)", "tool-bg-eraser"),
     ("Magic Eraser (Eraser ▸ Magic)", "tool-magic-eraser"),
     ("Layers panel", "panel-layers"),
@@ -762,6 +766,8 @@ impl App {
             "paste" => (M::COMMAND, Key::V),
             "paste-in-place" => (M::COMMAND | M::SHIFT, Key::V),
             "fill-dialog" => (M::SHIFT, Key::Backspace),
+            "tool-dodge" => (M::NONE, Key::O),
+            "tool-history-brush" => (M::NONE, Key::Y),
             "clear" => return "Delete".into(),
             // egui spells these keys "Equals"/"Minus"; show the symbols.
             "zoom-in" | "zoom-out" => {
@@ -1022,8 +1028,9 @@ impl App {
             }
             "fill-dialog" | "content-aware" => {
                 // Content-aware needs something to fill; the dialog
-                // offers it whenever there is a selection.
-                let aware = self.editor.doc().selection.is_some();
+                // offers it whenever there is a selection, and opens on it
+                // only from Content-Aware Fill (Fill... means a colour).
+                let aware = id == "content-aware" && self.editor.doc().selection.is_some();
                 let margin = self.content_aware_margin();
                 self.dialog = Some(Dialog::Fill(aware, margin, 0));
             }
@@ -1056,7 +1063,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 193); // + Select subject, Remove background, Object Selection, AI models
+        assert_eq!(n, 197); // + Select subject, Remove background, Object Selection, AI models; Dodge, Burn, Sponge, Smudge
     }
 
     #[test]
