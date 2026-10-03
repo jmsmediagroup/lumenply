@@ -3,24 +3,82 @@ use super::*;
 /// How long a status message stays up while nothing else happens.
 const MESSAGE_SECS: f64 = 10.0;
 
+/// The live document's version: tab, history position and edit graph.
+/// Any edit, undo, redo, history jump or tab switch changes it.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(crate) struct DocVersion {
+    tab: u64,
+    steps: usize,
+    redo: usize,
+    graph: usize,
+}
+
+/// Which message `self.status` holds: its buffer, length and words.
+/// Assigning a new `String` allocates while the old one still lives, so a
+/// newly set message is told apart from the last one even when it repeats
+/// its words (two undos of two "Paint stroke" steps).
+fn message_id(s: &str) -> (usize, usize, u64) {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    (s.as_ptr() as usize, s.len(), h.finish())
+}
+
+/// When the message on show was first seen: (message, the document
+/// version it describes, the time, whether it was seen mid-frame and the
+/// version must be read again once that frame's edits are done).
+type Seen = ((usize, usize, u64), DocVersion, f64, bool);
+
+fn seen_id() -> egui::Id {
+    egui::Id::new("status-message")
+}
+
 impl App {
-    /// The status message, while it is news: until the next edit, undo or
-    /// document switch, or for [`MESSAGE_SECS`]. Older messages would
-    /// describe something the user has moved on from.
+    fn doc_version(&self) -> DocVersion {
+        DocVersion {
+            tab: self.doc_key,
+            steps: self.editor.history().len(),
+            redo: self.editor.redo_history().len(),
+            graph: self.editor.graph() as *const _ as usize,
+        }
+    }
+
+    /// Start of a frame: a message first seen during the last frame
+    /// describes that frame's outcome, so it takes the document version
+    /// the frame ended with (it may have been set before the frame's edit).
+    pub(crate) fn settle_status(&self, ctx: &egui::Context) {
+        let doc = self.doc_version();
+        ctx.data_mut(|d| {
+            if let Some(seen) = d.get_temp_mut_or_default::<Option<Seen>>(seen_id()) {
+                if seen.3 {
+                    seen.1 = doc;
+                    seen.3 = false;
+                }
+            }
+        });
+    }
+
+    /// The status message while it is news, the one rule for every
+    /// message in the app: it shows until the document moves on (an
+    /// edit, undo, redo, history jump or tab switch) or for
+    /// [`MESSAGE_SECS`], whichever comes first; a message set anew starts
+    /// over, even with the same words. Code sets a message by assigning
+    /// `self.status`; nothing else is needed.
     pub(crate) fn status_message(&self, ctx: &egui::Context) -> String {
-        let id = egui::Id::new("status-message");
         let now = ctx.input(|i| i.time);
-        let mark = (self.editor.history().len(), self.doc_key);
-        let seen: Option<(String, (usize, u64), f64)> = ctx.data(|d| d.get_temp(id));
+        let doc = self.doc_version();
+        let msg = message_id(&self.status);
+        let seen: Option<Seen> = ctx.data(|d| d.get_temp(seen_id())).flatten();
         let (shown_at, since) = match seen {
-            Some((text, m, t)) if text == self.status => (m, t),
+            Some((m, d, t, _)) if m == msg => (d, t),
             _ => {
-                ctx.data_mut(|d| d.insert_temp(id, (self.status.clone(), mark, now)));
-                (mark, now)
+                let fresh: Option<Seen> = Some((msg, doc, now, true));
+                ctx.data_mut(|d| d.insert_temp(seen_id(), fresh));
+                (doc, now)
             }
         };
         let left = MESSAGE_SECS - (now - since);
-        if shown_at != mark || left <= 0.0 {
+        if shown_at != doc || left <= 0.0 {
             return String::new();
         }
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(left));
@@ -120,4 +178,75 @@ impl App {
 pub(crate) fn render_cache_label(editor: &Editor) -> String {
     let mb = crate::session::render_cache_bytes(editor) as f64 / (1u64 << 20) as f64;
     format!("Cache {mb:.0} MB")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One frame at virtual time `t`; what the status bar shows.
+    fn frame(app: &mut App, ctx: &egui::Context, t: f64) -> String {
+        let raw = egui::RawInput {
+            time: Some(t),
+            ..Default::default()
+        };
+        let mut shown = String::new();
+        let _ = ctx.run(raw, |ctx| {
+            app.frame(ctx);
+            shown = app.status_message(ctx);
+        });
+        shown
+    }
+
+    #[test]
+    fn a_message_shows_until_the_document_moves_on() {
+        let mut app = App::launch(&["--demo".to_string()]);
+        app.dialog = None;
+        app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        frame(&mut app, &ctx, 0.0);
+        assert!(frame(&mut app, &ctx, 0.1).starts_with("Opened the demo"));
+
+        // The next edit leaves the opening message out of date.
+        app.add_pixel_layer();
+        assert_eq!(frame(&mut app, &ctx, 0.2), "");
+
+        // Undo says what it undid; adding a layer after that clears it.
+        app.undo();
+        let undid = frame(&mut app, &ctx, 0.3);
+        assert!(undid.starts_with("Undid Add layer"), "{undid}");
+        assert_eq!(frame(&mut app, &ctx, 0.4), undid);
+        app.add_pixel_layer();
+        assert_eq!(frame(&mut app, &ctx, 0.5), "");
+
+        // A message set together with its edit describes that edit.
+        app.add_pixel_layer();
+        app.status = "Added a layer".into();
+        frame(&mut app, &ctx, 0.6);
+        assert_eq!(frame(&mut app, &ctx, 0.7), "Added a layer");
+
+        // The same words again after another edit are a new message.
+        app.add_pixel_layer();
+        app.status = "Added a layer".into();
+        frame(&mut app, &ctx, 0.8);
+        assert_eq!(frame(&mut app, &ctx, 0.9), "Added a layer");
+
+        // Two undos of steps with the same label: the second one's
+        // "Undid Add layer …" shows too.
+        app.undo();
+        let first = frame(&mut app, &ctx, 1.0);
+        app.undo();
+        let second = frame(&mut app, &ctx, 1.1);
+        assert!(first.starts_with("Undid Add layer"), "{first}");
+        assert!(second.starts_with("Undid Add layer"), "{second}");
+
+        // A view change is not an edit: the message stays...
+        app.view_cmd = Some(ViewCmd::ZoomIn);
+        frame(&mut app, &ctx, 1.2);
+        assert_eq!(frame(&mut app, &ctx, 1.3), second);
+        // ...for ten seconds.
+        assert_eq!(frame(&mut app, &ctx, 11.0), second);
+        assert_eq!(frame(&mut app, &ctx, 11.2), "");
+    }
 }

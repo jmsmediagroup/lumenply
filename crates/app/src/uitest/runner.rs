@@ -25,6 +25,9 @@ session.json, keyframes/*.png (failures/*.png when a step fails).
   --hold SECONDS     how long each step's last frame stays on (0.6)
   --video-scale X    scale the video (1.0)
   --no-video         run without rendering or recording
+  --models-from DIR  start with the AI models in DIR/<model>/ installed
+                     (linked into the scratch profile; default
+                     $LUMENPLY_UITEST_MODELS, else none)
   --stop-on-fail     end a scenario at its first failed check
   --tree [ARG...]    launch with ARGs (e.g. --demo), print every named
                      control a scenario can reach, and exit
@@ -97,6 +100,9 @@ pub(crate) fn main(args: &[String]) -> i32 {
             "--video-scale" => next(&mut i)
                 .and_then(|v| v.parse().ok())
                 .map(|v| opts.video_scale = v)
+                .is_some(),
+            "--models-from" => next(&mut i)
+                .map(|v| opts.models_from = Some(PathBuf::from(v)))
                 .is_some(),
             "--no-video" => {
                 opts.record = false;

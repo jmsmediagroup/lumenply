@@ -241,6 +241,69 @@ fn the_first_click_reports_encoding_and_later_ones_reuse_it() {
     assert_eq!(selected(&app), 2.0 * BLOCK);
 }
 
+/// The first click after launch waits for the model to load (21 s on a
+/// busy machine the first time, CoreML compiling): the card says so
+/// instead of "Selecting the object…", then moves on to analysing.
+#[test]
+fn the_first_click_says_the_model_is_loading() {
+    let fake = FakeAi {
+        cold: AtomicBool::new(true),
+        load_delay: Duration::from_millis(300),
+        encode_delay: Duration::from_millis(300),
+        ..installed(&[ModelKey::MobileSam])
+    };
+    let (mut app, fake) = card_app(fake);
+    assert!(!fake.select_ready());
+    click(&mut app, 60.0, 50.0, PLAIN);
+    let doing = |app: &App| {
+        app.ai.running.as_ref().map(|r| {
+            (
+                r.task.doing(r.job.progress.phase()),
+                r.task.doing_short(r.job.progress.phase()),
+            )
+        })
+    };
+    let t = Instant::now();
+    while app
+        .ai
+        .running
+        .as_ref()
+        .is_none_or(|r| r.job.progress.phase() != PHASE_LOADING)
+    {
+        assert!(t.elapsed() < WAIT, "never reported loading");
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        doing(&app),
+        Some((
+            "Loading the Object Selection model (first click only)…",
+            "Loading the model…"
+        ))
+    );
+    while app
+        .ai
+        .running
+        .as_ref()
+        .is_some_and(|r| r.job.progress.phase() == PHASE_LOADING)
+    {
+        assert!(t.elapsed() < WAIT, "stuck loading");
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        doing(&app).map(|d| d.0),
+        Some("Analysing the image (first click only)…"),
+        "then the image is analysed"
+    );
+    app.ai_wait(WAIT);
+    assert!(fake.select_ready(), "loaded once");
+    assert_eq!(selected(&app), BLOCK);
+    // The next click neither loads nor encodes.
+    click(&mut app, 200.0, 120.0, SHIFT);
+    let phase = app.ai.running.as_ref().map(|r| r.job.progress.phase());
+    app.ai_wait(WAIT);
+    assert!(phase.is_none() || phase == Some(PHASE_RUN), "{phase:?}");
+}
+
 #[test]
 fn remove_background_adds_a_mask_equal_to_the_matte_and_keeps_the_pixels() {
     let (mut app, fake) = card_app(installed(&[ModelKey::BiRefNetLite]));
@@ -254,7 +317,7 @@ fn remove_background_adds_a_mask_equal_to_the_matte_and_keeps_the_pixels() {
     assert_eq!(app.action_block(REMOVE_BG), None);
     app.run_menu_action(REMOVE_BG);
     app.ai_wait(WAIT);
-    let want = fake.matte(&card()).unwrap();
+    let want = fake.matte(&card(), false).unwrap();
     let l = app.editor.doc().layer(layer).unwrap();
     let mask = l.mask.as_ref().expect("Remove Background adds a mask");
     assert!(mask.enabled);
@@ -557,9 +620,9 @@ fn every_ai_control_has_a_name() {
     app.ai_consent_cancel();
     app.ai_wait(WAIT);
     app.ai.consent = Some(Consent {
-        model: ModelKey::MobileSam,
-        pending: None,
         phase: ConsentPhase::Failed("Couldn't reach huggingface.co".into()),
+        detail: Some("download failed: io: Connection refused".into()),
+        ..Consent::ask(ModelKey::MobileSam, None)
     });
     check(&mut app, "first-use dialog, failed");
     app.ai.consent = None;
@@ -597,6 +660,261 @@ fn every_ai_control_has_a_name() {
     assert!(card.is_some(), "the progress card is up");
     app.ai_cancel_running();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The real engine's errors carry a URL and an OS error; the dialog says
+/// what happened in words and keeps the detail for its tooltip.
+#[test]
+fn download_errors_read_as_what_to_do() {
+    let offline = "download failed: https://huggingface.co/senty-au/BiRefNet_lite-ONNX-dynamic/resolve/\
+                   173d635935b93839608b9b9039da8d1d212471e9/onnx/model.onnx: io: Connection refused (os error 61)";
+    assert_eq!(
+        download_problem(offline),
+        "Couldn't reach huggingface.co: the computer seems to be offline, or a firewall or proxy \
+         blocks the connection."
+    );
+    assert_eq!(
+        download_problem("model.onnx does not match its pinned SHA-256 (got ab, expected cd)"),
+        "The downloaded file was damaged (it doesn't match the published one), so it wasn't installed. \
+         Try again."
+    );
+    assert_eq!(
+        download_problem("download failed: model.onnx: got 1000 of 2000 bytes"),
+        "The download was cut off before it finished."
+    );
+    assert_eq!(
+        download_problem("No space left on device (os error 28)"),
+        "There isn't enough free disk space for the model."
+    );
+    assert_eq!(download_problem("something else"), "something else");
+
+    // Through the app: the dialog's message and the status bar.
+    let fake = FakeAi {
+        offline: AtomicBool::new(true),
+        ..installed(&[])
+    };
+    let (mut app, _) = card_app(fake);
+    app.run_menu_action(SELECT_SUBJECT);
+    app.ai_consent_download();
+    app.ai_wait(WAIT);
+    let c = app.ai.consent.as_ref().expect("still up");
+    assert_eq!(
+        c.phase,
+        ConsentPhase::Failed(
+            "Couldn't reach huggingface.co: the computer seems to be offline, or a firewall or proxy \
+             blocks the connection."
+                .into()
+        )
+    );
+    assert_eq!(
+        c.detail.as_deref(),
+        Some("Couldn't reach huggingface.co: the computer seems to be offline")
+    );
+    assert!(
+        app.status
+            .starts_with("Couldn't download BiRefNet lite: Couldn't reach huggingface.co: the computer"),
+        "{}",
+        app.status
+    );
+}
+
+/// A long download needn't hold the user: "Download in background"
+/// closes the dialog, the card shows progress, a later click replaces the
+/// one waiting, and it runs once the model is in.
+#[test]
+fn a_download_can_continue_in_the_background() {
+    let fake = FakeAi {
+        steps: 200,
+        tick: Duration::from_millis(5),
+        ..installed(&[])
+    };
+    let (mut app, fake) = card_app(fake);
+    click(&mut app, 60.0, 50.0, PLAIN);
+    app.ai_consent_download();
+    app.ai.consent.as_mut().unwrap().hidden = true;
+    assert!(
+        app.ai.downloading(ModelKey::MobileSam).is_some(),
+        "still downloading"
+    );
+    // The user keeps working, and clicks the blue block meanwhile.
+    app.run(&AddPixelLayer::new("Meanwhile"));
+    click(&mut app, 200.0, 120.0, PLAIN);
+    assert!(
+        app.status
+            .starts_with("Object Selection runs when MobileSAM has downloaded ("),
+        "{}",
+        app.status
+    );
+    app.ai_wait(WAIT);
+    assert!(fake.is_installed(ModelKey::MobileSam));
+    assert!(app.ai.consent.is_none());
+    assert_eq!(selected(&app), BLOCK, "the latest click ran: the blue block");
+    assert_eq!(sel_at(&app, 200, 120), 1.0);
+    assert_eq!(sel_at(&app, 60, 50), 0.0);
+    assert_eq!(
+        app.editor.history(),
+        vec!["Add layer 'Meanwhile'", "Object selection"]
+    );
+
+    // A failure in the background brings the dialog back.
+    let fake = FakeAi {
+        offline: AtomicBool::new(true),
+        tick: Duration::from_millis(20),
+        ..installed(&[])
+    };
+    let (mut app, _) = card_app(fake);
+    app.run_menu_action(SELECT_SUBJECT);
+    app.ai_consent_download();
+    app.ai.consent.as_mut().unwrap().hidden = true;
+    app.ai_wait(WAIT);
+    let c = app.ai.consent.as_ref().expect("back up");
+    assert!(!c.hidden && matches!(c.phase, ConsentPhase::Failed(_)));
+}
+
+/// Picking Object Selection loads its model ahead of the first click.
+#[test]
+fn picking_object_selection_loads_the_model_ahead() {
+    let fake = FakeAi {
+        cold: AtomicBool::new(true),
+        load_delay: Duration::from_millis(50),
+        ..installed(&[ModelKey::MobileSam])
+    };
+    let (mut app, fake) = card_app(fake);
+    assert!(!fake.select_ready());
+    // Drawing the frame draws the Object Selection bar, which asks once.
+    let ctx = a11y_ctx();
+    let _ = nameless(&mut app, &ctx);
+    let t = Instant::now();
+    while !fake.select_ready() {
+        assert!(t.elapsed() < WAIT, "never loaded");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(app.ai.warm_requested);
+    // Not installed: nothing to load.
+    let cold = FakeAi {
+        cold: AtomicBool::new(true),
+        ..installed(&[])
+    };
+    let (mut app, cold) = card_app(cold);
+    app.ai_warm_select();
+    assert!(!app.ai.warm_requested && !cold.select_ready());
+}
+
+/// Preferences ▸ AI models ▸ High detail reaches the model, survives the
+/// dialog's Save, and the status says which detail ran.
+#[test]
+fn high_detail_reaches_the_model_and_is_kept() {
+    let (mut app, fake) = card_app(installed(&ModelKey::ALL));
+    assert!(!session::Prefs::default().ai_high_detail, "standard by default");
+    // (An earlier run of this test may have saved it in the test folder.)
+    app.prefs.ai_high_detail = false;
+    app.run_menu_action(SELECT_SUBJECT);
+    app.ai_wait(WAIT);
+    assert!(!fake.high_detail.load(Ordering::Relaxed));
+    assert!(app.status.starts_with("Select subject (") && !app.status.contains("high"));
+    app.run_menu_action(AI_MODELS);
+    app.prefs.ai_high_detail = true; // what the checkbox sets
+                                     // Save in Preferences writes its own copy of the prefs back.
+    if let Some(Dialog::Preferences(p, _)) = app.dialog.as_ref() {
+        assert!(!p.ai_high_detail, "the dialog's copy predates the change");
+    }
+    // Enter is the dialog's Save.
+    let ctx = a11y_ctx();
+    let enter = egui::Event::Key {
+        key: Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    for events in [vec![], vec![enter]] {
+        let raw = egui::RawInput {
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(raw, |ctx| app.frame(ctx));
+    }
+    assert!(app.dialog.is_none(), "saved and closed");
+    assert!(app.prefs.ai_high_detail, "Save keeps the AI page's setting");
+    app.run_menu_action(SELECT_SUBJECT);
+    app.ai_wait(WAIT);
+    assert!(
+        fake.high_detail.load(Ordering::Relaxed),
+        "the model ran at high detail"
+    );
+    assert!(
+        app.status.starts_with("Select subject (high detail, "),
+        "{}",
+        app.status
+    );
+}
+
+/// Shown again after another modal dialog, the first-use dialog still
+/// takes the mouse (it sits just above the backdrop, not under it).
+#[test]
+fn the_first_use_dialog_takes_clicks_after_another_dialog() {
+    let (mut app, _) = card_app(FakeAi {
+        steps: 1000,
+        tick: Duration::from_millis(20),
+        ..installed(&[])
+    });
+    let ctx = a11y_ctx();
+    let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0));
+    let frame = |app: &mut App, events: Vec<egui::Event>| {
+        let raw = egui::RawInput {
+            screen_rect: Some(screen),
+            events,
+            ..Default::default()
+        };
+        ctx.run(raw, |ctx| app.frame(ctx))
+            .platform_output
+            .accesskit_update
+            .expect("accesskit")
+    };
+    let rect_of = |update: &egui::accesskit::TreeUpdate, name: &str| {
+        update.nodes.iter().find_map(|(_, n)| {
+            (n.name() == Some(name)).then(|| n.bounds()).flatten().map(|b| {
+                egui::Rect::from_min_max(
+                    egui::pos2(b.x0 as f32, b.y0 as f32),
+                    egui::pos2(b.x1 as f32, b.y1 as f32),
+                )
+            })
+        })
+    };
+    app.debug_ai("ai:consent=sam");
+    for _ in 0..3 {
+        frame(&mut app, vec![]);
+    }
+    app.ai.consent = None;
+    app.run_menu_action(AI_MODELS);
+    for _ in 0..3 {
+        frame(&mut app, vec![]);
+    }
+    app.dialog = None;
+    frame(&mut app, vec![]);
+    app.debug_ai("ai:consent=sam");
+    let mut at = None;
+    for _ in 0..3 {
+        let u = frame(&mut app, vec![]);
+        at = rect_of(&u, "Download").or(at);
+    }
+    let p = at.expect("the Download button is shown").center();
+    let button = |pressed| egui::Event::PointerButton {
+        pos: p,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    frame(&mut app, vec![egui::Event::PointerMoved(p)]);
+    frame(&mut app, vec![button(true)]);
+    frame(&mut app, vec![button(false)]);
+    assert_eq!(
+        app.ai.consent.as_ref().map(|c| c.phase.clone()),
+        Some(ConsentPhase::Downloading),
+        "the click reached Download"
+    );
+    app.ai_consent_cancel();
+    app.ai_wait(WAIT);
 }
 
 #[test]

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use lumenply_ai::{Matter, ModelId, ModelStore, Prompt, Runtime, Segmenter};
+use lumenply_ai::{Detail, Matter, ModelId, ModelStore, Prompt, Runtime, Segmenter};
 use lumenply_tiles::Raster;
 
 use crate::ai::{catalogue, AiPrompt, AiService, ModelInfoView, ModelKey};
@@ -118,6 +118,17 @@ impl AiService for Engine {
         self.runtime().err()
     }
 
+    fn select_ready(&self) -> bool {
+        // Locked: a warm-up is loading it right now.
+        self.segmenter.try_lock().is_ok_and(|s| s.is_some())
+    }
+
+    fn prepare_select(&self) {
+        if self.store.installed(ModelId::MobileSam) {
+            let _ = self.segmenter();
+        }
+    }
+
     fn select(&self, image: &Raster, prompts: &[AiPrompt], encoding: &dyn Fn()) -> Result<Vec<f32>, String> {
         let seg = self.segmenter()?;
         let emb = match seg.cached_embedding(image) {
@@ -138,9 +149,14 @@ impl AiService for Engine {
         sized(matte, image)
     }
 
-    fn matte(&self, image: &Raster) -> Result<Vec<f32>, String> {
+    fn matte(&self, image: &Raster, high_detail: bool) -> Result<Vec<f32>, String> {
         // Loaded per run and dropped right after: a run peaks at gigabytes.
-        let matter = Matter::load(self.runtime()?, &self.store).map_err(|e| e.to_string())?;
+        let detail = if high_detail {
+            Detail::High
+        } else {
+            Detail::Standard
+        };
+        let matter = Matter::load_detail(self.runtime()?, &self.store, detail).map_err(|e| e.to_string())?;
         let matte = matter.matte(image).map_err(|e| e.to_string())?;
         drop(matter);
         sized(matte, image)

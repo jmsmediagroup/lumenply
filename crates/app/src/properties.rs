@@ -156,11 +156,6 @@ impl App {
         let is_smart = layer.smart_layer().is_some();
         let fill = layer.fill_layer().map(|f| f.fill.clone());
         let shape = layer.shape_layer().cloned();
-        // The painted bounds' centre: transforms pivot about it.
-        let pivot = layer
-            .raster_store()
-            .and_then(|s| s.content_bounds())
-            .map(|b| (b.x as f32 + b.w as f32 / 2.0, b.y as f32 + b.h as f32 / 2.0));
         let adj = match &layer.content {
             LayerContent::Adjustment(a) => Some(a.clone()),
             _ => None,
@@ -184,7 +179,18 @@ impl App {
         let mut fill_pct = layer.fill_opacity * 100.0;
         let fill_before = fill_pct;
         ui.add_space(2.0);
-        let finished = slider_row(ui, "Opacity", &mut opacity, 0.0..=100.0, "%");
+        // A fully locked layer keeps its opacity, fill and blend: grey them
+        // out and say why, rather than refuse an edit after the fact.
+        let locked = self.lock_block(crate::layer_actions::LockNeed::Props);
+        if let Some(why) = locked {
+            ui.label(RichText::new(why).small().color(MUTED));
+        }
+        let unlocked = locked.is_none();
+        let finished = ui
+            .add_enabled_ui(unlocked, |ui| {
+                slider_row(ui, "Opacity", &mut opacity, 0.0..=100.0, "%")
+            })
+            .inner;
         if opacity != before {
             self.run_coalescing(
                 &SetOpacity {
@@ -198,7 +204,11 @@ impl App {
             self.editor.end_coalescing();
         }
         if has_fill {
-            let finished = slider_row(ui, "Fill", &mut fill_pct, 0.0..=100.0, "%");
+            let finished = ui
+                .add_enabled_ui(unlocked, |ui| {
+                    slider_row(ui, "Fill", &mut fill_pct, 0.0..=100.0, "%")
+                })
+                .inner;
             if fill_pct != fill_before {
                 self.run_coalescing(
                     &lumenply_core::fill_opacity::SetFillOpacity {
@@ -219,7 +229,9 @@ impl App {
         ui.horizontal(|ui| {
             row_label(ui, "Blend", LABEL_W);
             ui.spacing_mut().combo_width = ui.available_width();
-            crate::blend_ui::blend_combo(ui, "blend-mode", "Blend mode", None, &mut sel, is_group);
+            ui.add_enabled_ui(unlocked, |ui| {
+                crate::blend_ui::blend_combo(ui, "blend-mode", "Blend mode", None, &mut sel, is_group)
+            });
         });
         match sel {
             None if !pass => self.run(&SetPassThrough {
@@ -385,7 +397,12 @@ impl App {
             }
             // A position or pixel lock rules out every transform here, as
             // the menus and canvas already say.
-            let locked = self.lock_block(crate::layer_actions::LockNeed::Reshape);
+            // So does a live Free Transform: its own fields are in the
+            // options bar, and these would transform underneath it.
+            let locked = self.lock_block(crate::layer_actions::LockNeed::Reshape).or(self
+                .xform
+                .is_some()
+                .then_some("Free Transform is open: set its values in the options bar"));
             if let Some(why) = locked {
                 ui.label(RichText::new(why).small().color(MUTED));
             }
@@ -435,16 +452,19 @@ impl App {
                 })
             });
             // Scale and rotate about the painted centre (smart objects
-            // compose this into their transform).
-            let about = |sx: f32, sy: f32, a: f32| {
-                pivot.map(|(cx, cy)| TransformLayer {
+            // compose this into their transform). Found only on Apply: the
+            // pixel scan is too slow for every frame on a large layer.
+            let about = |app: &App, sx: f32, sy: f32, a: f32| {
+                let b = app.editor.doc().layer(id)?.raster_store()?.content_bounds()?;
+                let (cx, cy) = (b.x as f32 + b.w as f32 / 2.0, b.y as f32 + b.h as f32 / 2.0);
+                Some(TransformLayer {
                     layer: id,
                     transform: lumenply_tiles::Affine::around(cx, cy, sx, sy, a),
                 })
             };
             if apply {
                 let s = self.xform_scale / 100.0;
-                match about(s, s, self.xform_angle.to_radians()) {
+                match about(self, s, s, self.xform_angle.to_radians()) {
                     Some(cmd) => {
                         self.run(&cmd);
                         self.xform_scale = 100.0;
