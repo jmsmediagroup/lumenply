@@ -28,6 +28,7 @@ pub mod liquify;
 pub mod membrane;
 pub mod puppet;
 pub mod resample;
+pub mod seam_carve;
 pub mod shape;
 pub mod smart_filters;
 pub mod text;

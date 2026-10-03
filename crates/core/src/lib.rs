@@ -12,6 +12,7 @@ pub mod canvas_ops;
 pub mod channels;
 pub mod commands;
 mod content_aware;
+pub mod content_aware_scale;
 pub mod crop;
 pub mod demo;
 mod erasers;
