@@ -1347,6 +1347,15 @@ impl Session {
         })
     }
 
+    /// Move the pointer to a point on screen (in points) without clicking,
+    /// e.g. along a menu row into its submenu. `what` is for the log.
+    pub(crate) fn move_to(&mut self, p: Pos2, what: &str) -> UiResult {
+        self.step("action", format!("Move to {what}"), |s| {
+            s.glide(p)?;
+            s.settle(10)
+        })
+    }
+
     /// Click at a point on screen (in points) that has no name, such as a
     /// spot on a curve. `what` says what is there, for the log.
     pub(crate) fn click_at(&mut self, p: Pos2, what: &str) -> UiResult {

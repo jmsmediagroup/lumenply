@@ -235,7 +235,7 @@ pub(crate) fn gradient_editor_opts(
     let sel = st.selected;
     let swatch_id = id.with("swatch");
     ui.horizontal(|ui| {
-        row_label(ui, "Stop color", LABEL_W);
+        row_label(ui, "Stop colour", LABEL_W);
         let (r, _) = ui.allocate_exact_size(egui::vec2(34.0, 20.0), Sense::hover());
         let sresp = ui.interact(r, swatch_id, Sense::click());
         let mut srgb = g.stops[sel].color.map(linear_to_srgb_f);
@@ -352,7 +352,9 @@ impl App {
         let before = fill.clone();
         let mut finished = false;
         ui.horizontal(|ui| {
-            row_label(ui, "Fill", LABEL_W);
+            // "Type", not "Fill": the Fill (opacity) slider sits just above,
+            // and "Solid color" pushed the dock wider than its 320 pt.
+            row_label(ui, "Type", LABEL_W);
             // 0 solid, 1 gradient, 2 pattern.
             let kind = |f: &Fill| match f {
                 Fill::Solid { .. } => 0u8,
@@ -360,7 +362,7 @@ impl App {
                 Fill::Pattern { .. } => 2,
             };
             let mut k = kind(&fill);
-            if segmented(ui, &mut k, &[(0, "Solid color"), (1, "Gradient"), (2, "Pattern")]) {
+            if segmented(ui, &mut k, &[(0, "Solid"), (1, "Gradient"), (2, "Pattern")]) {
                 let first = match &fill {
                     Fill::Solid { color } => *color,
                     Fill::Gradient { gradient, .. } => gradient.sorted()[0].color,
@@ -413,7 +415,12 @@ impl App {
                     }
                 });
                 finished |= slider_row(ui, "Angle", angle, -180.0..=180.0, "°");
-                finished |= slider_row_scaled(ui, "Scale", scale, 0.1..=1.5, 100.0, "%");
+                // The Gradient tool's fill-layer mode can make any scale
+                // (a long radial drag passes 150%): the range takes the
+                // value in, so showing the panel never clamps it, which
+                // would change the gradient and add an undo step.
+                let range = scale.min(0.1)..=scale.max(1.5);
+                finished |= slider_row_scaled(ui, "Scale", scale, range, 100.0, "%");
                 if check(ui, reverse, "Reverse").changed() {
                     finished = true;
                 }

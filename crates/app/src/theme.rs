@@ -535,7 +535,22 @@ pub(crate) fn install_popups(style: &mut egui::Style) {
 /// a sensible minimum width, the shared item height, padding and
 /// colours. The helpers below call it; a `ComboBox::show_ui` closure
 /// calls it first thing.
+const POPUP_FRAME: &str = "theme:popup-open-frame";
+
+/// Whether a menu or popup was open on the previous frame (or is on this
+/// one): Esc then closes it and must do nothing else.
+pub(crate) fn popup_was_open(ctx: &egui::Context) -> bool {
+    let last: Option<u64> = ctx.data(|d| d.get_temp(egui::Id::new(POPUP_FRAME)));
+    last.is_some_and(|f| f + 2 >= ctx.cumulative_pass_nr())
+}
+
 pub(crate) fn popup_style(ui: &mut egui::Ui) {
+    // Every menu and popup passes here while open: remember the frame, so
+    // keys handled before the menus are drawn (Esc deselects) can leave a
+    // key meant for the popup alone.
+    let frame = ui.ctx().cumulative_pass_nr();
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(egui::Id::new(POPUP_FRAME), frame));
     let s = ui.style_mut();
     s.wrap_mode = Some(egui::TextWrapMode::Extend);
     s.spacing.button_padding = egui::vec2(MENU_PAD_X, 3.0);

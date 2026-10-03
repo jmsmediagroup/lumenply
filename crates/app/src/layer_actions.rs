@@ -6,6 +6,7 @@
 
 use super::*;
 use lumenply_core::align::{align_block, AlignEdge, AlignLayers, AlignOp};
+use lumenply_core::layer_masks::{apply_mask_block, AddLayerMask, ApplyLayerMask, MaskFrom};
 use lumenply_core::layer_ops::{self as ops, MergeKind};
 use lumenply_core::locks::{effective_locks, SetLayerLocks};
 use lumenply_doc::LayerLocks;
@@ -97,6 +98,35 @@ const ALIGN_TIPS: [&str; 6] = [
     "Align vertical centres",
     "Align bottom edges",
 ];
+
+/// Layer ▸ Layer mask's ways to start a mask: (menu label, action id).
+/// "mask-from-sel" is also Select ▸ Layer mask from selection.
+const MASK_NEW: [(&str, &str, MaskFrom); 4] = [
+    ("Reveal all", "mask-reveal-all", MaskFrom::RevealAll),
+    ("Hide all", "mask-hide-all", MaskFrom::HideAll),
+    ("Reveal selection", "mask-from-sel", MaskFrom::RevealSelection),
+    ("Hide selection", "mask-hide-sel", MaskFrom::HideSelection),
+];
+
+/// Photoshop's layer chords that aren't rebindable: Shift+Cmd+G ungroups,
+/// Alt+Cmd+G clips (or releases) the active layer, Cmd+] and Cmd+[ move
+/// it up and down. Called before Cmd+G and the bare bracket keys, which
+/// these chords contain.
+pub(crate) fn layer_chords(i: &mut egui::InputState, fired: &mut Vec<&'static str>) {
+    use egui::Modifiers as M;
+    if i.consume_key(M::COMMAND | M::ALT, Key::G) {
+        fired.push("clip-toggle");
+    }
+    if i.consume_key(M::COMMAND | M::SHIFT, Key::G) {
+        fired.push("ungroup");
+    }
+    if i.consume_key(M::COMMAND, Key::CloseBracket) {
+        fired.push("layer-up");
+    }
+    if i.consume_key(M::COMMAND, Key::OpenBracket) {
+        fired.push("layer-down");
+    }
+}
 
 /// What an edit would do to the active layer, for lock checks.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -275,6 +305,59 @@ impl App {
         }
     }
 
+    /// Add a mask to the active layer and paint on it next.
+    pub(crate) fn add_layer_mask(&mut self, from: MaskFrom) {
+        let Some(layer) = self.active else { return };
+        self.run(&AddLayerMask { layer, from });
+        if self.active_has_mask() {
+            self.editing_mask = true;
+            self.status = format!("Added a layer mask ({})", from.label().to_lowercase());
+        }
+    }
+
+    /// The mask button and Add mask: from the selection when there is one,
+    /// else revealing everything; `hide` (Alt-click) hides instead.
+    pub(crate) fn add_mask_auto(&mut self, hide: bool) {
+        let sel = self.editor.doc().selection.is_some();
+        self.add_layer_mask(match (sel, hide) {
+            (true, false) => MaskFrom::RevealSelection,
+            (true, true) => MaskFrom::HideSelection,
+            (false, false) => MaskFrom::RevealAll,
+            (false, true) => MaskFrom::HideAll,
+        });
+    }
+
+    /// Alt+Cmd+G: clip the active layer, or release it when clipped.
+    fn clip_toggle_id(&self) -> &'static str {
+        if self.active_layer().is_some_and(|l| l.clip) {
+            "unclip"
+        } else {
+            "clip"
+        }
+    }
+
+    /// Layer ▸ Layer mask, as in Photoshop: start a mask four ways, then
+    /// delete, apply, disable or enable it.
+    pub(crate) fn layer_mask_menu(&mut self, ui: &mut egui::Ui) {
+        menu(ui, "Layer mask", |ui| {
+            for (label, id, _) in MASK_NEW {
+                self.act(ui, label, id);
+            }
+            menu_separator(ui);
+            self.act(ui, "Delete mask", "rm-mask");
+            self.act(ui, "Apply mask", "mask-apply");
+            let off = self
+                .active_layer()
+                .and_then(|l| l.mask.as_ref())
+                .is_some_and(|m| !m.enabled);
+            self.act(
+                ui,
+                if off { "Enable mask" } else { "Disable mask" },
+                "mask-toggle",
+            );
+        });
+    }
+
     /// Why one of this module's actions can't run (see
     /// [`App::action_block`]); `None` for ids it doesn't own.
     pub(crate) fn layer_action_block(&self, id: &str) -> Option<Option<&'static str>> {
@@ -291,16 +374,32 @@ impl App {
                 }
                 Some(LockNeed::Paint)
             }
+            // Edits that change the layer's pixels (Layer via Cut takes them
+            // from it) are refused by the engine too; say so up front.
+            "fill-bg" | "fill-dialog" | "content-aware" | "stroke-selection" | "cut" | "layer-via-cut"
+            | "mask-apply" => Some(LockNeed::Paint),
             "xform" | "perspective" | "warp" | "flip-h" | "flip-v" => Some(LockNeed::Reshape),
-            "add-mask" | "rm-mask" | "mask-toggle" | "mask-from-sel" | "clip" | "unclip" => {
-                Some(LockNeed::Props)
-            }
+            "add-mask" | "rm-mask" | "mask-toggle" | "mask-from-sel" | "mask-reveal-all"
+            | "mask-hide-all" | "mask-hide-sel" | "clip" | "unclip" | "clip-toggle" => Some(LockNeed::Props),
             _ => None,
         };
-        if let Some(need) = need {
-            return self.lock_block(need).map(Some);
+        if let Some(why) = need.and_then(|n| self.lock_block(n)) {
+            return Some(Some(why));
+        }
+        if let Some((_, _, from)) = MASK_NEW.iter().find(|m| m.1 == id) {
+            return Some(match self.active_layer() {
+                None => Some("Select a layer first"),
+                Some(l) if l.mask.is_some() => Some("This layer already has a mask"),
+                Some(_) if from.uses_selection() && doc.selection.is_none() => Some("Make a selection first"),
+                Some(_) => None,
+            });
         }
         Some(match id {
+            "mask-apply" => match self.active {
+                None => Some("Select a layer first"),
+                Some(l) => apply_mask_block(doc, l),
+            },
+            "clip-toggle" => return Some(self.action_block(self.clip_toggle_id())),
             "duplicate-layer" => self.active_layer().is_none().then_some("Select a layer first"),
             "merge-down" => match self.multi_selected() {
                 Some(ids) => ops::merge_selected_block(doc, &ids),
@@ -431,6 +530,19 @@ impl App {
             "merge-visible" => self.merge_visible(),
             "flatten" => self.flatten_image(),
             "stamp-visible" => self.stamp_visible(),
+            "add-mask" => self.add_mask_auto(false),
+            "mask-apply" => {
+                if let Some(layer) = self.active {
+                    self.run(&ApplyLayerMask { layer });
+                    self.editing_mask = false;
+                }
+            }
+            "clip-toggle" => self.run_menu_action(self.clip_toggle_id()),
+            id if MASK_NEW.iter().any(|m| m.1 == id) => {
+                if let Some((_, _, from)) = MASK_NEW.iter().find(|m| m.1 == id) {
+                    self.add_layer_mask(*from);
+                }
+            }
             "lock-transparency" => self.toggle_lock(LockKind::Transparency),
             "lock-pixels" => self.toggle_lock(LockKind::Pixels),
             "lock-position" => self.toggle_lock(LockKind::Position),
@@ -455,6 +567,10 @@ impl App {
             // selection it is "layer via copy"); it follows that binding.
             "duplicate-layer" => Some(session::chord_label(ctx, &self.prefs, "layer-via-copy")),
             "stamp-visible" => Some(shortcut_text(ctx, M::COMMAND | M::SHIFT | M::ALT, Key::E)),
+            "ungroup" => Some(shortcut_text(ctx, M::COMMAND | M::SHIFT, Key::G)),
+            "clip" | "unclip" | "clip-toggle" => Some(shortcut_text(ctx, M::COMMAND | M::ALT, Key::G)),
+            "layer-up" => Some(shortcut_text(ctx, M::COMMAND, Key::CloseBracket)),
+            "layer-down" => Some(shortcut_text(ctx, M::COMMAND, Key::OpenBracket)),
             _ => None,
         }
     }
@@ -870,6 +986,78 @@ mod tests {
         app.undo();
         app.undo();
         assert!(app.editor.doc().layer(bg).unwrap().locks.is_empty());
+    }
+
+    #[test]
+    fn layer_mask_actions_say_why_and_use_up_the_selection() {
+        let mut app = doc_app();
+        app.add_pixel_layer();
+        let id = app.active.unwrap();
+        app.run_menu_action("fill");
+        assert_eq!(app.action_block("mask-from-sel"), Some("Make a selection first"));
+        assert_eq!(app.action_block("mask-hide-sel"), Some("Make a selection first"));
+        assert_eq!(app.action_block("mask-apply"), Some("This layer has no mask"));
+        assert_eq!(app.action_block("mask-hide-all"), None);
+        app.run(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(8, 8, 16, 16))),
+        });
+        app.run_menu_action("mask-hide-sel");
+        let m = app.editor.doc().layer(id).unwrap().mask.clone().unwrap();
+        assert_eq!((m.value(10, 10), m.value(40, 40)), (0.0, 1.0));
+        assert!(
+            app.editor.doc().selection.is_none(),
+            "deselected, as in Photoshop"
+        );
+        assert!(app.editing_mask, "the new mask is the paint target");
+        assert_eq!(
+            app.action_block("mask-reveal-all"),
+            Some("This layer already has a mask")
+        );
+        app.run_menu_action("mask-apply");
+        let l = app.editor.doc().layer(id).unwrap();
+        assert!(l.mask.is_none());
+        assert!(!app.editing_mask);
+        let px = l.pixels().unwrap();
+        assert_eq!((px.get_pixel(10, 10).a, px.get_pixel(40, 40).a), (0.0, 1.0));
+        // The mask button without a selection reveals all; Alt hides all.
+        app.add_mask_auto(true);
+        let m = app.editor.doc().layer(id).unwrap().mask.clone().unwrap();
+        assert_eq!(m.value(40, 40), 0.0);
+        // A pixel lock refuses Apply (it changes pixels), not the mask.
+        app.run_menu_action("lock-pixels");
+        assert_eq!(
+            app.action_block("mask-apply"),
+            Some("The layer's pixels are locked")
+        );
+        assert_eq!(app.action_block("fill-bg"), Some("The layer's pixels are locked"));
+        assert_eq!(
+            app.action_block("fill-dialog"),
+            Some("The layer's pixels are locked")
+        );
+        assert_eq!(
+            app.action_block("layer-via-cut"),
+            Some("The layer's pixels are locked")
+        );
+        assert_eq!(app.action_block("rm-mask"), None);
+    }
+
+    #[test]
+    fn alt_cmd_g_toggles_the_clip_and_layer_via_copy_selects_the_copy() {
+        let mut app = doc_app();
+        app.add_pixel_layer();
+        app.run_menu_action("fill");
+        let id = app.active.unwrap();
+        assert_eq!(app.action_block("clip-toggle"), None);
+        app.run_menu_action("clip-toggle");
+        assert!(app.editor.doc().layer(id).unwrap().clip);
+        app.run_menu_action("clip-toggle");
+        assert!(!app.editor.doc().layer(id).unwrap().clip);
+        app.run_menu_action("select-all");
+        let copy = app.editor.doc().next_id();
+        app.run_menu_action(app.cmd_j_action());
+        assert_eq!(app.active, Some(copy), "the new layer is the active one");
+        let ids: Vec<LayerId> = app.editor.doc().layers().iter().map(|l| l.id).collect();
+        assert_eq!(ids.last(), Some(&copy), "on top, right above its source");
     }
 
     #[test]

@@ -480,6 +480,11 @@ impl App {
             "tool-blur" => self.brush.mode = BrushMode::Blur,
             "tool-sharpen" => self.brush.mode = BrushMode::Sharpen,
             "tool-history-brush" => self.brush.mode = BrushMode::History,
+            "tool-dodge" => self.brush.mode = BrushMode::Dodge,
+            "tool-burn" => self.brush.mode = BrushMode::Burn,
+            // Photoshop's Sponge starts out desaturating.
+            "tool-sponge" => self.brush.mode = BrushMode::Desaturate,
+            "tool-smudge" => self.brush.mode = BrushMode::Smudge,
             "tool-bg-eraser" => self.retouch.eraser_mode = EraserMode::Background,
             "tool-magic-eraser" => self.retouch.eraser_mode = EraserMode::Magic,
             _ => return false,
@@ -490,6 +495,45 @@ impl App {
             _ => Tool::Brush,
         };
         true
+    }
+
+    /// Photoshop's keys for the brushes that are Brush modes here: O picks
+    /// Dodge (or, already toning, keeps the mode), Shift+O steps Dodge →
+    /// Burn → Sponge, Y picks the History Brush. Call with no text field
+    /// focused (the shortcut handler's own guard).
+    pub(crate) fn brush_mode_keys(&mut self, ctx: &egui::Context) {
+        let (o, y, shift) = ctx.input(|i| {
+            let plain = !i.modifiers.command && !i.modifiers.alt;
+            (
+                plain && i.key_pressed(Key::O),
+                plain && !i.modifiers.shift && i.key_pressed(Key::Y),
+                i.modifiers.shift,
+            )
+        });
+        if o {
+            let toning = self.tool == Tool::Brush
+                && matches!(
+                    self.brush.mode,
+                    BrushMode::Dodge | BrushMode::Burn | BrushMode::Saturate | BrushMode::Desaturate
+                );
+            self.brush.mode = match (toning, shift, self.brush.mode) {
+                (true, true, BrushMode::Dodge) => BrushMode::Burn,
+                (true, true, BrushMode::Burn) => BrushMode::Desaturate,
+                (true, true, _) => BrushMode::Dodge,
+                (true, false, m) => m,
+                (false, ..) => BrushMode::Dodge,
+            };
+            self.tool = Tool::Brush;
+        }
+        if y {
+            self.brush.mode = BrushMode::History;
+            self.tool = Tool::Brush;
+        }
+        if o || y {
+            self.lasso.clear();
+            self.editor.end_coalescing();
+            self.cancel_free_transform();
+        }
     }
 
     /// A Spot (diffusion) or Healing stroke, healed as one region. Spot

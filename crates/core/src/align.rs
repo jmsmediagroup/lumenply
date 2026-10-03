@@ -123,6 +123,19 @@ pub struct AlignLayers {
     pub to: Option<Rect>,
 }
 
+/// Whether a layer paints anything: `content_bounds(l).is_some()`, but
+/// stopping at the first painted pixel instead of scanning them all (the
+/// Move tool's options bar asks for every layer it would align, every
+/// frame).
+pub fn has_content(l: &Layer) -> bool {
+    match &l.content {
+        LayerContent::Group(children) => children.iter().any(has_content),
+        _ => l
+            .raster_store()
+            .is_some_and(|s| s.coords().any(|c| s.tile(c).is_some_and(|t| !t.is_blank()))),
+    }
+}
+
 /// Why `AlignLayers` with these layers can't do anything, if it can't.
 pub fn align_block(
     doc: &Document,
@@ -132,7 +145,7 @@ pub fn align_block(
 ) -> Option<&'static str> {
     let with_content = layers
         .iter()
-        .filter(|id| doc.layer(**id).and_then(content_bounds).is_some())
+        .filter(|id| doc.layer(**id).is_some_and(has_content))
         .count();
     match op {
         _ if with_content == 0 => Some("Select a layer with content first"),
@@ -265,6 +278,47 @@ mod tests {
 
     fn bounds(ed: &Editor, id: LayerId) -> Rect {
         content_bounds(ed.doc().layer(id).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn has_content_agrees_with_content_bounds() {
+        let mut d = Document::new(600, 400);
+        let empty = d.add_pixel_layer("empty");
+        let full = d.add_pixel_layer("full");
+        let dot = d.add_pixel_layer("dot");
+        let clear = d.add_pixel_layer("clear");
+        d.layer_mut(full).unwrap().content = LayerContent::Pixel(lumenply_tiles::TileStore::from_raster(
+            &Raster::filled(600, 400, Rgba::WHITE),
+            0,
+            0,
+        ));
+        d.layer_mut(dot)
+            .unwrap()
+            .pixels_mut()
+            .unwrap()
+            .set_pixel(511, 300, Rgba::WHITE);
+        // A tile that exists but holds only transparent pixels.
+        let p = d.layer_mut(clear).unwrap().pixels_mut().unwrap();
+        p.set_pixel(5, 5, Rgba::WHITE);
+        p.set_pixel(5, 5, Rgba::TRANSPARENT);
+        let g = d.add_group("group");
+        let adj = d.add_adjustment(lumenply_doc::Adjustment::Invert);
+        for (id, want) in [
+            (empty, false),
+            (full, true),
+            (dot, true),
+            (clear, false),
+            (g, false),
+            (adj, false),
+        ] {
+            let l = d.layer(id).unwrap();
+            assert_eq!(has_content(l), want, "{}", l.name);
+            assert_eq!(content_bounds(l).is_some(), want, "{}", l.name);
+        }
+        assert_eq!(
+            content_bounds(d.layer(dot).unwrap()),
+            Some(Rect::new(511, 300, 1, 1))
+        );
     }
 
     #[test]
