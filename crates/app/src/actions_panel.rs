@@ -944,6 +944,17 @@ mod tests {
     }
 
     #[test]
+    fn every_recordable_step_is_a_registry_action() {
+        // A typo in RECORDABLE_MENU would record steps nothing can play.
+        for (id, _) in actions::RECORDABLE_MENU {
+            let mut app = app_with("registry");
+            app.status.clear();
+            app.run_menu_action_unrecorded(id);
+            assert!(!app.status.starts_with("Unknown command"), "{id}: {}", app.status);
+        }
+    }
+
+    #[test]
     fn rename_and_delete_keep_builtins_and_names_unique() {
         let mut app = app_with("rename");
         app.start_recording();
