@@ -169,17 +169,26 @@ impl Lut3D {
     }
 
     /// Whether the table maps every input in `[0, 1]` to itself (to 1e-6).
+    /// Cheap enough for every UI frame: no table is built.
     pub fn is_identity(&self) -> bool {
-        let id = Lut3D::identity(self.size);
-        self.shaper.is_none()
-            && self.domain_min == [0.0; 3]
-            && self.domain_max == [1.0; 3]
-            && self.data.len() == id.data.len()
-            && self
-                .data
-                .iter()
-                .zip(&id.data)
-                .all(|(a, b)| (0..3).all(|c| (a[c] - b[c]).abs() < 1e-6))
+        let n = self.size;
+        if self.shaper.is_some()
+            || self.domain_min != [0.0; 3]
+            || self.domain_max != [1.0; 3]
+            || n < 2
+            || self.data.len() != n * n * n
+        {
+            return false;
+        }
+        let s = (n - 1) as f32;
+        self.data.iter().enumerate().all(|(i, c)| {
+            let want = [
+                (i % n) as f32 / s,
+                ((i / n) % n) as f32 / s,
+                (i / (n * n)) as f32 / s,
+            ];
+            (0..3).all(|k| (c[k] - want[k]).abs() < 1e-6)
+        })
     }
 
     pub fn with_title(mut self, title: &str) -> Lut3D {

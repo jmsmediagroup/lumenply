@@ -66,6 +66,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Export OpenRaster...", "export-ora"),
     ("Export 16-bit PNG/TIFF...", "export-16bit"),
     ("Export OpenEXR (linear float)...", "export-exr"),
+    ("Export Color Lookup Table (.cube)...", "export-lut"),
     ("Close document", "close"),
     ("Quit Lumenply", "quit"),
     ("Undo", "undo"),
@@ -553,6 +554,7 @@ impl App {
             return block;
         }
         match id {
+            "export-lut" if !self.has_visible_adjustments() => Some("Add an adjustment layer first"),
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
             "redo" if !self.editor.can_redo() => Some("Nothing to redo"),
             "flip-h" | "flip-v" if !pixel && !smart && !shape => {
@@ -705,6 +707,7 @@ impl App {
             "export-ora" => self.pick_export_ora(),
             "export-16bit" => self.pick_export_16bit(),
             "export-exr" => self.pick_export_exr(),
+            "export-lut" => self.pick_export_lut(),
             "close" => self.close_tab(self.cur_tab),
             "undo" => self.undo(),
             "redo" => self.redo(),
@@ -915,7 +918,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 132); // + convert for smart filters, retouching modes, load-lut
+        assert_eq!(n, 133); // + convert for smart filters, retouching modes, load-lut, export-lut
     }
 
     #[test]

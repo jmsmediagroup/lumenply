@@ -50,6 +50,14 @@ is baked into one 65³ cube for PSD (Adobe's `.cube` holds one table).
 **Built-in looks** are formulas in code (`doc::lut::looks`) baked to 33³:
 no third-party LUT files ship, so there is nothing to license.
 
+**Export** (File ▸ Export ▸ Color Lookup Table, `render::lut_bake`): the
+33³ lattice becomes the pixels of a scratch document, the visible
+adjustment layers (inside visible groups too) are stacked over it with
+their opacity and blend mode, and the reference compositor renders the
+table, so it is exactly what the adjustments do. Masks, clipping and every
+pixel, fill or filter layer are left out: a colour table cannot depend on
+where a pixel is.
+
 ## Consequences
 
 - Older builds cannot open projects with Color Lookup layers (unknown

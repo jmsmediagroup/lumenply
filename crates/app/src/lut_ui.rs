@@ -110,7 +110,8 @@ impl App {
     /// Ask for a `.cube` / `.3dl` file and read it; failures go to the
     /// status bar.
     pub(crate) fn pick_lut_file(&mut self) -> Option<(Arc<Lut3D>, String)> {
-        let p = rfd::FileDialog::new()
+        let p = self
+            .file_dialog()
             .set_title("Load 3D LUT")
             .add_filter("3D LUT", &["cube", "CUBE", "3dl", "3DL"])
             .pick_file()?;
@@ -158,11 +159,45 @@ impl App {
         }
     }
 
+    /// Whether any visible adjustment layer would go into an exported table.
+    pub(crate) fn has_visible_adjustments(&self) -> bool {
+        let mut any = false;
+        self.editor.doc().for_each_layer(|l| {
+            any |= l.visible && matches!(l.content, LayerContent::Adjustment(_));
+        });
+        any
+    }
+
+    /// File ▸ Export ▸ Color Lookup Table: the visible adjustment layers
+    /// baked into a 33³ `.cube` (Photoshop's Export Color Lookup Tables).
+    pub(crate) fn pick_export_lut(&mut self) {
+        if let Some(p) = self.pick_save_path("Export Color Lookup Table", "Cube LUT", &["cube"]) {
+            self.export_lut_to(Path::new(&p));
+        }
+    }
+
+    pub(crate) fn export_lut_to(&mut self, p: &Path) {
+        let title = p
+            .file_stem()
+            .map_or(String::new(), |n| n.to_string_lossy().into_owned());
+        let (lut, count) = lumenply_render::lut_bake::bake_adjustments(self.editor.doc(), 33, &title);
+        if count == 0 {
+            self.status = "No visible adjustment layers to export".into();
+            return;
+        }
+        let what = if count == 1 { "layer" } else { "layers" };
+        self.status = match std::fs::write(p, lumenply_io::lut_files::write_cube(&lut)) {
+            Ok(()) => format!("Exported {} ({count} adjustment {what}, 33×33×33)", p.display()),
+            Err(e) => format!("Could not export: {e}"),
+        };
+    }
+
     /// Screenshot tokens (`lut:...`): `lut:add=<look>` adds a Color Lookup
     /// layer with a built-in look (`warm`, `cool`, `teal-orange`,
     /// `bleach-bypass`, `faded-film`, `mono-contrast`, `crisp`) above the
     /// active layer; `lut:look=<look|none>` sets the active lookup's look;
-    /// `lut:load=<path>` applies a `.cube` / `.3dl` file like `load-lut`.
+    /// `lut:load=<path>` applies a `.cube` / `.3dl` file like `load-lut`;
+    /// `lut:export=<path>` bakes the adjustments to a `.cube` there.
     pub(crate) fn debug_lut(&mut self, _ctx: &egui::Context, tok: &str) -> bool {
         let Some(rest) = tok.strip_prefix("lut:") else {
             return false;
@@ -183,6 +218,7 @@ impl App {
                     self.apply_lookup(Adjustment::ColorLookup { lut, name });
                 }
             }
+            "export" => self.export_lut_to(Path::new(arg)),
             _ => return false,
         }
         true
@@ -202,5 +238,42 @@ mod tests {
         assert_eq!(describe(&a, "Teal & Orange"), "Teal & Orange · 33×33×33 table");
         let id = Lut3D::identity(2);
         assert!(describe(&id, "").starts_with("No table chosen"));
+    }
+
+    #[test]
+    fn exporting_bakes_the_adjustments_and_reloads_as_the_same_look() {
+        let mut app = crate::a11y_tests::launch(&[]);
+        app.open_in_new_tab(crate::blank(16, 16), None);
+        let dir = std::env::temp_dir().join(format!("lumenply-lut-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Graded.cube");
+        assert_eq!(
+            app.action_block("export-lut"),
+            Some("Add an adjustment layer first")
+        );
+        app.export_lut_to(&path);
+        assert_eq!(app.status, "No visible adjustment layers to export");
+        assert!(!path.exists());
+        // Invert, exported, then loaded back: a 33³ table inverting gamma
+        // values — (0.25, 0.5, 1) becomes (0.75, 0.5, 0).
+        app.add_adjustment(Adjustment::Invert);
+        assert_eq!(app.action_block("export-lut"), None);
+        app.export_lut_to(&path);
+        assert!(
+            app.status.contains("1 adjustment layer, 33×33×33"),
+            "{}",
+            app.status
+        );
+        let (lut, name) = app.read_lut_file(&path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            (name.as_str(), lut.title.as_str(), lut.size),
+            ("Graded", "Graded", 33)
+        );
+        let o = lut.apply([0.25, 0.5, 1.0]);
+        assert!(
+            (o[0] - 0.75).abs() < 1e-3 && (o[1] - 0.5).abs() < 1e-3 && o[2].abs() < 1e-3,
+            "{o:?}"
+        );
     }
 }

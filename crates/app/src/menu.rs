@@ -382,6 +382,8 @@ impl App {
         menu_heading(ui, "HIGH BIT DEPTH");
         self.act(ui, "16-bit PNG / TIFF...", "export-16bit");
         self.act(ui, "OpenEXR (linear float)...", "export-exr");
+        menu_heading(ui, "ADJUSTMENTS AS A LOOK");
+        self.act(ui, "Color Lookup Table (.cube)...", "export-lut");
     }
 
     fn edit_menu(&mut self, ui: &mut egui::Ui) {
