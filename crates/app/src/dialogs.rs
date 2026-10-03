@@ -542,7 +542,7 @@ impl App {
             Dialog::New(..) => "New document",
             Dialog::ConfirmClose => "Unsaved changes",
             Dialog::ConfirmCloseTab(_) => "Close document",
-            Dialog::Recover => "Recover autosaved document",
+            Dialog::Recover => "Recover autosaved work",
             Dialog::Preferences(..) => "Preferences",
             Dialog::ColorRange(..) => "Colour range",
             Dialog::NewGuide(..) => "New guide",
@@ -1006,7 +1006,8 @@ impl App {
                             a11y_scroll(ui.ctx(), &scroll_out, "Shortcuts");
                         }
                         Dialog::Recover => {
-                            let n = session::autosave_backups().len();
+                            let backups = session::autosave_backups();
+                            let n = backups.len();
                             let text = if n > 1 {
                                 format!(
                                     "The previous session left autosaved backups of {n} documents, probably after a crash."
@@ -1015,14 +1016,23 @@ impl App {
                                 "The previous session left an autosaved backup, probably after a crash.".to_string()
                             };
                             note(ui, &text);
+                            // Which documents, by the file each came from.
+                            let names: Vec<String> = backups
+                                .iter()
+                                .map(|(_, src)| {
+                                    src.as_ref()
+                                        .map_or("Untitled".to_string(), |p| file_name(&p.to_string_lossy()))
+                                })
+                                .collect();
+                            note(ui, &names.join(", "));
                             footer(ui, |ui| {
                                 if ui.add(primary_button("Recover")).clicked() || enter {
                                     self.recover_autosave();
                                     keep = false;
                                 }
                                 if ui
-                                    .add(footer_button("Discard backup"))
-                                    .on_hover_text("Delete the backup and start fresh")
+                                    .add(footer_button(if n > 1 { "Discard backups" } else { "Discard backup" }))
+                                    .on_hover_text("Delete the autosaved work and start fresh")
                                     .clicked()
                                 {
                                     session::remove_autosave();
@@ -1408,10 +1418,10 @@ pub(crate) fn modal_backdrop(ctx: &egui::Context, dim: bool) {
 /// [`modal_backdrop`] without raising it: the caller raises it with its
 /// dialog once that has been shown ([`raise_modal`]).
 fn draw_backdrop(ctx: &egui::Context, dim: bool) -> egui::LayerId {
-    let id = egui::Id::new("modal-backdrop");
+    let layer = backdrop_layer();
     let screen = ctx.screen_rect();
-    egui::Area::new(id)
-        .order(egui::Order::Foreground)
+    egui::Area::new(layer.id)
+        .order(layer.order)
         .sense(BACKDROP_SENSE)
         .fixed_pos(screen.min)
         .show(ctx, |ui| {
@@ -1424,7 +1434,7 @@ fn draw_backdrop(ctx: &egui::Context, dim: bool) -> egui::LayerId {
                 ui.painter().rect_filled(r, 0.0, Color32::from_black_alpha(110));
             }
         });
-    egui::LayerId::new(egui::Order::Foreground, id)
+    layer
 }
 
 /// Keep a dialog directly above its backdrop, and raise the two to the top
@@ -1562,7 +1572,7 @@ mod tests {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
         let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(900.0, 600.0));
-        let mut frames = |app: &mut App, n: usize| {
+        let frames = |app: &mut App, n: usize| {
             for _ in 0..n {
                 let raw = egui::RawInput {
                     screen_rect: Some(screen),

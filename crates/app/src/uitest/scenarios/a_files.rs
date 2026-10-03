@@ -321,6 +321,24 @@ fn new_document(s: &mut Session) -> UiResult {
     s.key("Esc")?;
     let n = tabs(s)?.len();
     ck!(s, "no document was made", n, 4)?;
+
+    s.describe("A transparent document: Background contents ▸ Transparent");
+    s.key("Cmd+N")?;
+    s.click("Width unit")?;
+    s.click("Pixels")?;
+    s.set_field("Width", "300")?;
+    s.set_field("Height", "200")?;
+    s.click("Transparent")?;
+    s.click("Create")?;
+    s.wait_idle()?;
+    ck!(s, "300 × 200", (doc_size(s)?.0, doc_size(s)?.1), (300, 200))?;
+    ck!(
+        s,
+        "one empty Layer 1, no Background",
+        s.layer_names()?,
+        vec!["Layer 1".to_string()]
+    )?;
+    ck!(s, "the canvas is transparent", s.pixel(150, 100)?[3], 0)?;
     Ok(())
 }
 
@@ -651,7 +669,8 @@ fn autosave_and_recover(s: &mut Session) -> UiResult {
     })?;
 
     s.crash_and_relaunch()?;
-    s.expect_node("Recover autosaved document")?;
+    s.expect_node("Recover autosaved work")?;
+    s.expect_text("Untitled, saved.lumen")?;
     s.expect_text("autosaved backups of 2 documents")?;
     s.screenshot("recover");
     s.describe("Recover them");
@@ -719,8 +738,8 @@ fn tabs_and_duplicate(s: &mut Session) -> UiResult {
     )?;
     ck!(s, "the same pixels", s.pixel(60, 40)?, [200, 40, 40, 255])?;
     stroke(s, 40.0, 10.0, 110.0)?;
-    s.describe("Back to the original");
-    s.click("a.png")?;
+    s.describe("Back to the original from the Window menu (the tab may be scrolled away)");
+    s.menu("Window > a.png")?;
     ck!(
         s,
         "the original is untouched",
@@ -935,7 +954,7 @@ fn canvas_and_rotate(s: &mut Session) -> UiResult {
     s.describe("Rotate by angle: 30° clockwise");
     s.menu("Image > Rotate by angle...")?;
     s.set_field("Rotation angle", "30")?;
-    s.click("Rotate")?;
+    s.click_role(Role::Button, "Rotate")?;
     s.wait_idle()?;
     // The bounding box of a 400 × 200 rectangle turned 30°:
     // 400 cos 30 + 200 sin 30 = 446.4, 400 sin 30 + 200 cos 30 = 373.2.
@@ -1067,8 +1086,8 @@ fn export_formats(s: &mut Session) -> UiResult {
     let text = String::from_utf8_lossy(&bytes);
     s.check(
         "PDF: a 200 × 100 pt page",
-        bytes.starts_with(b"%PDF") && text.contains("/MediaBox [0 0 200 100]"),
-        "%PDF… /MediaBox [0 0 200 100]",
+        bytes.starts_with(b"%PDF") && text.contains("/MediaBox [0 0 200.000 100.000]"),
+        "%PDF… /MediaBox [0 0 200.000 100.000]",
         format!(
             "{} bytes, MediaBox {:?}",
             bytes.len(),
@@ -1184,8 +1203,9 @@ fn export_formats(s: &mut Session) -> UiResult {
     s.expect_disabled("Color Lookup Table (.cube)...", "Add an adjustment layer first")?;
     s.key("Esc")?;
     s.key("Esc")?;
-    s.describe("Add an Invert adjustment layer for the LUT");
-    s.menu("Layer > New adjustment layer > Invert")?;
+    s.describe("Add an Invert adjustment layer with the Layers panel's button");
+    s.click_role(Role::Button, "New adjustment layer")?;
+    s.click("Invert")?;
     s.wait_idle()?;
     export(s, "Color Lookup Table (.cube)...", &lut)?;
     let cube = std::fs::read_to_string(&lut).unwrap_or_default();
@@ -1195,16 +1215,41 @@ fn export_formats(s: &mut Session) -> UiResult {
         .map(str::to_string);
     s.check(
         "a 33³ cube whose first entry (black) maps to white",
-        cube.contains("LUT_3D_SIZE 33") && first.as_deref().is_some_and(|f| f.starts_with("1")),
+        cube.contains("LUT_3D_SIZE 33")
+            && first.as_deref().is_some_and(|f| {
+                f.split_whitespace()
+                    .filter_map(|v| v.parse::<f32>().ok())
+                    .filter(|v| *v > 0.999)
+                    .count()
+                    == 3
+            }),
         "LUT_3D_SIZE 33, first entry ≈ 1 1 1",
         format!("{} bytes, first {first:?}", cube.len()),
     )?;
     Ok(())
 }
 
-/// The corpus PSD with a visible and a hidden shape layer.
-const HIDDEN_LAYER_PSD: &str =
-    "/Users/johan/Projects/14_NGE/nge/target/psd-corpus/psd-tools/tests/psd_files/hidden-layer.psd";
+/// The corpus PSD with a visible and a hidden shape layer, from the
+/// psd-tools test files `scripts/psd_corpus.py fetch` puts in
+/// target/psd-corpus (or a corpus named by LUMENPLY_PSD_CORPUS).
+fn hidden_layer_psd() -> UiResult<std::path::PathBuf> {
+    const FILE: &str = "psd-tools/tests/psd_files/hidden-layer.psd";
+    let mut roots: Vec<std::path::PathBuf> = std::env::var_os("LUMENPLY_PSD_CORPUS")
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+    roots.extend(here.ancestors().map(|a| a.join("target/psd-corpus")));
+    roots
+        .iter()
+        .map(|r| r.join(FILE))
+        .find(|p| p.exists())
+        .ok_or_else(|| {
+            UiError(format!(
+                "no {FILE}: run scripts/psd_corpus.py fetch, or set LUMENPLY_PSD_CORPUS"
+            ))
+        })
+}
 
 fn open_files(s: &mut Session) -> UiResult {
     let dir = s.files();
@@ -1212,7 +1257,7 @@ fn open_files(s: &mut Session) -> UiResult {
     write_gradient(&png, 240, 160)?;
     let jpeg = dir.join("halves.jpg");
     write_jpeg_halves(&jpeg, 200, 100)?;
-    let psd = s.copy_in(HIDDEN_LAYER_PSD)?;
+    let psd = s.copy_in(hidden_layer_psd()?)?;
     let dng = dir.join("IMG_0001.dng");
     write_dng(&dng, 64, 48)?;
     let heic = dir.join("orange.heic");
@@ -1414,5 +1459,18 @@ fn open_files(s: &mut Session) -> UiResult {
     s.expect_node("halves.jpg")?;
     s.expect_node("IMG_0001.dng")?;
     s.key("Esc")?;
+    s.key("Esc")?;
+
+    s.screenshot("six-tabs");
+    s.describe("Six documents: switch to one from the Window menu");
+    s.menu("Window > orange.heic")?;
+    s.wait_idle()?;
+    ck!(
+        s,
+        "orange.heic is live",
+        (doc_size(s)?.0, doc_size(s)?.1),
+        (120, 80)
+    )?;
+    s.expect_node("Export")?;
     Ok(())
 }

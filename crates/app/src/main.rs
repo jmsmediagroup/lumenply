@@ -999,9 +999,10 @@ impl App {
         out
     }
 
-    /// Whether the live document differs from its file (or was never saved).
+    /// Whether the live document differs from its file (or was never saved);
+    /// never with no document open (the welcome screen's placeholder).
     pub(crate) fn live_unsaved(&self) -> bool {
-        Some(self.editor.version()) != self.saved_rev
+        !self.no_doc && Some(self.editor.version()) != self.saved_rev
     }
 
     fn any_unsaved(&self) -> bool {
