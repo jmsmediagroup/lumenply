@@ -18,10 +18,14 @@ Legend: `[x]` done and tested · `[~]` done but unverified or partial · `[ ]` n
       (W3C/Photoshop formulas incl. Hue/Saturation/Color/Luminosity,
       Darker/Lighter Color, canvas-anchored Dissolve; ADR 0015), opacity
 - [ ] Decision for the owner: optional gamma blending (Photoshop's "Blend RGB
-      colors using gamma"). Measured: with layer compositing on gamma values
-      the 29 blend-mode corpus files go from 18.1 to 3.0 mean difference
-      (single-mode files within 0.25-0.52 levels) and the whole corpus from
-      15.4 to 13.3; linear light stays physically right for blur/resample
+      colors using gamma"), built and tested on branch
+      `proposal/gamma-blending` (ADR 0021 "Proposed"): a per-document
+      `blend_gamma` flag threaded through the compositor (no globals), every
+      mixing site converted, GPU declines gamma documents, Image menu toggle;
+      PSD imports turn it on (one marked policy line). Corpus: mean 12.0 →
+      9.2, within 1/255 233 → 292, blend-mode files 18.5 → 3.9 (single-mode
+      files within 0.25–0.52 levels); linear documents byte-identical. Cost:
+      gamma documents composite ~3× slower on Normal-only stacks
 - [x] Layer tree: pixel, group (isolated), adjustment, live filter, text layers
 - [x] Layer masks (sparse, enable/disable), selections (coverage masks)
 - [x] Parallel tiled compositor (rayon), partial recomposite of a rectangle
@@ -302,6 +306,15 @@ None of these could be tested in the container.
       preview dialogs; Select > Grow and Similar (wand tolerance)
 - [x] Content-Aware Fill (multi-scale PatchMatch + EM voting, seeded; Edit menu,
       Shift+Backspace Fill dialog, selection bar): 500×400 hole in 2400×1600 in ~0.2 s
+- [x] Content-Aware Scale (Edit menu, Alt+Shift+Cmd+C): seam carving with
+      forward energy, removal and insertion, width and height, Amount blend
+      with Lanczos, Protect (selection or saved channels), Protect skin
+      tones, the layer mask carved along; 1800×1205 to 70% in 0.19 s;
+      workspace with handles and a live preview (ADR 0022). Still open:
+      scaling only a selection's content
+- [x] Perspective Crop (Crop ▸ Perspective): four-corner frame with a live
+      grid, W×H or automatic size, one PerspectiveCrop step (text, shapes and
+      smart objects rasterized, warned first)
 - [x] Puppet Warp (Edit menu, palette): full-window workspace; a mesh over
       the layer's opaque area that hugs the outline (Density, Expansion);
       click to pin, drag to warp live with as-rigid-as-possible deformation
