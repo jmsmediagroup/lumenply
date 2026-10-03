@@ -685,6 +685,29 @@ mod tests {
     }
 
     #[test]
+    fn pat_preset_files_list_their_patterns() {
+        // `8BPT`, version 1, two records back to back (no length prefix).
+        let a = checker();
+        let b = Pattern::new("second-id", "Plain", Raster::filled(2, 2, Rgba::WHITE));
+        let mut pat = b"8BPT".to_vec();
+        pat.extend_from_slice(&1u16.to_be_bytes());
+        put32(&mut pat, 2);
+        pat.extend_from_slice(&pattern_record(&a));
+        pat.extend_from_slice(&pattern_record(&b));
+        let list = crate::pattern_files::load_pat(&pat).unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(
+            (list[0].name.as_str(), list[0].width(), list[0].height()),
+            ("Checks", 3, 2)
+        );
+        assert_eq!(
+            (list[1].id.as_str(), list[1].image.get(1, 1)),
+            ("second-id", Rgba::WHITE)
+        );
+        assert!(crate::pattern_files::load_pat(b"8BPS....").is_err());
+    }
+
+    #[test]
     fn pattern_fill_and_overlay_descriptors_round_trip() {
         let r = checker().reference();
         let data = pattern_fill_block(&r, 0.5, [3.0, -2.0], 0.0);
