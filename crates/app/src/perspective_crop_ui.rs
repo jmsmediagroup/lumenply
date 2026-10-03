@@ -42,6 +42,8 @@ pub(crate) struct PerspCrop {
     pub(crate) quad: Option<[(f32, f32); 4]>,
     /// The W × H fields (0 = from the quad's edges).
     pub(crate) size: (u32, u32),
+    /// The canvas size the quad was drawn on; another size drops it.
+    canvas: (u32, u32),
     drag: Option<PDrag>,
     hover: Option<PGrip>,
 }
@@ -160,6 +162,13 @@ impl App {
         to_doc: impl Fn(Pos2) -> (f32, f32),
     ) {
         let primary = egui::PointerButton::Primary;
+        // The canvas changed under the frame (undo, Image Size): start over.
+        let canvas = (self.editor.doc().width, self.editor.doc().height);
+        if self.crop.persp.canvas != canvas {
+            self.crop.persp.canvas = canvas;
+            self.crop.persp.quad = None;
+            self.crop.persp.drag = None;
+        }
         let zoom = self.zoom;
         let st = &mut self.crop.persp;
         st.hover = resp.hover_pos().map(|p| pgrip_at(st.quad, to_doc(p), zoom));
@@ -420,6 +429,7 @@ impl App {
             ("on" | "off", _) => {}
             ("quad", &[x0, y0, x1, y1, x2, y2, x3, y3]) => {
                 self.crop.persp.quad = Some([(x0, y0), (x1, y1), (x2, y2), (x3, y3)]);
+                self.crop.persp.canvas = (self.editor.doc().width, self.editor.doc().height);
             }
             ("size", &[w, h]) => self.crop.persp.size = (w as u32, h as u32),
             ("drag", _) => {
@@ -499,6 +509,16 @@ mod tests {
         let p = d.layers()[0].pixels().unwrap().get_pixel(45, 30);
         assert!((p.r - 0.5).abs() < 1e-3 && (p.a - 1.0).abs() < 1e-3, "{p:?}");
         assert!(app.crop.persp.quad.is_none(), "the frame is used up");
+    }
+
+    #[test]
+    fn a_frame_on_another_canvas_size_is_dropped() {
+        let mut app = launch_doc();
+        app.debug_pcrop("pcrop:quad=50:30:150:30:170:80:30:80");
+        app.crop.persp.canvas = (10, 10);
+        let ctx = crate::a11y_tests::ctx();
+        crate::a11y_tests::nameless(&mut app, &ctx);
+        assert!(app.crop.persp.quad.is_none());
     }
 
     #[test]
