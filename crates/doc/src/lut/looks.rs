@@ -82,14 +82,14 @@ impl Look {
     pub fn eval(self, c: [f32; 3]) -> [f32; 3] {
         let out = match self {
             // Warm: midtones toward amber with black and white pinned —
-            // pow(c, (0.90, 0.97, 1.12)) — then 5% more saturation.
-            Look::Warm => sat(gamma(c, [0.90, 0.97, 1.12]), 1.05),
+            // pow(c, (0.93, 0.98, 1.08)) — then 5% more saturation.
+            Look::Warm => sat(gamma(c, [0.93, 0.98, 1.08]), 1.05),
             // Cool: the mirror image, pow(c, (1.10, 1.00, 0.90)), 3% less
             // saturation, as daylight-blue grades tend to be.
             Look::Cool => sat(gamma(c, [1.10, 1.00, 0.90]), 0.97),
             // Teal & Orange: split toning by luminance — shadows pushed
-            // toward teal by (−0.06, +0.01, +0.05)·(1 − Y)², highlights
-            // toward orange by (+0.06, +0.01, −0.06)·Y² — over an
+            // toward teal by (−0.07, +0.03, +0.04)·(1 − Y)², highlights
+            // toward orange by (+0.06, +0.015, −0.055)·Y² — over an
             // S(·, 0.25) contrast curve, then saturation × 1.15 so skin and
             // sky separate.
             Look::TealOrange => {
@@ -97,15 +97,15 @@ impl Look {
                 let s = c.map(|v| s_curve(v, 0.25));
                 let lo = (1.0 - y) * (1.0 - y);
                 let hi = y * y;
-                let teal = [-0.06, 0.01, 0.05];
-                let orange = [0.06, 0.01, -0.06];
+                let teal = [-0.07, 0.03, 0.04];
+                let orange = [0.06, 0.015, -0.055];
                 let t: [f32; 3] = std::array::from_fn(|i| s[i] + teal[i] * lo + orange[i] * hi);
                 sat(t, 1.15)
             }
             // Bleach Bypass: the classic shader — overlay the colour's
             // own luminance onto it (multiply-style `2·c·Y` below Y = 0.45,
             // screen-style `1 − 2(1 − c)(1 − Y)` above, crossfading over
-            // Y ∈ [0.45, 0.55]), mixed in at 80%, then saturation × 0.55.
+            // Y ∈ [0.45, 0.55]), mixed in at 60%, then saturation × 0.6.
             Look::BleachBypass => {
                 let y = luma(c);
                 let k = ((y - 0.45) * 10.0).clamp(0.0, 1.0);
@@ -113,9 +113,9 @@ impl Look {
                     let m = 2.0 * c[i] * y;
                     let s = 1.0 - 2.0 * (1.0 - c[i]) * (1.0 - y);
                     let ov = m + (s - m) * k;
-                    c[i] + (ov - c[i]) * 0.8
+                    c[i] + (ov - c[i]) * 0.6
                 });
-                sat(o, 0.55)
+                sat(o, 0.6)
             }
             // Faded Film: S(·, 0.2), then the range squeezed to
             // [0.07, 0.93] (milky blacks, soft whites), saturation × 0.8,
@@ -176,10 +176,10 @@ mod tests {
 
     #[test]
     fn the_formulas_give_their_documented_values() {
-        // Warm on mid grey: pow(0.5, (0.90, 0.97, 1.12)) = (0.535887,
-        // 0.510506, 0.460094); Y = 0.512262; ×1.05 saturation around Y.
+        // Warm on mid grey: pow(0.5, (0.93, 0.98, 1.08)) = (0.524858,
+        // 0.506980, 0.473029); Y = 0.508329; ×1.05 saturation around Y.
         let w = Look::Warm.eval([0.5; 3]);
-        assert!(near(w, [0.537068, 0.510418, 0.457485]), "{w:?}");
+        assert!(near(w, [0.525685, 0.506912, 0.471264]), "{w:?}");
         // Cool mirrors it: red pulled down, blue up.
         let c = Look::Cool.eval([0.5; 3]);
         assert!(near(c, [0.467385, 0.499864, 0.534674]), "{c:?}");
@@ -192,10 +192,10 @@ mod tests {
         assert!(near(Look::FadedFilm.eval([0.0; 3]), [0.07, 0.07, 0.095]));
         assert!(near(Look::FadedFilm.eval([1.0; 3]), [0.95, 0.93, 0.91]));
         // Bleach Bypass keeps black and white and desaturates pure red:
-        // Y = 0.2126 (multiply side), overlay (0.4252, 0, 0) at 80% →
-        // (0.54016, 0, 0); Y' = 0.11484; ×0.55 saturation.
+        // Y = 0.2126 (multiply side), overlay (0.4252, 0, 0) at 60% →
+        // (0.65512, 0, 0); Y' = 0.139279; ×0.6 saturation.
         let b = Look::BleachBypass.eval([1.0, 0.0, 0.0]);
-        assert!(near(b, [0.348766, 0.051678, 0.051678]), "{b:?}");
+        assert!(near(b, [0.448783, 0.055711, 0.055711]), "{b:?}");
         assert!(near(Look::BleachBypass.eval([1.0; 3]), [1.0; 3]));
         assert!(near(Look::BleachBypass.eval([0.0; 3]), [0.0; 3]));
         // Teal & Orange: shadows lean teal (blue above red), highlights

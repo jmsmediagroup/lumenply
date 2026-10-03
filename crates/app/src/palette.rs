@@ -170,6 +170,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Snap on or off", "snap"),
     ("New fill layer: solid color", "fill-solid"),
     ("New fill layer: gradient", "fill-gradient"),
+    ("Load 3D LUT as a Color Lookup...", "load-lut"),
     ("New shape layer from path", "shape-from-path"),
     ("Select and Mask...", "select-mask"),
     ("Import brushes (.abr)...", "import-brushes"),
@@ -752,6 +753,7 @@ impl App {
                 }
             }
             "fill-solid" | "fill-gradient" => self.add_fill_layer(id == "fill-gradient"),
+            "load-lut" => self.load_lut_action(),
             "shape-from-path" => self.shape_from_path(),
             "delete-layer" => self.delete_active(),
             "layer-up" => self.reorder_active(1),
@@ -913,7 +915,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 131); // + convert for smart filters, retouching modes
+        assert_eq!(n, 132); // + convert for smart filters, retouching modes, load-lut
     }
 
     #[test]

@@ -5,7 +5,8 @@
 //! raw `.cube` / `.3dl` bytes, `LUT3DFileName` the path it was loaded from,
 //! `LUTFormat` its format — beside `profile`, an ICC device link Photoshop
 //! derives from it. We read the file bytes (they are the source of truth)
-//! and write the table back as `.cube` text; abstract-profile and
+//! and write the table back as `.cube` text, with a device link built
+//! the way Photoshop builds it (`lut_profile`); abstract-profile and
 //! device-link lookups carry only an ICC profile, which we don't evaluate,
 //! so they import as an empty lookup with a warning. A fresh Color Lookup
 //! with nothing chosen is an empty descriptor: the identity.
@@ -150,6 +151,7 @@ pub(super) fn block_body(lut: &Lut3D, name: &str) -> Vec<u8> {
         )
         .with(b"Nm  ", Val::Text(file.clone()))
         .with(b"Dthr", Val::Bool(true))
+        .with(b"profile", Val::Raw(super::lut_profile::device_link(lut, base)))
         .with(
             b"LUTFormat",
             Val::Enum(b"LUTFormatType".to_vec(), b"LUTFormatCUBE".to_vec()),

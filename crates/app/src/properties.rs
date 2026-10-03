@@ -952,6 +952,7 @@ impl App {
                 finished |= slider_row_ex(ui, "Levels", &mut v, 2.0..=32.0, "", o);
                 *levels = (v.round() as u32).clamp(2, 32);
             }
+            Adjustment::ColorLookup { lut, name } => finished |= self.color_lookup_ui(ui, id, lut, name),
             other => finished |= crate::adjust_ui::adjustment_ui(ui, id, other),
         }
         if adj != before {

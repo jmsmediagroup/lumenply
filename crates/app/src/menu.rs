@@ -490,6 +490,8 @@ impl App {
                     self.add_adjustment(adj);
                 }
             }
+            ui.separator();
+            self.act(ui, "Load 3D LUT...", "load-lut");
         });
         menu(ui, "New live filter layer", |ui| {
             for (name, f) in filter_presets() {

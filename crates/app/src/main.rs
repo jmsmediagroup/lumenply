@@ -42,6 +42,7 @@ mod history;
 mod layer_actions;
 mod layers;
 mod liquify;
+mod lut_ui;
 mod macos_open;
 mod menu;
 mod options_bar;
@@ -1547,6 +1548,7 @@ fn adjustment_presets() -> Vec<(&'static str, Adjustment)> {
         ("Channel Mixer", Adjustment::channel_mixer_default()),
         ("Photo Filter", Adjustment::photo_filter_default()),
         ("Selective Color", Adjustment::selective_color_default()),
+        ("Color Lookup", Adjustment::color_lookup_default()),
     ]
 }
 

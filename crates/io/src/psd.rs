@@ -23,6 +23,7 @@ mod color_lookup;
 mod color_modes;
 mod effects;
 mod extra;
+mod lut_profile;
 mod masks;
 mod shape;
 

@@ -78,7 +78,7 @@ fn choosing_a_look_recolours_and_undo_restores() {
     let p = pixel(&ed);
     assert!(p.iter().all(|v| close(*v, 0.5)), "{p:?}");
     // Warm on mid grey lands on its formula's lattice value:
-    // (0.537068, 0.510418, 0.457485).
+    // (0.525685, 0.506912, 0.471264).
     ed.execute(&SetAdjustment {
         layer: id,
         adjustment: lookup(Look::Warm.table(), "Warm"),
@@ -86,7 +86,7 @@ fn choosing_a_look_recolours_and_undo_restores() {
     .unwrap();
     let p = pixel(&ed);
     assert!(
-        close(p[0], 0.537068) && close(p[1], 0.510418) && close(p[2], 0.457485),
+        close(p[0], 0.525685) && close(p[1], 0.506912) && close(p[2], 0.471264),
         "{p:?}"
     );
     // Monochrome Contrast greys it: S(0.5, 0.6) = 0.5.
@@ -98,7 +98,7 @@ fn choosing_a_look_recolours_and_undo_restores() {
     assert!(pixel(&ed).iter().all(|v| close(*v, 0.5)));
     ed.undo();
     let p = pixel(&ed);
-    assert!(close(p[0], 0.537068), "undo brings Warm back: {p:?}");
+    assert!(close(p[0], 0.525685), "undo brings Warm back: {p:?}");
     let LayerContent::Adjustment(Adjustment::ColorLookup { name, .. }) = &ed.doc().layer(id).unwrap().content
     else {
         panic!("still a Color Lookup layer");
