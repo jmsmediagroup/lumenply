@@ -203,6 +203,9 @@ pub(crate) struct Prefs {
     pub pen_size: bool,
     /// Pen pressure scales each dab's opacity.
     pub pen_opacity: bool,
+    /// Select Subject and Remove Background run BiRefNet at 1024² instead
+    /// of 768² (Preferences ▸ AI models).
+    pub ai_high_detail: bool,
     /// View ▸ Rulers along the canvas.
     pub show_rulers: bool,
     /// View ▸ Show guides.
@@ -298,6 +301,7 @@ impl Default for Prefs {
             history_collapsed: false,
             pen_size: true,
             pen_opacity: false,
+            ai_high_detail: false,
             show_rulers: false,
             show_guides: true,
             lock_guides: false,

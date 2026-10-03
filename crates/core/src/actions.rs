@@ -39,11 +39,16 @@ pub enum Step {
     Filter { filter: Filter },
     /// Image ▸ Image Size to exactly this many pixels, and to this
     /// resolution (ppi) when one was set; same pixels = no resampling.
+    /// With `keep_aspect` (recorded with "Keep aspect ratio" on) only the
+    /// width is kept: the height follows each image's own proportions, so
+    /// the action doesn't squash an image of another shape.
     ImageSize {
         width: u32,
         height: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resolution: Option<f32>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        keep_aspect: bool,
     },
     /// Scale (never enlarge) so the longer side is at most `long_edge`
     /// pixels, keeping the aspect ratio: Photoshop's Fit Image, for actions
@@ -132,13 +137,19 @@ impl Step {
             Step::ImageSize {
                 width,
                 height,
-                resolution: None,
-            } => format!("Image size {width} × {height}"),
-            Step::ImageSize {
-                width,
-                height,
-                resolution: Some(ppi),
-            } => format!("Image size {width} × {height} at {ppi} ppi"),
+                resolution,
+                keep_aspect,
+            } => {
+                let size = if *keep_aspect {
+                    format!("Image size {width} px wide, proportional")
+                } else {
+                    format!("Image size {width} × {height}")
+                };
+                match resolution {
+                    Some(ppi) => format!("{size} at {ppi} ppi"),
+                    None => size,
+                }
+            }
             Step::FitImage { long_edge } => format!("Fit image: long edge {long_edge} px"),
             Step::CanvasSize { width, height, .. } => format!("Canvas size {width} × {height}"),
             Step::RotateCanvas { degrees } => format!("Rotate canvas {degrees}°"),
@@ -147,6 +158,12 @@ impl Step {
             Step::Skipped { what } => format!("not recordable yet: {what}"),
         }
     }
+}
+
+/// The height that keeps a `w × h` image's proportions at `width` pixels
+/// wide (at least 1).
+pub fn proportional_height(w: u32, h: u32, width: u32) -> u32 {
+    ((width as f64 * h as f64 / w.max(1) as f64).round() as u32).max(1)
 }
 
 /// A named, replayable list of steps.
@@ -411,12 +428,18 @@ pub fn play_step<H: ActionHost + ?Sized>(host: &mut H, step: &Step) -> Result<()
             width,
             height,
             resolution,
+            keep_aspect,
         } => {
             if *width == 0 || *height == 0 {
                 return Err("image size must be above zero".into());
             }
             let d = host.editor().doc();
-            let same_px = (d.width, d.height) == (*width, *height);
+            let height = if *keep_aspect {
+                proportional_height(d.width, d.height, *width)
+            } else {
+                *height
+            };
+            let same_px = (d.width, d.height) == (*width, height);
             if same_px && resolution.is_none_or(|p| p == d.resolution) {
                 return Ok(()); // already that size
             }
@@ -424,7 +447,7 @@ pub fn play_step<H: ActionHost + ?Sized>(host: &mut H, step: &Step) -> Result<()
                 host,
                 &ResizeImage {
                     width: *width,
-                    height: *height,
+                    height,
                     resolution: *resolution,
                 },
             )
@@ -743,11 +766,13 @@ mod tests {
                 width: 10,
                 height: 5,
                 resolution: None,
+                keep_aspect: false,
             },
             Step::ImageSize {
                 width: 10,
                 height: 5,
                 resolution: Some(300.0),
+                keep_aspect: false,
             },
         ];
         let action = Action {
@@ -765,6 +790,44 @@ mod tests {
         assert_eq!(ed.history().len(), 1);
         ed.undo();
         assert_eq!((ed.doc().width, ed.doc().height), (64, 32));
+    }
+
+    /// Recorded on a 1920 × 1280 photo with "Keep aspect ratio" on, a
+    /// 960 px Image Size played on a 1920 × 1285 one gave 960 × 640 (the
+    /// recorded height), squashing it; now the height follows each image.
+    #[test]
+    fn a_proportional_image_size_keeps_each_images_shape() {
+        let step = Step::ImageSize {
+            width: 960,
+            height: 640,
+            resolution: None,
+            keep_aspect: true,
+        };
+        assert_eq!(step.describe(), "Image size 960 px wide, proportional");
+        let action = Action {
+            name: "Half".into(),
+            steps: vec![step.clone()],
+            builtin: false,
+        };
+        let mut cat = solid(1920, 1285, Rgba::new(0.5, 0.5, 0.5, 1.0));
+        assert_eq!(play(&mut CoreHost::new(&mut cat), &action), Ok(1));
+        assert_eq!((cat.doc().width, cat.doc().height), (960, 643));
+        let mut tall = solid(400, 1000, Rgba::new(0.5, 0.5, 0.5, 1.0));
+        play(&mut CoreHost::new(&mut tall), &action).unwrap();
+        assert_eq!((tall.doc().width, tall.doc().height), (960, 2400));
+        assert_eq!(proportional_height(1920, 1280, 960), 640);
+        assert_eq!(proportional_height(5000, 1, 10), 1, "never zero");
+        // Saved actions say so only when it is on, so old files still load.
+        let json = to_json(std::slice::from_ref(&action));
+        assert!(json.contains("\"keep_aspect\": true"), "{json}");
+        let fixed = Step::ImageSize {
+            width: 10,
+            height: 5,
+            resolution: None,
+            keep_aspect: false,
+        };
+        let old = r#"[{"name":"Old","steps":[{"step":"image-size","width":10,"height":5}]}]"#;
+        assert_eq!(from_json(old).unwrap()[0].steps, vec![fixed]);
     }
 
     #[test]
