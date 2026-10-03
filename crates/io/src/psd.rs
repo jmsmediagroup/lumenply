@@ -1612,6 +1612,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     let guides = crate::psd_guides::read_guides(resources);
     let light = effects::global_light(resources);
     let alpha_names = crate::psd_channels::read_names(resources);
+    let resolution = crate::resolution::read_psd(resources);
 
     let mut warnings: Vec<String> = cm.warning().into_iter().collect();
     let lm_len = rd.len_of(psb)?;
@@ -1921,6 +1922,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
     let mut doc = Document::new(width, height);
     doc.patterns = file_patterns;
     doc.guides = guides;
+    doc.resolution = resolution.unwrap_or(lumenply_doc::DEFAULT_RESOLUTION);
     // 32-bit files are linear float: keep values above 1 (HDR).
     doc.float_mode = cm.is_float();
     // The named alpha channels are the composite's last planes.

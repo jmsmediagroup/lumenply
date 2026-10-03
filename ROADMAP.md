@@ -48,6 +48,14 @@ Legend: `[x]` done and tested · `[~]` done but unverified or partial · `[ ]` n
 - [x] Masks: add (from selection), remove, enable, paint
 - [x] Move, free transform (scale/rotate/move), flip layer
 - [x] Crop to selection, canvas size with anchor, image size, rotate image 90/180, flip image
+- [x] Document resolution (ppi, ADR 0024): Image ▸ Image Size in px/%/in/cm/mm
+      with px/inch or px/cm and Resample on/off (off re-tags, never resamples);
+      File ▸ New presets (A4/Letter @ 300, HD, 4K, Instagram, 4×6/5×7) and print
+      units; status bar and Info show the print size; saved in .lumen, PSD
+      (1005), PNG (pHYs), JPEG (JFIF; EXIF/APP13 read), 16-bit TIFF, ORA;
+      exports, batch and PDF keep it; View ▸ Print size (approximate: the
+      screen is taken as 110 pt/in on macOS, 96 elsewhere)
+- [ ] Image Size "Fit To" presets; Camera Raw output resolution
 - [x] Text layers: add, edit (text, size, bold, colour), move, rasterize
 
 ### File formats (crates/io)

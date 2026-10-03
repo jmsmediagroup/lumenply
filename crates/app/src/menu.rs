@@ -662,6 +662,7 @@ impl App {
         self.act(ui, "Zoom out", "zoom-out");
         self.act(ui, "Fit on screen", "fit");
         self.act(ui, "Actual pixels", "actual");
+        self.act(ui, "Print size (approximate)", "print-size");
         menu_separator(ui);
         for (label, id) in [
             ("Rulers", "rulers"),
@@ -754,7 +755,7 @@ impl App {
                 .frame(false),
         );
         if plus.on_hover_text("New document (tab)").clicked() {
-            self.dialog = Some(Dialog::New(1920, 1080));
+            self.dialog = Some(Dialog::New(1920, 1080, 72.0));
         }
         if let Some(i) = switch {
             self.switch_tab(i);

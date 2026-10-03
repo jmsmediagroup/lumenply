@@ -120,22 +120,26 @@ fn open_doc(path: &Path, auto: bool) -> Result<lumenply_doc::Document> {
     {
         return super::load_any(&path.to_path_buf());
     }
-    let raster = open_flat(path, auto)?;
-    let mut ed = Editor::new(lumenply_doc::Document::new(raster.width, raster.height));
+    let (raster, ppi) = open_flat(path, auto)?;
+    let mut doc = lumenply_doc::Document::new(raster.width, raster.height);
+    doc.resolution = ppi;
+    let mut ed = Editor::new(doc);
     ed.execute(&AddPixelLayer::from_raster("Background", raster, 0, 0))?;
     Ok(ed.doc().clone())
 }
 
-/// Open `path`, play `action` on it, and return the flattened result.
-fn open_with_action(path: &Path, auto: bool, action: &Action) -> Result<Raster> {
+/// Open `path`, play `action` on it, and return the flattened result with
+/// its resolution (which the action may have changed).
+fn open_with_action(path: &Path, auto: bool, action: &Action) -> Result<(Raster, f32)> {
     let mut ed = Editor::new(open_doc(path, auto)?);
     actions::play(&mut actions::CoreHost::new(&mut ed), action)
         .map_err(|e| anyhow!("action \"{}\": {e}", action.name))?;
-    Ok(lumenply_render::composite_raster(ed.doc()))
+    Ok((lumenply_render::composite_raster(ed.doc()), ed.doc().resolution))
 }
 
-/// The flattened image of any file Lumenply opens.
-fn open_flat(path: &Path, auto: bool) -> Result<Raster> {
+/// The flattened image of any file Lumenply opens, with its print
+/// resolution (ppi; 72 when the file has none).
+fn open_flat(path: &Path, auto: bool) -> Result<(Raster, f32)> {
     let lower = path.to_string_lossy().to_ascii_lowercase();
     if lower.ends_with(".lumen")
         || lower.ends_with(".nge")
@@ -143,9 +147,10 @@ fn open_flat(path: &Path, auto: bool) -> Result<Raster> {
         || lower.ends_with(".psb")
     {
         let doc = super::load_any(&path.to_path_buf())?;
-        return Ok(lumenply_render::composite_raster(&doc));
+        return Ok((lumenply_render::composite_raster(&doc), doc.resolution));
     }
     let raster = lumenply_io::load(path)?;
+    let ppi = lumenply_io::resolution::file_ppi(path).unwrap_or(lumenply_doc::DEFAULT_RESOLUTION);
     if lumenply_io::raw::is_raw(path) {
         // As the Camera Raw workspace opens it: the camera tone curve,
         // plus Auto when asked.
@@ -154,12 +159,12 @@ fn open_flat(path: &Path, auto: bool) -> Result<Raster> {
         } else {
             Develop::default()
         };
-        return Ok(develop(&raster, &d));
+        return Ok((develop(&raster, &d), ppi));
     }
-    Ok(raster)
+    Ok((raster, ppi))
 }
 
-fn encode(r: &Raster, o: &Options) -> Result<(Vec<u8>, &'static str)> {
+fn encode(r: &Raster, o: &Options, ppi: f32) -> Result<(Vec<u8>, &'static str)> {
     Ok(match o.format.to_ascii_lowercase().as_str() {
         "png" => (lumenply_io::encode_png(r, !o.flatten)?, "png"),
         "jpg" | "jpeg" => (lumenply_io::encode_jpeg(r, o.quality)?, "jpg"),
@@ -171,7 +176,7 @@ fn encode(r: &Raster, o: &Options) -> Result<(Vec<u8>, &'static str)> {
             } else {
                 lumenply_io::pdf::PdfImage::Lossless
             };
-            (lumenply_io::pdf::encode_pdf(r, 72.0, image)?, "pdf")
+            (lumenply_io::pdf::encode_pdf(r, ppi, image)?, "pdf")
         }
         other => bail!("unknown format '{other}' (png, jpeg, webp, gif or pdf)"),
     })
@@ -185,7 +190,7 @@ pub fn run(inputs: &[PathBuf], o: &Options) -> Result<usize> {
     for input in inputs {
         let t = Instant::now();
         let result = (|| -> Result<PathBuf> {
-            let mut img = match &o.action {
+            let (mut img, ppi) = match &o.action {
                 Some(a) => open_with_action(input, o.auto, a)?,
                 None => open_flat(input, o.auto)?,
             };
@@ -198,13 +203,13 @@ pub fn run(inputs: &[PathBuf], o: &Options) -> Result<usize> {
                     *p = p.over(Rgba::WHITE);
                 }
             }
-            let (bytes, ext) = encode(&img, o)?;
+            let (bytes, ext) = encode(&img, o, ppi)?;
             let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
             let dest = o.out.join(format!("{stem}.{ext}"));
             if dest.canonicalize().ok() == input.canonicalize().ok() && dest.exists() {
                 bail!("would overwrite the input; choose another --out folder");
             }
-            std::fs::write(&dest, bytes)?;
+            std::fs::write(&dest, lumenply_io::resolution::with_ppi(bytes, ppi))?;
             println!(
                 "{} -> {} ({}×{}, {:.0} ms)",
                 input.display(),
@@ -278,6 +283,49 @@ mod tests {
         assert_eq!(failed, 1);
         let img = image::open(out.join("a.jpg")).unwrap();
         assert_eq!((img.width(), img.height()), (20, 10));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_batch_keeps_the_print_resolution() {
+        let dir = std::env::temp_dir().join(format!("lumenply-batch-ppi-{}", std::process::id()));
+        let out = dir.join("out");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("b.png");
+        lumenply_io::resolution::save_png(&src, &Raster::new(8, 6), 300.0).unwrap();
+        let mut doc = lumenply_doc::Document::new(8, 6);
+        doc.resolution = 240.0;
+        let proj = dir.join("c.lumen");
+        lumenply_io::project::save(&proj, &doc).unwrap();
+        for (format, ext) in [("jpeg", "jpg"), ("png", "png")] {
+            let opts = Options {
+                out: out.clone(),
+                format: format.into(),
+                quality: 80,
+                resize: None,
+                auto: false,
+                flatten: true,
+                action: None,
+            };
+            assert_eq!(run(&[src.clone(), proj.clone()], &opts).unwrap(), 0);
+            let ppi = |name: &str| lumenply_io::resolution::file_ppi(out.join(format!("{name}.{ext}")));
+            assert_eq!(ppi("b"), Some(300.0), "{format}");
+            assert_eq!(ppi("c"), Some(240.0), "{format}");
+        }
+        // PDF: the page is the print size (8 × 6 px at 300 ppi = 1.92 × 1.44 pt).
+        let opts = Options {
+            out: out.clone(),
+            format: "pdf".into(),
+            quality: 80,
+            resize: None,
+            auto: false,
+            flatten: true,
+            action: None,
+        };
+        assert_eq!(run(std::slice::from_ref(&src), &opts).unwrap(), 0);
+        let pdf = std::fs::read(out.join("b.pdf")).unwrap();
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/MediaBox [0 0 1.920 1.440]"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

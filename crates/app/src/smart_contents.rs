@@ -36,7 +36,10 @@ impl App {
         let b = lumenply_core::snap::painted_bounds(&sm.source).unwrap_or(Rect::new(0, 0, 1, 1));
         let raster = sm.source.to_raster(b);
         let name = layer.name.clone();
-        let mut ed = Editor::new(Document::new(b.w, b.h));
+        // The contents print at the parent document's resolution.
+        let mut contents = Document::new(b.w, b.h);
+        contents.resolution = self.editor.doc().resolution;
+        let mut ed = Editor::new(contents);
         let _ = ed.execute(&AddPixelLayer::from_raster("Contents", raster, 0, 0));
         let parent = self.doc_key;
         self.open_in_new_tab(Editor::new(ed.doc().clone()), None);

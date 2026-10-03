@@ -34,8 +34,14 @@ pub enum Step {
     /// Run a filter on the active layer: baked into a pixel layer, or added
     /// as a smart filter on a smart object (as the filter dialogs do).
     Filter { filter: Filter },
-    /// Image ▸ Image Size to exactly this many pixels.
-    ImageSize { width: u32, height: u32 },
+    /// Image ▸ Image Size to exactly this many pixels, and to this
+    /// resolution (ppi) when one was set; same pixels = no resampling.
+    ImageSize {
+        width: u32,
+        height: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolution: Option<f32>,
+    },
     /// Scale (never enlarge) so the longer side is at most `long_edge`
     /// pixels, keeping the aspect ratio: Photoshop's Fit Image, for actions
     /// that must work on images of any size.
@@ -116,7 +122,16 @@ impl Step {
             Step::Menu { id } => menu_label(id).to_string(),
             Step::Adjust { adjustment } => format!("Add {} layer", adjustment.name()),
             Step::Filter { filter } => filter.name().to_string(),
-            Step::ImageSize { width, height } => format!("Image size {width} × {height}"),
+            Step::ImageSize {
+                width,
+                height,
+                resolution: None,
+            } => format!("Image size {width} × {height}"),
+            Step::ImageSize {
+                width,
+                height,
+                resolution: Some(ppi),
+            } => format!("Image size {width} × {height} at {ppi} ppi"),
             Step::FitImage { long_edge } => format!("Fit image: long edge {long_edge} px"),
             Step::CanvasSize { width, height, .. } => format!("Canvas size {width} × {height}"),
             Step::RotateCanvas { degrees } => format!("Rotate canvas {degrees}°"),
@@ -359,15 +374,25 @@ pub fn play_step<H: ActionHost + ?Sized>(host: &mut H, step: &Step) -> Result<()
                 Err(format!("{} needs a pixel layer or smart object", filter.name()))
             }
         }
-        Step::ImageSize { width, height } => {
+        Step::ImageSize {
+            width,
+            height,
+            resolution,
+        } => {
             if *width == 0 || *height == 0 {
                 return Err("image size must be above zero".into());
+            }
+            let d = host.editor().doc();
+            let same_px = (d.width, d.height) == (*width, *height);
+            if same_px && resolution.is_none_or(|p| p == d.resolution) {
+                return Ok(()); // already that size
             }
             exec(
                 host,
                 &ResizeImage {
                     width: *width,
                     height: *height,
+                    resolution: *resolution,
                 },
             )
         }
@@ -385,6 +410,7 @@ pub fn play_step<H: ActionHost + ?Sized>(host: &mut H, step: &Step) -> Result<()
                 &ResizeImage {
                     width: nw,
                     height: nh,
+                    resolution: None,
                 },
             )
         }
@@ -633,15 +659,26 @@ mod tests {
                 height: 10,
                 anchor: [0.0, 0.0],
             },
-            Step::ImageSize { width: 10, height: 5 },
+            Step::ImageSize {
+                width: 10,
+                height: 5,
+                resolution: None,
+            },
+            Step::ImageSize {
+                width: 10,
+                height: 5,
+                resolution: Some(300.0),
+            },
         ];
         let action = Action {
             name: "Sizes".into(),
             steps,
             builtin: false,
         };
-        assert_eq!(play(&mut host, &action), Ok(4));
+        assert_eq!(play(&mut host, &action), Ok(5));
         assert_eq!((ed.doc().width, ed.doc().height), (10, 5));
+        // The repeated size only re-tags: 300 ppi, no resample.
+        assert_eq!(ed.doc().resolution, 300.0);
         assert_eq!(fit_long_edge(6000, 4000, 2048), (2048, 1365));
         assert_eq!(fit_long_edge(1000, 800, 2048), (1000, 800));
         // One undo step takes the whole action back.

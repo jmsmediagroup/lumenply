@@ -116,6 +116,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Zoom out", "zoom-out"),
     ("Fit on screen", "fit"),
     ("Actual pixels", "actual"),
+    ("Print size (approximate)", "print-size"),
     ("Show or hide the history strip", "toggle-history"),
     ("About Lumenply", "about"),
     ("Liquify...", "liquify"),
@@ -803,11 +804,11 @@ impl App {
         if self.run_panel_action(id) || self.run_everyday_action(id) || self.run_adjx_action(id) {
             return;
         }
-        if self.run_actions_panel_action(id) || self.run_proof_action(id) {
+        if self.run_actions_panel_action(id) || self.run_proof_action(id) || self.run_resolution_action(id) {
             return;
         }
         match id {
-            "new" => self.dialog = Some(Dialog::New(1920, 1080)),
+            "new" => self.dialog = Some(Dialog::New(1920, 1080, 72.0)),
             "open" => self.pick_open(),
             "demo" => self.open_demo(),
             "place" => self.pick_place(),
@@ -910,7 +911,9 @@ impl App {
             }
             "image-size" => {
                 let d = self.editor.doc();
-                self.dialog = Some(Dialog::ImageSize(d.width, d.height, true));
+                self.dialog = Some(Dialog::ImageSize(crate::image_size_ui::ImageSizeState::for_doc(
+                    d,
+                )));
             }
             "canvas-size" => {
                 let d = self.editor.doc();
@@ -1037,7 +1040,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 188); // + Proof colors, gamut warning, smart guides
+        assert_eq!(n, 189); // + Proof colors, gamut warning, smart guides, print size
     }
 
     #[test]

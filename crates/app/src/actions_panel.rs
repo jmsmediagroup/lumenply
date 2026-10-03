@@ -239,9 +239,15 @@ impl App {
         }
         let step = match d {
             Dialog::Filter(f) => Step::Filter { filter: f.clone() },
-            Dialog::ImageSize(w, h, _) => Step::ImageSize {
-                width: *w,
-                height: *h,
+            // The dialog's edit; its resolution only when it changed, so
+            // the action leaves other files' resolution alone.
+            Dialog::ImageSize(st) => match st.command() {
+                Some(cmd) => Step::ImageSize {
+                    width: cmd.width,
+                    height: cmd.height,
+                    resolution: cmd.resolution.filter(|&p| p != st.orig.2),
+                },
+                None => return,
             },
             Dialog::CanvasSize(w, h, anchor) => Step::CanvasSize {
                 width: *w,
@@ -836,11 +842,16 @@ mod tests {
         });
         app.actions_sync();
         // A dialog confirmation, as dialogs() records it.
-        let d = Dialog::ImageSize(24, 16, true);
+        let mut st = crate::image_size_ui::ImageSizeState::for_doc(app.editor.doc());
+        st.constrain = false;
+        st.set_width(crate::image_size_ui::SizeUnit::Pixels, 24.0);
+        st.set_height(crate::image_size_ui::SizeUnit::Pixels, 16.0);
+        let d = Dialog::ImageSize(st);
         app.record_dialog(&d);
         app.run(&ResizeImage {
             width: 24,
             height: 16,
+            resolution: None,
         });
         // The next frame accounts for it (a claim lasts until a sync).
         app.actions_sync();
@@ -860,7 +871,8 @@ mod tests {
                 },
                 Step::ImageSize {
                     width: 24,
-                    height: 16
+                    height: 16,
+                    resolution: None,
                 },
                 Step::Skipped {
                     what: "Add layer 'Paint here'".into()

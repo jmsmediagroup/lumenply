@@ -148,8 +148,10 @@ pub fn save(path: impl AsRef<Path>, doc: &Document) -> Result<Report<()>, OraErr
     let mut xml = String::new();
     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     xml.push_str(&format!(
-        "<image version=\"0.0.3\" w=\"{}\" h=\"{}\" xres=\"72\" yres=\"72\">\n<stack>\n",
-        doc.width, doc.height
+        "<image version=\"0.0.3\" w=\"{}\" h=\"{}\" xres=\"{ppi}\" yres=\"{ppi}\">\n<stack>\n",
+        doc.width,
+        doc.height,
+        ppi = doc.resolution
     ));
     let mut counter = 0usize;
     for l in doc.layers().iter().rev() {
@@ -334,6 +336,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, OraError> {
     let mut reader = quick_xml::Reader::from_str(&xml);
     reader.config_mut().trim_text(true);
     let (mut width, mut height) = (0u32, 0u32);
+    let mut ppi = None;
     // Stack of layer lists being built; layers arrive top-first, so each
     // finished list is reversed into bottom-to-top order.
     let mut stacks: Vec<Vec<Layer>> = Vec::new();
@@ -365,6 +368,10 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, OraError> {
                     b"image" => {
                         width = attrs("w").and_then(|v| v.parse().ok()).unwrap_or(0);
                         height = attrs("h").and_then(|v| v.parse().ok()).unwrap_or(0);
+                        // OpenRaster resolution is pixels per inch.
+                        ppi = attrs("xres")
+                            .and_then(|v| v.parse::<f64>().ok())
+                            .and_then(crate::resolution::snap_ppi);
                         if width == 0 || height == 0 || width > MAX_DIM || height > MAX_DIM {
                             return Err(OraError::Corrupt(format!(
                                 "canvas {width}×{height} is not a sane size"
@@ -424,7 +431,8 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, OraError> {
     if width == 0 {
         return Err(OraError::NotOra("no <image> element".into()));
     }
-    let doc = Document::from_parts(width, height, top, next_id);
+    let mut doc = Document::from_parts(width, height, top, next_id);
+    doc.resolution = ppi.unwrap_or(doc.resolution);
     Ok(Report { value: doc, warnings })
 }
 

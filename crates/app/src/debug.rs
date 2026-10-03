@@ -34,6 +34,7 @@ impl App {
             || self.debug_pcrop(tok)
             || self.debug_adjx(ctx, tok)
             || self.debug_actions(tok)
+            || self.debug_image_size(ctx, tok)
             || self.debug_smart_guides(ctx, tok)
     }
 
@@ -440,7 +441,7 @@ impl App {
                 }
             }
             "start:recover-now" => self.recover_autosave(),
-            "start:new" => self.dialog = Some(Dialog::New(1920, 1080)),
+            "start:new" => self.dialog = Some(Dialog::New(1920, 1080, 72.0)),
             _ => return false,
         }
         true

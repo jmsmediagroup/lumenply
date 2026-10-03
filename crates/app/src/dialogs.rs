@@ -4,10 +4,13 @@ use super::*;
 
 pub(crate) enum Dialog {
     ExportJpeg(String, u8),
-    New(u32, u32),
+    /// File ▸ New: (width px, height px, resolution ppi).
+    New(u32, u32, f32),
     Filter(Filter),
     CanvasSize(u32, u32, (f32, f32)),
-    ImageSize(u32, u32, bool),
+    /// Image ▸ Image Size: pixels, print size, resolution and Resample
+    /// (image_size_ui.rs). OK runs `state.command()`, one `ResizeImage`.
+    ImageSize(crate::image_size_ui::ImageSizeState),
     /// The window close was intercepted because of unsaved changes.
     ConfirmClose,
     /// Closing one document tab (by display index) with unsaved changes.
@@ -233,7 +236,10 @@ impl App {
             // Either container is fine; anything else gets ".png".
             let p = enforce_extension(p, &["png", "tif", "tiff"]);
             let flat = lumenply_render::composite_raster(self.editor.doc());
-            match lumenply_io::save_16bit(&p, &flat) {
+            let ppi = self.editor.doc().resolution;
+            match lumenply_io::save_16bit(&p, &flat)
+                .and_then(|()| lumenply_io::resolution::set_file_ppi(&p, ppi))
+            {
                 Ok(()) => self.status = format!("Exported {}", p.display()),
                 Err(e) => self.status = format!("Could not export: {e}"),
             }
@@ -354,6 +360,7 @@ impl App {
                 // EXR is linear float: open in float mode so HDR values
                 // survive the import (and every edit after it).
                 doc.float_mode = path.to_ascii_lowercase().ends_with(".exr");
+                doc.resolution = lumenply_io::resolution::file_ppi(path).unwrap_or(doc.resolution);
                 let mut ed = Editor::new(doc);
                 let _ = ed.execute(&AddPixelLayer::from_raster("Background", raster, 0, 0));
                 // A fresh editor: the opened image is the starting point,
@@ -409,7 +416,7 @@ impl App {
 
     pub(crate) fn export_png(&mut self, path: &str) {
         let flat = lumenply_render::composite_raster(self.editor.doc());
-        match lumenply_io::save_png(path, &flat) {
+        match lumenply_io::resolution::save_png(path, &flat, self.editor.doc().resolution) {
             Ok(()) => self.status = format!("Exported {path}"),
             Err(e) => self.status = format!("Could not export: {e}"),
         }
@@ -432,8 +439,8 @@ impl App {
         } else {
             PdfImage::Jpeg(92)
         };
-        let written =
-            encode_pdf(&flat, 72.0, image).and_then(|b| std::fs::write(path, b).map_err(Into::into));
+        let ppi = self.editor.doc().resolution;
+        let written = encode_pdf(&flat, ppi, image).and_then(|b| std::fs::write(path, b).map_err(Into::into));
         match written {
             Ok(()) => {
                 let how = if clear {
@@ -449,7 +456,7 @@ impl App {
 
     pub(crate) fn export_jpeg(&mut self, path: &str, quality: u8) {
         let flat = lumenply_render::composite_raster(self.editor.doc());
-        match lumenply_io::save_jpeg(path, &flat, quality) {
+        match lumenply_io::resolution::save_jpeg(path, &flat, quality, self.editor.doc().resolution) {
             Ok(()) => self.status = format!("Exported {path} (quality {quality})"),
             Err(e) => self.status = format!("Could not export: {e}"),
         }
@@ -1019,18 +1026,7 @@ impl App {
                             *q = qf.round().clamp(1.0, 100.0) as u8;
                             note(ui, "Transparent areas are flattened onto white.");
                         }
-                        Dialog::New(w, h) => {
-                            field_row(
-                                ui,
-                                "Width",
-                                egui::DragValue::new(w).range(1..=16384).suffix(" px"),
-                            );
-                            field_row(
-                                ui,
-                                "Height",
-                                egui::DragValue::new(h).range(1..=16384).suffix(" px"),
-                            );
-                        }
+                        Dialog::New(w, h, ppi) => crate::image_size_ui::new_doc_ui(ui, w, h, ppi),
                         Dialog::Filter(f) => {
                             let row = |ui: &mut egui::Ui,
                                        label: &str,
@@ -1133,31 +1129,7 @@ impl App {
                                 anchor_grid(ui, anchor);
                             });
                         }
-                        Dialog::ImageSize(w, h, lock) => {
-                            let (ow, oh) = (self.editor.doc().width as f32, self.editor.doc().height as f32);
-                            let rw = field_row(
-                                ui,
-                                "Width",
-                                egui::DragValue::new(w).range(1..=16384).suffix(" px"),
-                            );
-                            let rh = field_row(
-                                ui,
-                                "Height",
-                                egui::DragValue::new(h).range(1..=16384).suffix(" px"),
-                            );
-                            if *lock {
-                                if rw.changed() {
-                                    *h = ((*w as f32) * oh / ow).round().max(1.0) as u32;
-                                } else if rh.changed() {
-                                    *w = ((*h as f32) * ow / oh).round().max(1.0) as u32;
-                                }
-                            }
-                            ui.horizontal(|ui| {
-                                ui.add_space(LABEL_W + ui.spacing().item_spacing.x);
-                                check(ui, lock, "Keep aspect ratio");
-                            });
-                            note(ui, "Resamples every layer: bilinear when enlarging, averaged when shrinking.");
-                        }
+                        Dialog::ImageSize(st) => crate::image_size_ui::image_size_ui(ui, st),
                     }
                     if !primary.is_empty() {
                         // A reference page has nothing to cancel.
@@ -1264,7 +1236,9 @@ impl App {
                     self.status = "Preferences saved".into();
                 }
                 Dialog::ExportJpeg(p, q) => self.export_jpeg(p, *q),
-                Dialog::New(w, h) => self.open_in_new_tab(blank(*w, *h), None),
+                Dialog::New(w, h, ppi) => {
+                    self.open_in_new_tab(crate::image_size_ui::blank_at(*w, *h, *ppi), None)
+                }
                 Dialog::Filter(f) => {
                     if let Some(layer) = self.active {
                         self.apply_filter_dialog(ctx, layer, f.clone());
@@ -1278,12 +1252,17 @@ impl App {
                     });
                     self.view_cmd = Some(ViewCmd::Fit);
                 }
-                Dialog::ImageSize(w, h, _) => {
-                    self.run(&ResizeImage {
-                        width: *w,
-                        height: *h,
-                    });
-                    self.view_cmd = Some(ViewCmd::Fit);
+                Dialog::ImageSize(st) => {
+                    // The whole edit is one ResizeImage (pixels and/or
+                    // resolution); `None` when nothing changed.
+                    if let Some(cmd) = st.command() {
+                        let doc = self.editor.doc();
+                        let resampled = (cmd.width, cmd.height) != (doc.width, doc.height);
+                        self.run(&cmd);
+                        if resampled {
+                            self.view_cmd = Some(ViewCmd::Fit);
+                        }
+                    }
                 }
             }
             keep = false;

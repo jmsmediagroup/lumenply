@@ -481,6 +481,7 @@ mod tests {
         ed.execute(&ResizeImage {
             width: 32,
             height: 32,
+            resolution: None,
         })
         .unwrap();
         assert_eq!(ed.doc().width, 32);

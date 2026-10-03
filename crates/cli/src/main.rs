@@ -183,18 +183,20 @@ fn main() -> Result<()> {
                 doc.layer_count(),
                 t.elapsed().as_secs_f64() * 1e3
             );
-            lumenply_io::save_png(&out, &flat)?;
+            lumenply_io::resolution::save_png(&out, &flat, doc.resolution)?;
             println!("wrote {}", out.display());
             Ok(())
         }
         Cmd::Info { project } => {
             let doc = load_any(&project)?;
+            let (w_in, h_in) = doc.print_size_inches();
             println!(
                 "{}x{} px, {} layers (bottom to top):",
                 doc.width,
                 doc.height,
                 doc.layer_count()
             );
+            println!("resolution {} ppi ({w_in:.2} x {h_in:.2} in)", doc.resolution);
             print_tree(doc.layers(), 1);
             Ok(())
         }

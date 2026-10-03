@@ -79,6 +79,8 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
   `puppet:open|pin=X:Y|drag=I:X:Y|ok`, `adjx:open=sh|equalize|replace|match|adjd-<kind>`
   (Image ▸ Adjustments dialogs; `adjx:sh=…`, `adjx:pick=X:Y`, `adjx:ok`),
   `actions:show|record|stop|play=NAME|open=NAME|select=NAME`,
+  `size:unit=in|cm|mm|px|pct|resample=on|off|width=V|res=V|new=N|doc-ppi=V`
+  (Image Size / New; end dialog shots with `popups:sleep=400,popups:wait`),
   `proof-colors` / `gamut-warning` (palette ids: View ▸ Proof Colors / Gamut
   Warning, display-only CMYK soft proof); drags as
   `popups:press=X:Y,popups:move=X:Y,popups:release=X:Y`, typing as
