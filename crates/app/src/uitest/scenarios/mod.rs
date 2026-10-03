@@ -10,7 +10,13 @@ use super::Scenario;
 
 mod adjust;
 mod basics;
+mod i_ai_actions;
 mod selection;
 
 /// Every area's scenarios, in the order `--uitest` runs them.
-pub(crate) const AREAS: &[&[Scenario]] = &[basics::SCENARIOS, adjust::SCENARIOS, selection::SCENARIOS];
+pub(crate) const AREAS: &[&[Scenario]] = &[
+    basics::SCENARIOS,
+    adjust::SCENARIOS,
+    selection::SCENARIOS,
+    i_ai_actions::SCENARIOS,
+];
