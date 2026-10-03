@@ -125,6 +125,7 @@ impl App {
 
         let mut toggle_vis = None;
         let mut select: Option<(LayerId, bool)> = None;
+        let mut load_pixels: Option<(LayerId, CombineOp)> = None;
         let mut toggle_collapse = None;
         let mut rename_start = None;
         let mut text_edit_start = None;
@@ -517,6 +518,17 @@ impl App {
                         text_edit_start = Some(row.id);
                     } else if resp.double_clicked() {
                         rename_start = Some((row.id, row.name.clone()));
+                    } else if resp.clicked() && on_thumb && ctrl && row.kind != Kind::Group {
+                        // Photoshop: Cmd-click a thumbnail loads the layer's
+                        // pixels as the selection (Shift adds, Alt subtracts).
+                        let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
+                        let op = match (shift, alt) {
+                            (true, true) => CombineOp::Intersect,
+                            (true, false) => CombineOp::Union,
+                            (false, true) => CombineOp::Subtract,
+                            (false, false) => CombineOp::Replace,
+                        };
+                        load_pixels = Some((row.id, op));
                     } else if resp.clicked() {
                         let on_control = resp
                             .interact_pointer_pos()
@@ -598,6 +610,9 @@ impl App {
         self.renaming = renaming;
         if let Some(id) = text_edit_start {
             self.begin_text_edit(ui.ctx(), id, crate::text_edit::EditStart::All);
+        }
+        if let Some((id, op)) = load_pixels {
+            self.load_layer_pixels(id, op);
         }
         if let Some((id, add)) = select {
             if add {

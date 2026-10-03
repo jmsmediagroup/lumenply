@@ -36,6 +36,8 @@ pub(crate) enum Dialog {
     SaveSelection(String),
     /// Select ▸ Load Selection: (saved selection, how it combines, invert).
     LoadSelection(usize, CombineOp, bool),
+    /// Edit ▸ Stroke: (width px, location, opacity %).
+    Stroke(f32, lumenply_core::everyday::StrokeLocation, f32),
 }
 
 /// Extensions the open dialogs offer, by kind. The first of each list is
@@ -456,6 +458,7 @@ impl App {
             Dialog::Shortcuts => "Keyboard shortcuts",
             Dialog::SaveSelection(..) => "Save selection",
             Dialog::LoadSelection(..) => "Load selection",
+            Dialog::Stroke(..) => "Stroke",
             Dialog::About => "About",
             Dialog::Filter(f) => f.name(),
             Dialog::CanvasSize(..) => "Canvas size",
@@ -473,6 +476,7 @@ impl App {
             Dialog::NewGuide(..) => "Add",
             Dialog::SaveSelection(..) => "Save",
             Dialog::LoadSelection(..) => "Load",
+            Dialog::Stroke(..) => "Stroke",
             Dialog::Trim(..) => "Trim",
             Dialog::RotateBy(..) => "Rotate",
             Dialog::Shortcuts => "Close",
@@ -647,6 +651,9 @@ impl App {
                                 segmented(ui, clockwise, &[(true, "Clockwise"), (false, "Counter-clockwise")]);
                             });
                             note(ui, "The canvas grows to fit; the new corners are transparent.");
+                        }
+                        Dialog::Stroke(width, location, opacity) => {
+                            App::stroke_dialog_ui(ui, width, location, opacity);
                         }
                         Dialog::SaveSelection(name) => {
                             ui.horizontal(|ui| {
@@ -1185,6 +1192,9 @@ impl App {
                 }
                 Dialog::SaveSelection(name) => {
                     self.run(&lumenply_core::channels::SaveSelection { name: name.clone() })
+                }
+                Dialog::Stroke(width, location, opacity) => {
+                    self.stroke_selection(*width, *location, *opacity)
                 }
                 Dialog::LoadSelection(index, op, invert) => {
                     self.run(&lumenply_core::channels::LoadSelection {

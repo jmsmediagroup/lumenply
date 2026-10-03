@@ -381,6 +381,11 @@ None of these could be tested in the container.
       Rotate by angle (canvas grows to fit, transparent corners) — all through
       CropCanvas, so masks, guides, paths and smart objects follow. Text
       layers stay upright when the canvas turns (as in a straightened crop)
+- [x] Everyday edits: Layer via Cut (Shift+Cmd+J), Reselect (Shift+Cmd+D),
+      Edit ▸ Stroke (inside/centre/outside, width, opacity, foreground
+      colour), Cmd-click a layer thumbnail to load its pixels as the
+      selection (Shift adds, Alt subtracts, both intersect), Bring to Front /
+      Send to Back (Shift+Cmd+] / [), Image ▸ Duplicate
 - [x] Merge selected layers (Cmd+E with several layers selected, "Merge
       layers"): the selected visible siblings composite into the topmost
       one's slot and name; hidden ones stay; picture unchanged (tested)

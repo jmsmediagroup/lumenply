@@ -196,6 +196,13 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Make work path from selection", "make-work-path"),
     ("Puppet Warp", "puppet-warp"),
     ("Camera Raw Filter...", crate::camera_raw_filter::CRF_ACTION),
+    ("Layer via cut", "layer-via-cut"),
+    ("Reselect", "reselect"),
+    ("Stroke selection...", "stroke-selection"),
+    ("Load layer pixels as selection", "select-layer-pixels"),
+    ("Bring layer to front", "layer-front"),
+    ("Send layer to back", "layer-back"),
+    ("Duplicate document", "duplicate-doc"),
 ];
 
 impl App {
@@ -567,6 +574,9 @@ impl App {
         if let Some(block) = self.panel_action_block(id) {
             return block;
         }
+        if let Some(block) = self.everyday_action_block(id) {
+            return block;
+        }
         if let Some(block) = self.crf_action_block(id) {
             return block;
         }
@@ -663,6 +673,9 @@ impl App {
         if let Some(keys) = self.layer_action_keys(ctx, id) {
             return keys;
         }
+        if let Some(keys) = self.everyday_action_keys(ctx, id) {
+            return keys;
+        }
         if let Some(keys) = self.panel_action_keys(ctx, id) {
             return keys;
         }
@@ -711,7 +724,7 @@ impl App {
         if self.run_layer_action(id) || self.run_smart_filter_action(id) || self.run_crf_action(id) {
             return;
         }
-        if self.run_panel_action(id) {
+        if self.run_panel_action(id) || self.run_everyday_action(id) {
             return;
         }
         match id {
@@ -940,7 +953,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 143); // + Camera Raw Filter
+        assert_eq!(n, 150); // + layer via cut, reselect, stroke, layer pixels, front/back, duplicate document
     }
 
     #[test]

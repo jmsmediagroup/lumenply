@@ -28,12 +28,16 @@ pub(crate) const SHORTCUTS: &[(&str, &str, bool, bool, &str)] = &[
     // Before "select-all": Shift+Cmd+A contains Cmd+A.
     ("camera-raw-filter", "Camera Raw Filter", true, true, "A"),
     ("select-all", "Select all", true, false, "A"),
+    // Before "deselect": Shift+Cmd+D contains Cmd+D.
+    ("reselect", "Reselect", true, true, "D"),
     ("deselect", "Deselect", true, false, "D"),
     ("save", "Save", true, false, "S"),
     ("open", "Open", true, false, "O"),
     ("close", "Close document", true, false, "W"),
     ("xform", "Free transform", true, false, "T"),
     ("group", "Group layers", true, false, "G"),
+    // Before "layer-via-copy": Shift+Cmd+J contains Cmd+J.
+    ("layer-via-cut", "Layer via cut", true, true, "J"),
     ("layer-via-copy", "Layer via copy", true, false, "J"),
     ("merge-visible", "Merge visible", true, true, "E"),
     ("merge-down", "Merge down", true, false, "E"),

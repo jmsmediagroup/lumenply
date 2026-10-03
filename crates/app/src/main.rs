@@ -36,6 +36,7 @@ mod crop;
 mod debug;
 mod demo;
 mod dialogs;
+mod everyday_ui;
 mod export_as;
 mod gradient_ui;
 mod guides;
@@ -1952,6 +1953,10 @@ pub(crate) mod a11y_tests {
             ("Trim", Dialog::Trim(true)),
             ("Keyboard shortcuts", Dialog::Shortcuts),
             ("Rotate canvas", Dialog::RotateBy(15.0, true)),
+            (
+                "Stroke",
+                Dialog::Stroke(3.0, lumenply_core::everyday::StrokeLocation::Center, 100.0),
+            ),
             (
                 "Load selection",
                 Dialog::LoadSelection(0, CombineOp::Replace, false),

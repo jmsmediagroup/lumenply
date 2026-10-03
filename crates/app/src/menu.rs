@@ -411,6 +411,7 @@ impl App {
         menu_separator(ui);
         self.act(ui, "Fill with brush colour", "fill");
         self.act(ui, "Fill...", "fill-dialog");
+        self.act(ui, "Stroke...", "stroke-selection");
         self.act(ui, "Content-Aware Fill...", "content-aware");
         self.act(ui, "Clear", "clear");
         self.act(ui, "Define brush tip", "define-brush");
@@ -419,6 +420,8 @@ impl App {
     }
 
     fn image_menu(&mut self, ui: &mut egui::Ui) {
+        self.act(ui, "Duplicate...", "duplicate-doc");
+        menu_separator(ui);
         self.act(ui, "Image size...", "image-size");
         self.act(ui, "Canvas size...", "canvas-size");
         self.act(ui, "Crop to selection", "crop");
@@ -446,6 +449,7 @@ impl App {
     fn select_menu(&mut self, ui: &mut egui::Ui) {
         self.act(ui, "All", "select-all");
         self.act(ui, "Deselect", "deselect");
+        self.act(ui, "Reselect", "reselect");
         self.act(ui, "Invert", "invert-sel");
         menu_separator(ui);
         self.act(ui, "Colour range...", "color-range");
@@ -486,6 +490,10 @@ impl App {
         self.act(ui, "New pixel layer", "new-layer");
         self.act(ui, "Duplicate layer", "duplicate-layer");
         self.act(ui, "Layer via copy", "layer-via-copy");
+        self.act(ui, "Layer via cut", "layer-via-cut");
+        self.act(ui, "Load layer pixels as selection", "select-layer-pixels");
+        self.act(ui, "Bring to front", "layer-front");
+        self.act(ui, "Send to back", "layer-back");
         menu(ui, "New adjustment layer", |ui| {
             for (name, adj) in adjustment_presets() {
                 if menu_item(ui, name, "") {
