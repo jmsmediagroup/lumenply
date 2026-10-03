@@ -944,11 +944,6 @@ impl Session {
         egui::Rect::from_min_size(Pos2::ZERO, self.opts.size)
     }
 
-    /// The window's size in points.
-    pub(crate) fn window_size(&self) -> Vec2 {
-        self.opts.size
-    }
-
     fn visible(&self, n: &Node) -> bool {
         let r = n.rect.intersect(self.screen());
         r.width() >= 1.0 && r.height() >= 1.0
