@@ -220,8 +220,8 @@ None of these could be tested in the container.
 - [x] OpenRaster (.ora) import/export for GIMP/Krita interchange (layers, groups,
       opacity, visibility, the ten blend modes; masks baked in, adjustments and
       live filters skipped with warnings)
-- [x] CMYK soft-proofing: View ▸ Proof Colors (Cmd+Y; Ctrl+Y is no longer a
-      Redo alias on Windows/Linux, as in Photoshop) and Gamut Warning
+- [x] CMYK soft-proofing: View ▸ Proof Colors (Cmd+Y, which is no longer a
+      second Redo key, as in Photoshop) and Gamut Warning
       (Shift+Cmd+Y), display only, U.S. Web Coated (SWOP) through the built-in
       Neugebauer model (medium GCR, 300 % ink limit, Oklab nearest-colour
       clipping, black point compensation) via a 33³ tetrahedral lookup
