@@ -321,9 +321,11 @@ None of these could be tested in the container.
       SHA-256-checked downloads; `lumenply ai models|download|remove-bg|
       select`; wired into the app (models in the data folder, BiRefNet
       unloaded after each run)
-- [ ] BiRefNet at 1024 peaks near 10 GB: evaluate the 512 model, keep 1024
-      as an optional "high detail" model, refuse runs that won't fit in
-      memory
+- [x] BiRefNet: a native-DeformConv re-export of the lite weights (bit-
+      identical tensors, pinned by commit and SHA-256) at 768: 3 GB peak,
+      0.6 s (was 10.5 GB, 2.7 s); 1024 as "high detail" (5 GB); runs that
+      won't fit in memory are refused; models with external data refused
+- [ ] A UI choice for BiRefNet's high-detail setting
 - [ ] AI on Intel Macs (no prebuilt ONNX Runtime) and on Windows/Linux
       (DirectML and CUDA untested)
 - [ ] Object Selection refinements: negative-point prompts, Photoshop's
