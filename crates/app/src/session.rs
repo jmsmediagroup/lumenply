@@ -31,6 +31,7 @@ pub(crate) const SHORTCUTS: &[(&str, &str, bool, bool, &str)] = &[
     // Before "deselect": Shift+Cmd+D contains Cmd+D.
     ("reselect", "Reselect", true, true, "D"),
     ("deselect", "Deselect", true, false, "D"),
+    ("feather", "Feather selection", false, true, "F6"),
     // Before "save": Shift+Cmd+S contains Cmd+S.
     ("saveas", "Save as", true, true, "S"),
     ("save", "Save", true, false, "S"),

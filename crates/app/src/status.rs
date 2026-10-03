@@ -1,12 +1,39 @@
 use super::*;
 
+/// How long a status message stays up while nothing else happens.
+const MESSAGE_SECS: f64 = 10.0;
+
 impl App {
+    /// The status message, while it is news: until the next edit, undo or
+    /// document switch, or for [`MESSAGE_SECS`]. Older messages would
+    /// describe something the user has moved on from.
+    pub(crate) fn status_message(&self, ctx: &egui::Context) -> String {
+        let id = egui::Id::new("status-message");
+        let now = ctx.input(|i| i.time);
+        let mark = (self.editor.history().len(), self.doc_key);
+        let seen: Option<(String, (usize, u64), f64)> = ctx.data(|d| d.get_temp(id));
+        let (shown_at, since) = match seen {
+            Some((text, m, t)) if text == self.status => (m, t),
+            _ => {
+                ctx.data_mut(|d| d.insert_temp(id, (self.status.clone(), mark, now)));
+                (mark, now)
+            }
+        };
+        let left = MESSAGE_SECS - (now - since);
+        if shown_at != mark || left <= 0.0 {
+            return String::new();
+        }
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(left));
+        self.status.clone()
+    }
+
     /// The status bar: document facts on the left (numbers in mono), the
     /// last message on the right, elided rather than run under the facts.
     pub(crate) fn status_bar(&mut self, ctx: &egui::Context) {
         // Pixel-tight, rescanned only when the document changed (the
         // sparse tiles alone would round it up to whole 256 px tiles).
         let sel_rect = self.info_selection(ctx);
+        let message = self.status_message(ctx);
         egui::TopBottomPanel::bottom("status")
             .exact_height(28.0)
             .frame(bar_frame())
@@ -81,7 +108,7 @@ impl App {
                             ));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add(egui::Label::new(RichText::new(&self.status).color(MUTED)).truncate());
+                        ui.add(egui::Label::new(RichText::new(message).color(MUTED)).truncate());
                     });
                 });
             });

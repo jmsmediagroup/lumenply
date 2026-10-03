@@ -500,6 +500,7 @@ impl App {
                 EdgeOp::Contract(_) => "Contract selection",
                 EdgeOp::Border(_) => "Border selection",
                 EdgeOp::Smooth(_) => "Smooth selection",
+                EdgeOp::Feather(_) => "Feather selection",
             },
             Dialog::Fill(..) => "Fill",
             Dialog::ExportJpeg(..) => "Export JPEG",
@@ -589,6 +590,7 @@ impl App {
                                 EdgeOp::Contract(_) => ("Contract by", 100.0, "Shrinks the selection inward."),
                                 EdgeOp::Border(_) => ("Width", 200.0, "Selects a band centred on the selection's edge."),
                                 EdgeOp::Smooth(_) => ("Sample radius", 100.0, "Rounds corners and drops specks and pinholes."),
+                                EdgeOp::Feather(_) => ("Feather radius", 250.0, "Softens the edge: half selected on the old outline."),
                             };
                             let mut v = op.amount();
                             let before = v;
@@ -603,6 +605,7 @@ impl App {
                                 EdgeOp::Contract(_) => EdgeOp::Contract(v),
                                 EdgeOp::Border(_) => EdgeOp::Border(v),
                                 EdgeOp::Smooth(_) => EdgeOp::Smooth(v),
+                                EdgeOp::Feather(_) => EdgeOp::Feather(v),
                             };
                             note(ui, what);
                             if v != before || !*previewed {
@@ -738,6 +741,7 @@ impl App {
                                         }
                                     });
                                 a11y_name(&r.response, "Saved selection");
+                                popup_above_dialog(ui.ctx(), &r.response);
                                 if ui
                                     .add(egui::Button::new(RichText::new("Delete").small().color(MUTED)).frame(false))
                                     .on_hover_text("Forget this saved selection")
@@ -1176,6 +1180,11 @@ impl App {
         // The dialog above the backdrop, which is above everything else.
         if let Some(shown) = shown {
             ctx.move_to_top(shown.response.layer_id);
+            // Always just above its backdrop: a dialog reopened after
+            // another one keeps its old place in the layer order, below
+            // the backdrop (which moves to the top every frame), where the
+            // mouse could not reach it.
+            ctx.set_sublayer(backdrop_layer(), shown.response.layer_id);
             ctx.accesskit_node_builder(shown.response.id, |b| {
                 b.set_role(egui::accesskit::Role::Dialog);
                 b.set_name(title);
@@ -1209,8 +1218,9 @@ impl App {
             self.record_dialog(&d);
             match &d {
                 Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) | Dialog::Recover | Dialog::About => {}
-                // The previewed step already is the result.
-                Dialog::SelectEdge(..) => {}
+                // The previewed step already is the result; the amount
+                // comes back next time.
+                Dialog::SelectEdge(op, _) => crate::selection_tools::remember(*op),
                 Dialog::Fill(..) => self.fill_active(),
                 Dialog::ColorRange(..) => {}
                 Dialog::Shortcuts => {}
@@ -1348,6 +1358,24 @@ impl App {
 /// behind it can be edited while the dialog is open; optionally dimmed.
 /// It sits in the foreground order on top of the canvas's floating bars
 /// (zoom, selection actions); the dialog is then raised above it.
+/// Keep a combo box's list above the dialog it opens from: a popup that
+/// stays where egui first put it sinks below the dialog (and its backdrop),
+/// which move to the top every frame.
+pub(crate) fn popup_above_dialog(ctx: &egui::Context, combo: &egui::Response) {
+    // egui keys a combo's list by its button's id with "popup".
+    if egui::ComboBox::is_open(ctx, combo.id) {
+        ctx.move_to_top(egui::LayerId::new(
+            egui::Order::Foreground,
+            combo.id.with("popup"),
+        ));
+    }
+}
+
+/// The layer of [`modal_backdrop`].
+pub(crate) fn backdrop_layer() -> egui::LayerId {
+    egui::LayerId::new(egui::Order::Foreground, egui::Id::new("modal-backdrop"))
+}
+
 pub(crate) fn modal_backdrop(ctx: &egui::Context, dim: bool) {
     let id = egui::Id::new("modal-backdrop");
     let screen = ctx.screen_rect();
