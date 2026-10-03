@@ -2522,6 +2522,7 @@ version = "0.9.0"
 dependencies = [
  "image 0.24.9",
  "lumenply-doc",
+ "lumenply-graph",
  "lumenply-render",
  "lumenply-tiles",
  "rayon",
@@ -2589,6 +2590,7 @@ dependencies = [
  "lumenply-tiles",
  "pollster 0.3.0",
  "rayon",
+ "serde",
  "wgpu",
 ]
 

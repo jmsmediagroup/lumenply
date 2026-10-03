@@ -55,6 +55,16 @@ downstream, and of nothing else. The render cache is keyed by
   cache until memory pressure evicts them;
 - two nodes that compute the same thing share one cache entry.
 
+Brush strokes refine this to **tile keys**, because a long chain of strokes
+is mostly strokes that miss any given tile. A stroke's tiles are cached
+under a hash of its op and the keys of the input tiles it reads (the tile
+under it for paint, erase, dodge, burn and the sponge; every tile of its
+read area for smudge, blur and sharpen), and a tile a stroke doesn't reach
+has its input's key. Editing stroke 150 of 200 then repaints only tiles
+under later strokes that overlap what it changed; strokes elsewhere keep
+hitting the cache although their content keys changed. Content keys still
+name every node; the cache may hold a stroke's tiles under tile keys only.
+
 ### Evaluation
 
 Rendering pulls tiles: the output node is asked for the tiles in view, and
@@ -91,6 +101,15 @@ nothing ever waits for one. A run of smart filters is one node per filter
 but is evaluated as one fused, chunked pass, exactly as the layer tree does:
 the box blurs' running sums depend on where a pass starts, so filtering node
 by node would differ in the last bits.
+
+A brush stroke replays `lumenply_render::paint`, the code `PaintStroke`
+runs. In the modes where a pixel's result depends only on that pixel and
+the dabs over it (paint, erase, dodge, burn, the sponge) it is painted tile
+by tile from the dabs reaching each tile, which is bit-identical to painting
+it whole. Smudge, blur and sharpen read around each dab, so their dabs
+interact across tiles: such a stroke is a whole result over its read area,
+made in the same pass before tiles are pulled. A sampled tip is a blob of
+its own kind, kept as exact f32 coverage.
 
 ### History
 

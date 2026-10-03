@@ -15,6 +15,7 @@
 
 pub mod adjust_more;
 pub mod blend;
+pub mod brush_tip;
 pub mod cache;
 pub mod develop;
 mod develop_filter;
@@ -29,6 +30,7 @@ pub mod inpaint;
 pub mod liquify;
 pub mod lut_bake;
 pub mod membrane;
+pub mod paint;
 pub mod pattern;
 pub mod puppet;
 pub mod resample;

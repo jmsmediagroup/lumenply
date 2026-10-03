@@ -1,12 +1,13 @@
 //! Content-addressed pixel data. Operations never hold pixels; an op that
-//! needs them (an imported photo, a mask painted before the graph existed)
-//! names a blob by the hash of its content, so identical data is stored and
-//! hashed once and the graph's JSON stays small.
+//! needs them (an imported photo, a mask painted before the graph existed,
+//! a brush tip) names a blob by the hash of its content, so identical data
+//! is stored and hashed once and the graph's JSON stays small.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use lumenply_render::paint::BrushTip;
 use lumenply_tiles::{Tile, TileCoord, TileStore};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -115,10 +116,35 @@ impl TileHasher {
     }
 }
 
-/// Pixel data the graph's ops refer to, by content hash.
+/// Hash of a brush tip: its size and exact coverage values. The name is
+/// left out; it never changes a pixel.
+pub fn tip_hash(tip: &BrushTip) -> Hash {
+    let mut h = blake3::Hasher::new();
+    h.update(b"brushtip");
+    h.update(&tip.width().to_le_bytes());
+    h.update(&tip.height().to_le_bytes());
+    let bytes: Vec<u8> = tip
+        .coverage_values()
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    h.update(&bytes);
+    Hash(*h.finalize().as_bytes())
+}
+
+/// Pixel data the graph's ops refer to, by content hash: canvas pixels
+/// (tile stores) and brush tips.
 #[derive(Clone, Default)]
 pub struct BlobStore {
     blobs: HashMap<BlobId, Arc<TileStore>>,
+    /// Sampled brush tips, a blob kind of their own rather than a tile
+    /// store: a stroke must paint with exactly the coverage it was drawn
+    /// with, and tile stores rest as 16 bits (8-bit gray, k/255, does not
+    /// survive that bit for bit); a tip has no place on the canvas, so
+    /// 256-pixel RGBA tiles would only cost it 16 bytes a texel and
+    /// padding; and kept as a `BrushTip`, its mip chain is built once when
+    /// it enters the store, not on every render.
+    tips: HashMap<BlobId, Arc<BrushTip>>,
 }
 
 impl BlobStore {
@@ -143,6 +169,27 @@ impl BlobStore {
         self.blobs.get(id)
     }
 
+    /// Store a brush tip (if not already there) and return its id.
+    pub fn insert_tip(&mut self, tip: Arc<BrushTip>) -> BlobId {
+        let id = tip_hash(&tip);
+        self.tips.entry(id).or_insert(tip);
+        id
+    }
+
+    /// Store a tip under an id already known to be its hash (a file being
+    /// loaded).
+    pub fn insert_tip_trusted(&mut self, id: BlobId, tip: Arc<BrushTip>) {
+        self.tips.insert(id, tip);
+    }
+
+    pub fn tip(&self, id: &BlobId) -> Option<&Arc<BrushTip>> {
+        self.tips.get(id)
+    }
+
+    pub fn tip_ids(&self) -> impl Iterator<Item = &BlobId> {
+        self.tips.keys()
+    }
+
     pub fn contains(&self, id: &BlobId) -> bool {
         self.blobs.contains_key(id)
     }
@@ -159,8 +206,10 @@ impl BlobStore {
         self.blobs.keys()
     }
 
-    /// Drop blobs not in `keep` (nothing in any kept graph version uses them).
+    /// Drop blobs not in `keep` (nothing in any kept graph version uses
+    /// them), tips included: keep the `tip` of every stroke's brush.
     pub fn retain(&mut self, keep: &std::collections::HashSet<BlobId>) {
         self.blobs.retain(|id, _| keep.contains(id));
+        self.tips.retain(|id, _| keep.contains(id));
     }
 }
