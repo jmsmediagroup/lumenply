@@ -72,10 +72,25 @@ impl App {
                         ui.label(RichText::new("Editing mask").color(ACCENT))
                             .on_hover_text("Painting edits the layer mask: white reveals, black hides");
                     }
+                    if self.prefs.show_render_cache {
+                        ui.separator();
+                        ui.label(mono(render_cache_label(&self.editor)))
+                            .on_hover_text(format!(
+                                "Rendered tiles kept for reuse (Preferences ▸ Render cache: {} MB)",
+                                self.prefs.render_cache_mb
+                            ));
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add(egui::Label::new(RichText::new(&self.status).color(MUTED)).truncate());
                     });
                 });
             });
     }
+}
+
+/// The render cache's memory use, as the status bar shows it: "Cache 312
+/// MB" (tiles and whole-layer results together).
+pub(crate) fn render_cache_label(editor: &Editor) -> String {
+    let mb = crate::session::render_cache_bytes(editor) as f64 / (1u64 << 20) as f64;
+    format!("Cache {mb:.0} MB")
 }

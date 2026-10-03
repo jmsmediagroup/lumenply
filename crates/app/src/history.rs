@@ -136,7 +136,6 @@ impl App {
                 }
                 if let Some(n) = jump {
                     self.editor.jump_to(n);
-                    self.below.note_change(self.editor.doc(), None);
                     let r = self.editor.last_affected();
                     self.mark(r);
                     self.fix_active();

@@ -64,11 +64,12 @@ pub(crate) fn display_image(flat: &Raster, proof: Option<ProofView>) -> egui::Co
     };
     let enc = crate::canvas::srgb_lut();
     let enc = |v: f32| enc[(v.clamp(0.0, 1.0) * 4095.0 + 0.5) as usize];
+    use rayon::prelude::*;
     egui::ColorImage {
         size: [flat.width as usize, flat.height as usize],
         pixels: flat
             .pixels
-            .iter()
+            .par_iter()
             .map(|p| {
                 let [r, g, b, a] = p.to_straight();
                 let [r, g, b] = lut.apply([enc(r), enc(g), enc(b)], colors, warn);

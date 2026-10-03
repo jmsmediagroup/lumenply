@@ -1,6 +1,20 @@
 use super::*;
 use crate::soft_proof::display_image;
 
+/// Nanoseconds spent compositing the canvas (refresh and previews), for
+/// the render timings in `render_bench`.
+pub(crate) static COMPOSITE_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn timed<T>(f: impl FnOnce() -> T) -> T {
+    let t = std::time::Instant::now();
+    let out = f();
+    COMPOSITE_NANOS.fetch_add(
+        t.elapsed().as_nanos() as u64,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    out
+}
+
 /// Outlines longer than this animate as a static texture instead.
 const ANTS_MAX: usize = 20_000;
 
@@ -177,9 +191,88 @@ impl Xform {
 impl App {
     // ---- rendering ---------------------------------------------------------------------
 
+    /// The document's composite over `rect`, through the edit graph (ADR
+    /// 0025): the editor's renderer caches every node's tiles by content,
+    /// so whatever an edit didn't change below or above it, and the whole
+    /// previous version after an undo, comes from the cache.
+    pub(crate) fn render_view(&self, rect: Rect) -> lumenply_tiles::TileStore {
+        let ed = &self.editor;
+        timed(|| ed.renderer().render(ed.graph(), ed.blobs(), rect))
+    }
+
+    /// `doc`, the live document with the active layer changed as a preview
+    /// makes it, over `rect`. Everything below the active layer's top-level
+    /// layer is unchanged, so that backdrop is the graph's own output for the
+    /// layer below (from the render cache), and only the layers from the
+    /// active one up are composited over it. Takes the reference path when
+    /// there is nothing below, when a live filter at or above would read the
+    /// layers below as a stack, or when the preview's lower layers aren't the
+    /// graph's.
+    pub(crate) fn preview_composite(&self, doc: &Document, rect: Rect) -> lumenply_tiles::TileStore {
+        use rayon::prelude::*;
+        let layers = doc.layers();
+        let graph = self.editor.graph();
+        let records = &self.editor.doc_state().layers;
+        let contains = |l: &Layer, id: LayerId| {
+            fn walk(l: &Layer, id: LayerId) -> bool {
+                l.id == id || l.children().is_some_and(|c| c.iter().any(|ch| walk(ch, id)))
+            }
+            walk(l, id)
+        };
+        // A clip chain composites as one unit with its base: split below it.
+        let split = self
+            .active
+            .and_then(|id| layers.iter().position(|l| contains(l, id)))
+            .map(|mut s| {
+                while s > 0 && layers[s].clip {
+                    s -= 1;
+                }
+                s
+            })
+            .filter(|&s| {
+                s > 0
+                    && (doc.width, doc.height) == (graph.width, graph.height)
+                    && records.len() >= s
+                    && records[..s]
+                        .iter()
+                        .zip(&layers[..s])
+                        .all(|(r, l)| r.layer.id == l.id)
+                    && !layers[s..]
+                        .iter()
+                        .any(|l| l.visible && l.opacity > 0.0 && matches!(l.content, LayerContent::Filter(_)))
+            });
+        let Some(split) = split else {
+            return timed(|| lumenply_render::composite_rect(doc, rect));
+        };
+        timed(|| {
+            let ed = &self.editor;
+            let backdrop = ed
+                .renderer()
+                .render_node(graph, ed.blobs(), records[split - 1].node, rect);
+            let canvas = doc.canvas();
+            let tiles: Vec<_> = rect
+                .tiles()
+                .into_par_iter()
+                .map(|c| {
+                    let under = backdrop.tile(c).cloned();
+                    (
+                        c,
+                        lumenply_render::render_tile_over(under, &layers[split..], c, canvas),
+                    )
+                })
+                .collect();
+            let mut out = lumenply_tiles::TileStore::new();
+            for (c, t) in tiles {
+                if let Some(t) = t {
+                    out.insert(c, std::sync::Arc::new(t));
+                }
+            }
+            out
+        })
+    }
+
     pub(crate) fn refresh(&mut self, ctx: &egui::Context) {
         let proof = self.proof_view();
-        let mut below = std::mem::take(&mut self.below);
         let doc = self.editor.doc();
         let canvas = doc.canvas();
         let partial_ok = self
@@ -191,12 +284,19 @@ impl App {
             Some(r) if partial_ok => {
                 let r = r.intersect(&canvas);
                 if !r.is_empty() {
-                    let patch = below.composite_rect(doc, r).to_raster(r);
+                    let patch = flatten(&self.render_view(r), r);
                     if let Some(flat) = self.last_flat.as_mut() {
+                        // The histogram follows the pixels that changed.
+                        let gone = histogram::luminance_histogram_in(flat, r);
+                        let came = histogram::luminance_histogram(&patch);
+                        for ((h, g), c) in self.histogram.iter_mut().zip(gone).zip(came) {
+                            *h = (*h + c).saturating_sub(g);
+                        }
                         for y in 0..r.h {
-                            for x in 0..r.w {
-                                flat.set(r.x as u32 + x, r.y as u32 + y, patch.get(x, y));
-                            }
+                            let row = (r.y as usize + y as usize) * flat.width as usize + r.x as usize;
+                            let src = y as usize * r.w as usize;
+                            flat.pixels[row..row + r.w as usize]
+                                .copy_from_slice(&patch.pixels[src..src + r.w as usize]);
                         }
                     }
                     if let Some(tex) = self.canvas_tex.as_mut() {
@@ -220,8 +320,9 @@ impl App {
                 self.refresh_thumbs(ctx, Some(r));
             }
             _ => {
-                let flat = below.composite_rect(doc, canvas).to_raster(canvas);
+                let flat = flatten(&self.render_view(canvas), canvas);
                 let img = display_image(&flat, proof);
+                self.histogram = histogram::luminance_histogram(&flat);
                 self.last_flat = Some(flat);
                 upload(&mut self.canvas_tex, ctx, "canvas", img, nearest_when_zoomed());
                 if self.quick_mask {
@@ -256,8 +357,6 @@ impl App {
                 self.refresh_thumbs(ctx, None);
             }
         }
-        self.below = below;
-        self.update_histogram();
         self.capture_history_thumb(ctx);
         self.dirty = false;
     }
@@ -347,16 +446,17 @@ impl App {
         let fresh = crate::smart_filters_ui::refreshed_preview(doc);
         let doc = fresh.as_ref().unwrap_or(doc);
         let area = lumenply_core::smart_filter_cmds::widen_affected(doc, area);
-        // Previews change only the active layer, so the cached backdrop
-        // below it applies to the preview document too.
+        // Previews change only the active layer, so the graph's composite of
+        // everything below it applies to the preview document too.
         let proof = self.proof_view();
-        let mut below = std::mem::take(&mut self.below);
-        below.note_change(doc, self.active);
-        match (area, self.canvas_tex.as_mut()) {
-            (Some(r), Some(tex)) => {
+        match area {
+            Some(r) if self.canvas_tex.is_some() => {
                 let r = r.intersect(&doc.canvas());
                 if !r.is_empty() {
-                    let patch = below.composite_rect(doc, r).to_raster(r);
+                    let patch = flatten(&self.preview_composite(doc, r), r);
+                    let Some(tex) = self.canvas_tex.as_mut() else {
+                        return;
+                    };
                     tex.set_partial(
                         [r.x as usize, r.y as usize],
                         display_image(&patch, proof),
@@ -367,11 +467,10 @@ impl App {
             }
             _ => {
                 let canvas = doc.canvas();
-                let img = display_image(&below.composite_rect(doc, canvas).to_raster(canvas), proof);
+                let img = display_image(&flatten(&self.preview_composite(doc, canvas), canvas), proof);
                 upload(&mut self.canvas_tex, ctx, "canvas", img, nearest_when_zoomed());
             }
         }
-        self.below = below;
     }
 
     // ---- canvas ---------------------------------------------------------------------
@@ -1794,10 +1893,53 @@ pub(crate) fn to_color32(p: lumenply_tiles::Rgba) -> Color32 {
 }
 
 pub(crate) fn raster_to_image(flat: &Raster) -> egui::ColorImage {
+    use rayon::prelude::*;
     egui::ColorImage {
         size: [flat.width as usize, flat.height as usize],
-        pixels: flat.pixels.iter().map(|p| to_color32(*p)).collect(),
+        pixels: flat.pixels.par_iter().map(|p| to_color32(*p)).collect(),
     }
+}
+
+/// `store` over `rect` as one raster (`TileStore::to_raster`, a band of
+/// tile rows per thread).
+pub(crate) fn flatten(store: &lumenply_tiles::TileStore, rect: Rect) -> Raster {
+    use rayon::prelude::*;
+    let mut out = Raster::new(rect.w, rect.h);
+    let w = rect.w as usize;
+    if w == 0 || rect.h == 0 {
+        return out;
+    }
+    let ts = lumenply_tiles::TILE_SIZE as i32;
+    // Rows of the raster from one tile row to the next.
+    let first = rect.y.div_euclid(ts) * ts;
+    let mut bands: Vec<(i32, &mut [lumenply_tiles::Rgba])> = Vec::new();
+    let mut rest: &mut [lumenply_tiles::Rgba] = &mut out.pixels;
+    let mut y = rect.y;
+    let mut edge = first + ts;
+    while y < rect.bottom() {
+        let end = edge.min(rect.bottom());
+        let (band, tail) = rest.split_at_mut((end - y) as usize * w);
+        bands.push((y, band));
+        rest = tail;
+        y = end;
+        edge += ts;
+    }
+    bands.into_par_iter().for_each(|(y0, band)| {
+        let rows = (band.len() / w) as i32;
+        let area = Rect::new(rect.x, y0, rect.w, rows as u32);
+        for c in area.tiles() {
+            let Some(tile) = store.tile(c) else { continue };
+            let (ox, oy) = c.origin();
+            let sub = area.intersect(&c.rect());
+            for py in sub.y..sub.bottom() {
+                let dst = (py - y0) as usize * w + (sub.x - rect.x) as usize;
+                for (i, px) in (sub.x..sub.right()).enumerate() {
+                    band[dst + i] = tile.get((px - ox) as usize, (py - oy) as usize);
+                }
+            }
+        }
+    });
+    out
 }
 
 /// Sample a layer onto a small thumbnail (nearest, centre of each cell).

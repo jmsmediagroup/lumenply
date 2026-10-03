@@ -813,6 +813,16 @@ impl App {
                             let mut secs = p.autosave_secs as f32;
                             slider_row_ex(ui, "Autosave every", &mut secs, 15.0..=600.0, " s", wide);
                             p.autosave_secs = secs.round() as u64;
+                            // Rendered tiles kept for reuse (edit graph, ADR 0025).
+                            let mut mb = p.render_cache_mb as f32;
+                            let range = crate::session::RENDER_CACHE_MB;
+                            let mbs = *range.start() as f32..=*range.end() as f32;
+                            slider_row_ex(ui, "Render cache", &mut mb, mbs, " MB", log);
+                            p.render_cache_mb = mb.round() as usize;
+                            ui.horizontal(|ui| {
+                                row_label(ui, "", wide.label_w);
+                                check(ui, &mut p.show_render_cache, "Show its memory use in the status bar");
+                            });
                             ui.horizontal(|ui| {
                                 row_label(ui, "Canvas surround", wide.label_w);
                                 for (name, c) in [
@@ -1296,7 +1306,6 @@ impl App {
     /// preview step.
     fn undo_quietly(&mut self) {
         if self.editor.undo().is_some() {
-            self.below.note_change(self.editor.doc(), None);
             let r = self.editor.last_affected();
             self.mark(r);
         }

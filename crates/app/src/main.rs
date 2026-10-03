@@ -42,6 +42,8 @@ mod dialogs;
 mod everyday_ui;
 mod export_as;
 mod gradient_ui;
+#[cfg(test)]
+mod graph_view_tests;
 mod guides;
 mod histogram;
 mod history;
@@ -64,6 +66,8 @@ mod perspective_crop_ui;
 mod properties;
 mod puppet_ui;
 mod quick_select_tool;
+#[cfg(test)]
+mod render_bench;
 mod retouch_ui;
 #[cfg(test)]
 mod select_fill_tests;
@@ -398,8 +402,6 @@ struct App {
     palette: Option<Palette>,
     /// Set once the user confirms quitting with unsaved changes.
     allow_close: bool,
-    /// Composite cache for everything below the layer being edited.
-    below: lumenply_render::BelowCache,
     /// When the last autosave backup was written (or the session began).
     last_autosave: std::time::Instant,
     /// Recently opened or saved files, newest first.
@@ -597,7 +599,6 @@ impl App {
             hist_thumbs: Vec::new(),
             palette: None,
             allow_close: false,
-            below: lumenply_render::BelowCache::new(),
             last_autosave: std::time::Instant::now(),
             recent: session::load_recent(),
             histogram: [0; histogram::BINS],
@@ -746,8 +747,6 @@ impl App {
         match self.editor.execute(cmd) {
             Ok(()) => {
                 let r = self.editor.last_affected();
-                let t = self.editor.last_target_layer();
-                self.below.note_change(self.editor.doc(), t);
                 self.mark(r);
                 self.fix_active();
             }
@@ -765,8 +764,6 @@ impl App {
         match self.editor.execute_coalescing(cmd, key) {
             Ok(()) => {
                 let r = self.editor.last_affected();
-                let t = self.editor.last_target_layer();
-                self.below.note_change(self.editor.doc(), t);
                 self.mark(r);
             }
             Err(e) => self.status = e.to_string(),
@@ -783,7 +780,6 @@ impl App {
         self.path = path;
         self.saved_rev = self.editor.history().len();
         self.hist_thumbs.clear();
-        self.below = lumenply_render::BelowCache::new();
         self.cancel_interaction();
         self.select_top();
         self.mark(None);
@@ -794,6 +790,11 @@ impl App {
 
     /// Move the live document's state out into a parked tab.
     fn park_live(&mut self) -> DocTab {
+        // A parked document keeps no rendered tiles: they are a cache, and
+        // only the live tab's budget should count.
+        let r = self.editor.renderer();
+        r.cache.clear();
+        r.wholes.clear();
         DocTab {
             doc_key: self.doc_key,
             smart_link: self.smart_link.take(),
@@ -813,11 +814,11 @@ impl App {
         self.doc_key = t.doc_key;
         self.smart_link = t.smart_link;
         self.editor = t.editor;
+        self.prefs.apply(&mut self.editor);
         self.path = t.path;
         self.saved_rev = t.saved_rev;
         self.hist_thumbs = t.hist_thumbs;
         self.untitled = t.untitled;
-        self.below = lumenply_render::BelowCache::new();
         self.cancel_interaction();
         self.set_active(t.active);
         self.fix_active();

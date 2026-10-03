@@ -126,7 +126,6 @@ impl App {
         self.path = None;
         self.saved_rev = self.editor.history().len();
         self.hist_thumbs.clear();
-        self.below = lumenply_render::BelowCache::new();
         self.active = None;
         self.selected.clear();
         self.editing_mask = false;
