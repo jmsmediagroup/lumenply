@@ -1065,7 +1065,10 @@ impl App {
         // The palette toggle works even while a text field has focus (but
         // not under a modal dialog, which would cover it). On the welcome
         // screen it lists the actions with document-only ones greyed out.
-        if self.dialog.is_none() && ctx.input_mut(|i| i.consume_key(M::COMMAND, Key::K)) {
+        if self.dialog.is_none()
+            && self.adjx.is_none()
+            && ctx.input_mut(|i| i.consume_key(M::COMMAND, Key::K))
+        {
             self.toggle_palette();
         }
         if self.palette.is_some() || ctx.wants_keyboard_input() {
@@ -1074,7 +1077,7 @@ impl App {
         // A modal dialog owns the keyboard even when no text field has
         // focus, and a shortcut firing mid-drag would edit the document
         // under an in-progress stroke or move.
-        if self.dialog.is_some() || self.drag.is_some() {
+        if self.dialog.is_some() || self.adjx.is_some() || self.drag.is_some() {
             return;
         }
         if self.xform.is_some() {

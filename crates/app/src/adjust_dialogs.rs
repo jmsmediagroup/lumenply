@@ -1128,6 +1128,39 @@ mod tests {
     }
 
     #[test]
+    fn shortcuts_wait_while_a_dialog_is_open() {
+        let mut app = small_app();
+        let ctx = crate::a11y_tests::ctx();
+        app.run_menu_action(ADJ_DESATURATE);
+        let n = app.editor.history().len();
+        app.run_menu_action(ADJ_SH);
+        let cmd = egui::Modifiers::COMMAND;
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1440.0, 900.0),
+            )),
+            modifiers: cmd,
+            events: vec![egui::Event::Key {
+                key: Key::Z,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: cmd,
+            }],
+            ..Default::default()
+        };
+        let _ = ctx.run(raw.clone(), |ctx| app.frame(ctx));
+        // Cmd+Z did not undo under the dialog, which stays open.
+        assert_eq!(app.editor.history().len(), n);
+        assert!(app.adjx.is_some());
+        // Without the dialog the same key undoes.
+        app.adjx = None;
+        let _ = ctx.run(raw, |ctx| app.frame(ctx));
+        assert_eq!(app.editor.history().len(), n - 1);
+    }
+
+    #[test]
     fn ok_is_one_undo_step_and_cancel_none() {
         let mut app = small_app();
         let ctx = crate::a11y_tests::ctx();
