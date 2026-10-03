@@ -12,11 +12,16 @@ file with and without its hints. Both renders must be bit-identical to the
 first process's graph render (the one --check compared with the layer
 tree), by their printed render digests.
 
+With --gpu each file is also rendered by the GPU executor (ADR 0027) and
+compared with the CPU evaluator (tolerance 1e-4; skipped where no GPU
+adapter exists), and the tiles that fell back to the CPU are tallied.
+
     cargo build --release -p lumenply-cli
     scripts/psd_corpus.py fetch                # once
-    scripts/graph_corpus_check.py [FILTER...] [-j 6] [--roundtrip]
+    scripts/graph_corpus_check.py [FILTER...] [-j 6] [--roundtrip] [--gpu]
 """
 import argparse, os, re, shutil, subprocess, sys, tempfile
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -46,32 +51,46 @@ def digest(out):
     return m.group(1) if m else None
 
 
-def one(i, f, tmp):
-    """(file, exit code or reason, max difference, last output line, v3 size)."""
-    if tmp is None:
-        code, out = run(["graph", f, "--check"])
-        m = re.search(r"max difference ([0-9.e+-]+)", out)
-        return f, code, float(m.group(1)) if m else None, out.splitlines()[-1] if out else "", None
-    lumen = os.path.join(tmp, f"{i}.lumen")
+def gpu_result(out):
+    """The GPU comparison's difference and CPU-fallback tiles by op."""
+    g = re.search(r"gpu max difference ([0-9.e+-]+)", out)
+    fallback = Counter()
+    fb = re.search(r"CPU-fallback tiles \(([^)]*)\)", out)
+    if fb and fb.group(1) != "none":
+        for part in fb.group(1).split(", "):
+            n, op = part.split(" ", 1)
+            fallback[op] += int(n)
+    return (float(g.group(1)) if g else None), fallback
+
+
+def one(i, f, tmp, gpu):
+    """file, exit code or reason, max difference, last output line, v3 size,
+    GPU difference, GPU fallback tiles, whether the GPU was skipped."""
+    r = dict(file=f, code=0, diff=None, tail="", size=None, gpu=None, fallback=Counter(), skipped=False)
+    lumen = os.path.join(tmp, f"{i}.lumen") if tmp else None
     try:
-        code, out = run(["graph", f, "--check", "--save", lumen, "--hints"])
-        m = re.search(r"max difference ([0-9.e+-]+)", out)
-        diff = float(m.group(1)) if m else None
-        tail = out.splitlines()[-1] if out else ""
-        if code != 0:
-            return f, code, diff, tail, None
-        size = os.path.getsize(lumen)
+        args = ["graph", f, "--check"] + (["--save", lumen, "--hints"] if lumen else []) + (["--gpu"] if gpu else [])
+        code, out = run(args)
+        m = re.search(r"(?<!gpu )max difference ([0-9.e+-]+)", out)
+        r.update(code=code, diff=float(m.group(1)) if m else None, tail=out.splitlines()[-1] if out else "")
+        r["gpu"], r["fallback"] = gpu_result(out)
+        r["skipped"] = "no GPU adapter" in out
+        if code != 0 or not lumen:
+            return r
+        r["size"] = os.path.getsize(lumen)
         code2, out2 = run(["graph", lumen, "--check"])
         if code2 != 0:
-            return f, f"reload {code2}", diff, (out2.splitlines() or [""])[-1], size
+            r.update(code=f"reload {code2}", tail=(out2.splitlines() or [""])[-1])
+            return r
         a, b = digest(out), digest(out2)
         if a is None or a != b:
-            return f, "digest", diff, f"{a} != {b}", size
-        return f, 0, diff, tail, size
+            r.update(code="digest", tail=f"{a} != {b}")
+        return r
     finally:
-        for p in (lumen, lumen + ".tmp"):
-            if os.path.exists(p):
-                os.remove(p)
+        if lumen:
+            for p in (lumen, lumen + ".tmp"):
+                if os.path.exists(p):
+                    os.remove(p)
 
 
 def main():
@@ -79,6 +98,7 @@ def main():
     ap.add_argument("filters", nargs="*")
     ap.add_argument("-j", "--jobs", type=int, default=6)
     ap.add_argument("--roundtrip", action="store_true", help="also save each graph as a .lumen v3 and reload it")
+    ap.add_argument("--gpu", action="store_true", help="also compare the GPU executor with the CPU")
     a = ap.parse_args()
     todo = files(a.filters)
     if not todo:
@@ -86,19 +106,31 @@ def main():
     tmp = tempfile.mkdtemp(prefix="lumenply-graph-corpus-") if a.roundtrip else None
     try:
         with ThreadPoolExecutor(a.jobs) as ex:
-            res = list(ex.map(lambda job: one(job[0], job[1], tmp), enumerate(todo)))
+            res = list(ex.map(lambda job: one(job[0], job[1], tmp, a.gpu), enumerate(todo)))
     finally:
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
-    bad = [r for r in res if r[1] != 0]
+    bad = [r for r in res if r["code"] != 0]
     what = "identical, saved and reloaded bit-identically" if a.roundtrip else "identical"
     print(f"{len(res)} files: {len(res) - len(bad)} {what}, {len(bad)} not")
     if a.roundtrip:
-        psd = sum(os.path.getsize(r[0]) for r in res if r[4] is not None)
-        v3 = sum(r[4] for r in res if r[4] is not None)
+        psd = sum(os.path.getsize(r["file"]) for r in res if r["size"] is not None)
+        v3 = sum(r["size"] for r in res if r["size"] is not None)
         print(f"PSDs {psd / 1e6:.1f} MB, graph projects with output hints {v3 / 1e6:.1f} MB")
-    for f, code, diff, tail, _ in sorted(bad, key=lambda r: -(r[2] or 0)):
-        print(f"  {code} {diff} {os.path.relpath(f, CORPUS)} | {tail[:160]}")
+    if a.gpu:
+        ran = [r for r in res if r["gpu"] is not None]
+        skipped = sum(1 for r in res if r["skipped"])
+        worst = max((r["gpu"] for r in ran), default=0.0)
+        fallback = sum((r["fallback"] for r in ran), Counter())
+        some = sum(1 for r in ran if r["fallback"])
+        print(
+            f"gpu: {len(ran)} files compared, worst difference {worst:.2e}, {skipped} skipped (no adapter); "
+            f"{some} files used the CPU fallback for some tiles ("
+            + (", ".join(f"{n} {op}" for op, n in fallback.most_common()) or "none")
+            + ")"
+        )
+    for r in sorted(bad, key=lambda r: -max(r["diff"] or 0, r["gpu"] or 0)):
+        print(f"  {r['code']} {r['diff']} gpu {r['gpu']} {os.path.relpath(r['file'], CORPUS)} | {r['tail'][:160]}")
     sys.exit(1 if bad else 0)
 
 

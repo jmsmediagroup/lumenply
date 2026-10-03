@@ -121,8 +121,15 @@ history; wgpu executes the graph on the GPU.
       graph
 - [ ] Stage 3, graph-backed editor: graph versions as the undo history,
       the app renders through the graph cache (replacing `BelowCache`)
-- [ ] Stage 4, GPU executor: per-op WGSL kernels with CPU parity tests,
-      resident tiles, eframe on wgpu so the canvas needs no readback
+- [x] Stage 4a, GPU executor (ADR 0027): `lumenply_graph::GpuRenderer`,
+      tiles resident under the same content keys, kernels for layer (all
+      blend modes but Dissolve), table adjustments, pass-through, image and
+      mask; any other op runs on the CPU per node with GPU-computed inputs;
+      equality tests at 1e-4; corpus `--gpu` 482/482, worst 8.3e-7. Edits
+      that stay on the GPU are ~2x faster than the CPU; cold renders are
+      upload-bound and slower (`lumenply bench --graph cpu|gpu`)
+- [ ] Stage 4b: eframe on its wgpu backend, the canvas drawn from
+      `GpuImage` tiles without a readback; several tiles per dispatch
 
 ## 1. Verify on real hardware — do this first
 

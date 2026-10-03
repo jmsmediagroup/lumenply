@@ -13,6 +13,7 @@
 pub mod blob;
 pub mod cache;
 pub mod eval;
+pub mod gpu;
 pub mod hints;
 pub mod history;
 pub mod key;
@@ -29,6 +30,7 @@ pub mod whole;
 pub use blob::{blob_refs, BlobId, BlobStore, Hash, TileHasher};
 pub use cache::{CacheStats, TileCache};
 pub use eval::{Ctx, Renderer};
+pub use gpu::{GpuImage, GpuRenderer, GpuStats, GpuTile};
 pub use hints::RenderHints;
 pub use history::{History, Version};
 pub use key::{Key, KeyMemo};
