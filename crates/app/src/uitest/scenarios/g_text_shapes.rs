@@ -14,6 +14,8 @@ scenario_list! {
     "text-font-and-align" => text_font_and_align: "Pick a font by searching, centre the text, change its size",
     "text-cancel-and-edit-again" => text_cancel_and_edit_again: "Cancel an edit, edit again with a click and with Enter, move the text",
     "text-properties" => text_properties: "Edit text in Properties: content, leading, paragraph, rename, rasterize",
+    "text-keyboard-styles" => text_keyboard_styles: "Select with the keyboard and the mouse, style with Photoshop's Cmd+Shift keys",
+    "find-tools-in-the-palette" => find_tools_in_the_palette: "Find the Text and Shape tools in Cmd+K by Photoshop's words",
     "shape-every-kind" => shape_every_kind: "Draw every kind of shape, a Shift-constrained square and an Alt-centred circle",
     "shape-fill-and-stroke" => shape_fill_and_stroke: "Shapes without fill, with a stroke, a gradient fill and picked colours",
     "shape-edit-in-properties" => shape_edit_in_properties: "Edit a shape's corners, stroke, dashes, fill and sides in Properties",
@@ -569,6 +571,80 @@ fn text_properties(s: &mut Session) -> UiResult {
     Ok(())
 }
 
+fn text_keyboard_styles(s: &mut Session) -> UiResult {
+    new_doc(s, 900, 400)?;
+    s.describe("Pick the Text tool and click on the canvas");
+    s.click_role(Role::Button, "Text")?;
+    s.canvas_click((60.0, 200.0), "")?;
+    s.type_text("Make it bold")?;
+    s.describe("Select the last word with Shift+Alt+Left");
+    s.key("Shift+Alt+Left")?;
+    let sel = text_selection(s)?;
+    s.check_eq("the last word is selected", sel, Some("bold".to_string()))?;
+    s.describe("Bold it with Cmd+Shift+B, underline it with Cmd+Shift+U");
+    s.key("Cmd+Shift+B")?;
+    s.key("Cmd+Shift+U")?;
+    let t = text_of(s, "Make it bold")?.ok_or(UiError("no text layer".into()))?;
+    let (word, rest) = (t.style_at(9), t.style_at(0));
+    s.check(
+        "only the word is bold and underlined",
+        word.bold && word.underline && !rest.bold && !rest.underline,
+        "bold + underline on “bold” only",
+        format!("word {word:?}, rest {rest:?}"),
+    )?;
+    s.describe("Triple-click the line to select all of it");
+    let t = text_of(s, "Make it bold")?.ok_or(UiError("no text layer".into()))?;
+    s.canvas_multi_click(char_point(&t, 2), 3, "")?;
+    let sel = text_selection(s)?;
+    s.check_eq(
+        "the whole line is selected",
+        sel,
+        Some("Make it bold".to_string()),
+    )?;
+    s.describe("Italicise it all with Cmd+Shift+I");
+    s.key("Cmd+Shift+I")?;
+    let t = text_of(s, "Make it bold")?.ok_or(UiError("no text layer".into()))?;
+    s.check(
+        "every letter is italic",
+        (0..t.text.len()).all(|i| t.style_at(i).italic),
+        "italic throughout",
+        format!("{:?}", t.runs),
+    )?;
+    let text = t.text.clone();
+    s.check_eq(
+        "no letters were typed by the shortcuts",
+        text,
+        "Make it bold".to_string(),
+    )?;
+    s.describe("Right-align with Cmd+Shift+R: the anchor becomes the right end of the line");
+    s.key("Cmd+Shift+R")?;
+    let align = text_of(s, "Make it bold")?.map(|t| t.align);
+    s.check_eq("right-aligned", align, Some(lumenply_doc::TextAlign::Right))?;
+    s.describe("Commit with Esc");
+    s.key("Esc")?;
+    let hist = s.history()?;
+    s.check_eq(
+        "the whole edit is one history step",
+        hist,
+        vec!["Add text".to_string()],
+    )?;
+    Ok(())
+}
+
+fn find_tools_in_the_palette(s: &mut Session) -> UiResult {
+    new_doc(s, 600, 400)?;
+    for (word, tool) in [("type", "Text"), ("rectangle", "Shape"), ("ellipse", "Shape")] {
+        s.describe(&format!("Open the command palette and type “{word}”"));
+        s.key("Cmd+K")?;
+        s.type_text(word)?;
+        s.describe("Take the first match with Enter");
+        s.key("Enter")?;
+        let got = s.app(|a| a.tool.name())?;
+        s.check_eq(&format!("“{word}” finds the {tool} tool"), got, tool)?;
+    }
+    Ok(())
+}
+
 // ---- shapes -------------------------------------------------------------------------------
 
 /// The top layer's shape (without its derived cache) and its name.
@@ -1001,6 +1077,19 @@ fn pen_draw_a_path(s: &mut Session) -> UiResult {
     )?;
     let hist = s.history()?;
     s.note(&format!("History: {}", hist.join(" → ")))?;
+    s.check_eq(
+        "History names each step",
+        hist,
+        [
+            "Add anchor",
+            "Add anchor",
+            "Add anchor",
+            "Add anchor",
+            "Close path",
+        ]
+        .map(String::from)
+        .to_vec(),
+    )?;
     s.describe("Undo once");
     s.key("Cmd+Z")?;
     let p = work_path(s)?;
