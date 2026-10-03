@@ -18,8 +18,13 @@
 //! **Speed.** One dynamic-programming pass is O(w·h). Each pass yields
 //! several seams: candidates are traced back from the cheapest bottom-row
 //! costs and kept while they stay disjoint (with a one-pixel gap) and cost
-//! no more than half again the best one. Energies are computed row-parallel;
-//! the cumulative pass keeps only two rows of costs.
+//! no more than half again the best one; a traced path that collides marks
+//! its pixels so later candidates joining it stop at once. Energies are
+//! computed row-parallel, the cumulative pass is branch-free f32 (it
+//! vectorises) keeping two rows of costs, and while shrinking only the
+//! energy inputs plus each pixel's source column are cut, the pixels being
+//! gathered once at the end. The 1800 × 1205 demo photo narrows to 70 % in
+//! about 0.2 s (14 threads; 0.25 s on one).
 //!
 //! **Amount** (0..=1) blends with plain scaling as Photoshop does: carving
 //! covers that share of the size change and a Lanczos resample
@@ -326,7 +331,9 @@ struct Scratch {
     dl: Vec<f32>,
     dr: Vec<f32>,
     dir: Vec<i8>,
-    used: Vec<bool>,
+    /// Per pixel during tracing: 0 free, 1 on a taken seam, 2 known to
+    /// lead into one (a traced path that collided).
+    used: Vec<u8>,
 }
 
 /// Up to `k_max` cheapest disjoint vertical seams (x per row), cheapest
@@ -341,7 +348,7 @@ fn find_seams(wk: &Work, k_max: usize, s: &mut Scratch) -> Vec<Vec<u32>> {
     }
     s.dir.resize(w * h, 0);
     s.used.clear();
-    s.used.resize(w * h, false);
+    s.used.resize(w * h, 0);
     let (base, dl, dr, dir, used) = (&mut s.base, &mut s.dl, &mut s.dr, &mut s.dir, &mut s.used);
     base.par_chunks_mut(w)
         .zip(dl.par_chunks_mut(w))
@@ -366,32 +373,18 @@ fn find_seams(wk: &Work, k_max: usize, s: &mut Scratch) -> Vec<Vec<u32>> {
             }
         });
     // Cumulative minimum, top to bottom; `dir` remembers the step up.
-    let mut prev: Vec<f64> = base[..w].iter().map(|&v| v as f64).collect();
-    let mut cur = vec![0f64; w];
+    let mut prev: Vec<f32> = base[..w].to_vec();
+    let mut cur = vec![0f32; w];
     for y in 1..h {
         let o = y * w;
-        let (b, l, r) = (&base[o..o + w], &dl[o..o + w], &dr[o..o + w]);
-        let d = &mut dir[o..o + w];
-        for x in 0..w {
-            let mut best = prev[x];
-            let mut k = 0i8;
-            if x > 0 {
-                let v = prev[x - 1] + l[x] as f64;
-                if v < best {
-                    best = v;
-                    k = -1;
-                }
-            }
-            if x + 1 < w {
-                let v = prev[x + 1] + r[x] as f64;
-                if v < best {
-                    best = v;
-                    k = 1;
-                }
-            }
-            cur[x] = best + b[x] as f64;
-            d[x] = k;
-        }
+        dp_row(
+            &prev,
+            &mut cur,
+            &mut dir[o..o + w],
+            &base[o..o + w],
+            &dl[o..o + w],
+            &dr[o..o + w],
+        );
         std::mem::swap(&mut prev, &mut cur);
     }
     let mut order: Vec<u32> = (0..w as u32).collect();
@@ -399,7 +392,7 @@ fn find_seams(wk: &Work, k_max: usize, s: &mut Scratch) -> Vec<Vec<u32>> {
     let best = prev[order[0] as usize];
     // Later seams in a batch must be nearly as cheap as the first; the
     // absolute slack lets flat areas give up many seams at once.
-    let limit = best * 1.5 + 0.05 * h as f64;
+    let limit = best * 1.5 + 0.05 * h as f32;
     let mut seams: Vec<Vec<u32>> = Vec::new();
     let mut path = vec![0u32; h];
     for &x0 in &order {
@@ -407,11 +400,15 @@ fn find_seams(wk: &Work, k_max: usize, s: &mut Scratch) -> Vec<Vec<u32>> {
             break;
         }
         let mut x = x0 as usize;
-        let mut ok = true;
+        // The first row (from the bottom) where the path collides.
+        let mut hit = None;
         for y in (0..h).rev() {
             let row = y * w;
-            if used[row + x] || (x > 0 && used[row + x - 1]) || (x + 1 < w && used[row + x + 1]) {
-                ok = false;
+            let doomed = used[row + x] != 0
+                || (x > 0 && used[row + x - 1] == 1)
+                || (x + 1 < w && used[row + x + 1] == 1);
+            if doomed {
+                hit = Some(y);
                 break;
             }
             path[y] = x as u32;
@@ -419,15 +416,59 @@ fn find_seams(wk: &Work, k_max: usize, s: &mut Scratch) -> Vec<Vec<u32>> {
                 x = (x as i32 + dir[row + x] as i32) as usize;
             }
         }
-        if !ok {
+        if let Some(y_hit) = hit {
+            // Every pixel traced so far leads into the collision: later
+            // candidates that reach one can stop there.
+            for (y, &x) in path.iter().enumerate().skip(y_hit + 1) {
+                used[y * w + x as usize] = 2;
+            }
             continue;
         }
         for (y, &x) in path.iter().enumerate() {
-            used[y * w + x as usize] = true;
+            used[y * w + x as usize] = 1;
         }
         seams.push(path.clone());
     }
     seams
+}
+
+/// One row of the cumulative minimum: `cur[x]` = `b[x]` + the cheapest
+/// of arriving from the upper left (`prev[x-1] + l[x]`), straight above
+/// (`prev[x]`) or the upper right (`prev[x+1] + r[x]`); `dir` records the
+/// step (ties go straight, then left). Branch-free in the interior so it
+/// vectorises.
+fn dp_row(prev: &[f32], cur: &mut [f32], dir: &mut [i8], b: &[f32], l: &[f32], r: &[f32]) {
+    let w = prev.len();
+    if w == 1 {
+        cur[0] = prev[0] + b[0];
+        dir[0] = 0;
+        return;
+    }
+    let (rv, u) = (prev[1] + r[0], prev[0]);
+    (cur[0], dir[0]) = if rv < u { (rv + b[0], 1) } else { (u + b[0], 0) };
+    let e = w - 1;
+    let (lv, u) = (prev[e - 1] + l[e], prev[e]);
+    (cur[e], dir[e]) = if lv < u { (lv + b[e], -1) } else { (u + b[e], 0) };
+    let n = w - 2;
+    let (pl, pc, pr) = (&prev[..n], &prev[1..n + 1], &prev[2..n + 2]);
+    let (bi, li, ri) = (&b[1..n + 1], &l[1..n + 1], &r[1..n + 1]);
+    let (ci, di) = (&mut cur[1..n + 1], &mut dir[1..n + 1]);
+    for i in 0..n {
+        let u = pc[i];
+        let lv = pl[i] + li[i];
+        let rv = pr[i] + ri[i];
+        let lt = lv < u;
+        let m1 = if lt { lv } else { u };
+        let rt = rv < m1;
+        ci[i] = if rt { rv } else { m1 } + bi[i];
+        di[i] = if rt {
+            1
+        } else if lt {
+            -1
+        } else {
+            0
+        };
+    }
 }
 
 /// Per row, the sorted columns the seams pass through.
@@ -469,16 +510,16 @@ fn compact<T: Copy + Send + Sync>(src: &[T], w: usize, nw: usize, rows: &[Vec<u3
         .zip(rows.par_iter())
         .enumerate()
         .for_each(|(y, (o, c))| {
+            // Copy the runs between the cut columns.
             let row = &src[y * w..(y + 1) * w];
-            let (mut j, mut n) = (0, 0);
-            for (x, &v) in row.iter().enumerate() {
-                if j < c.len() && c[j] as usize == x {
-                    j += 1;
-                    continue;
-                }
-                o[n] = v;
-                n += 1;
+            let (mut start, mut n) = (0, 0);
+            for &cx in c {
+                let cx = cx as usize;
+                o[n..n + cx - start].copy_from_slice(&row[start..cx]);
+                n += cx - start;
+                start = cx + 1;
             }
+            o[n..].copy_from_slice(&row[start..]);
         });
     out
 }

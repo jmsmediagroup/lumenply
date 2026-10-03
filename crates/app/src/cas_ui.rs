@@ -20,7 +20,7 @@ const PREVIEW_MAX: u32 = 720;
 const HANDLE_REACH: f32 = 9.0;
 /// While dragging, re-carve every frame only if a carve takes less than
 /// this; otherwise the last result stretches until the drag ends.
-const LIVE_MS: f32 = 45.0;
+const LIVE_MS: f32 = 60.0;
 
 /// What the seams must avoid.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -149,6 +149,19 @@ impl CasState {
         let w = (self.src_rect.w as f32 * wp / 100.0).max(1.0);
         let h = (self.src_rect.h as f32 * hp / 100.0).max(1.0);
         self.bx = [cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0];
+    }
+
+    /// What the view fits: the canvas and the box (the box a drag
+    /// started from, while dragging).
+    fn view_bounds(&self) -> [f32; 4] {
+        let b = self.drag.map_or(self.bx, |d| d.1);
+        let c = self.canvas;
+        [
+            b[0].min(c.x as f32),
+            b[1].min(c.y as f32),
+            b[2].max(c.right() as f32),
+            b[3].max(c.bottom() as f32),
+        ]
     }
 
     /// The command Commit runs, or `None` when the box is unchanged.
@@ -545,23 +558,24 @@ impl App {
                 let resp = ui.allocate_rect(avail, Sense::click_and_drag());
                 a11y_name(&resp, "Content-Aware Scale preview");
                 let canvas = st.canvas;
-                let (cw, ch) = (canvas.w as f32, canvas.h as f32);
-                let disp = ((avail.width() - 64.0) / cw)
-                    .min((avail.height() - 64.0) / ch)
+                // Fit the canvas and the box (as it was when a drag began,
+                // so the view holds still under the pointer).
+                let [vx0, vy0, vx1, vy1] = st.view_bounds();
+                let disp = ((avail.width() - 64.0) / (vx1 - vx0))
+                    .min((avail.height() - 64.0) / (vy1 - vy0))
                     .max(0.01);
-                let img = egui::Rect::from_center_size(avail.center(), egui::vec2(cw * disp, ch * disp));
+                let view = egui::Rect::from_center_size(
+                    avail.center(),
+                    egui::vec2((vx1 - vx0) * disp, (vy1 - vy0) * disp),
+                );
                 let to_screen = |c: (f32, f32)| {
-                    egui::pos2(
-                        img.min.x + (c.0 - canvas.x as f32) * disp,
-                        img.min.y + (c.1 - canvas.y as f32) * disp,
-                    )
+                    egui::pos2(view.min.x + (c.0 - vx0) * disp, view.min.y + (c.1 - vy0) * disp)
                 };
-                let to_canvas = |s: Pos2| {
-                    (
-                        canvas.x as f32 + (s.x - img.min.x) / disp,
-                        canvas.y as f32 + (s.y - img.min.y) / disp,
-                    )
-                };
+                let to_canvas = |s: Pos2| (vx0 + (s.x - view.min.x) / disp, vy0 + (s.y - view.min.y) / disp);
+                let img = egui::Rect::from_min_max(
+                    to_screen((canvas.x as f32, canvas.y as f32)),
+                    to_screen((canvas.right() as f32, canvas.bottom() as f32)),
+                );
                 // Pointer: grab, drag, release.
                 let (pressed, down, shift, pointer) = ctx.input(|i| {
                     (

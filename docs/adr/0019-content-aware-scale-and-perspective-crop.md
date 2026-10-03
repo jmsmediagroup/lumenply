@@ -36,8 +36,8 @@ result if revisited.
    gap), costs at most 1.5× the best plus 0.05 per row, and fits in a
    twentieth of the width. Results are deterministic, but a different
    batching rule would change future results (no saved data). Measured on
-   the 1800 × 1205 demo photo narrowed to 70 %: 1.15 s on an idle 14-core
-   machine, 2.2 s single-threaded under heavy load.
+   the 1800 × 1205 demo photo narrowed to 70 %: 0.19 s with 14 threads,
+   0.25 s on one (the cumulative pass is branch-free f32 and vectorises).
 
 5. **What gets scaled** is the active pixel layer's painted bounds, placed
    at the box the user drags. Its layer mask is carved along the same seams.
