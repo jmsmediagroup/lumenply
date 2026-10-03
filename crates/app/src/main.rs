@@ -326,6 +326,8 @@ struct App {
     camera_raw: Option<Box<camera_raw::CameraRawState>>,
     /// The open Image ▸ Adjustments dialog (Shadows/Highlights, ...).
     adjx: Option<Box<adjust_dialogs::AdjxState>>,
+    /// The settings each adjustment dialog was last OK'd with.
+    adjx_last: Vec<adjust_dialogs::AdjxKind>,
     /// Select ▸ Select and Mask's workspace, while open (it replaces the
     /// editor UI), and the settings it remembers between openings.
     select_mask: Option<Box<select_mask::SelectMaskState>>,
@@ -523,6 +525,7 @@ impl App {
             clip: None,
             camera_raw: None,
             adjx: None,
+            adjx_last: Vec::new(),
             select_mask: None,
             select_mask_prefs: Default::default(),
             clone_source: None,

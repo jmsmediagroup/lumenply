@@ -73,6 +73,15 @@ fn adjd_preset(id: &str) -> Option<Adjustment> {
         .map(|(_, a)| a)
 }
 
+/// The same dialog: the same variant, and for applied adjustment-layer
+/// kinds the same kind.
+fn same_kind(a: &AdjxKind, b: &AdjxKind) -> bool {
+    match (a, b) {
+        (AdjxKind::Adjust(x), AdjxKind::Adjust(y)) => x.name() == y.name(),
+        _ => std::mem::discriminant(a) == std::mem::discriminant(b),
+    }
+}
+
 fn is_ours(id: &str) -> bool {
     matches!(
         id,
@@ -281,6 +290,27 @@ impl App {
                 },
             },
             _ => return false,
+        };
+        // As in Photoshop, a dialog opens with the settings it was last
+        // applied with (the Match Color source is picked afresh).
+        let kind = match self.adjx_last.iter().find(|k| same_kind(k, &kind)) {
+            Some(AdjxKind::MatchColor {
+                m, from_selection, ..
+            }) => AdjxKind::MatchColor {
+                m: *m,
+                from_selection: *from_selection,
+                pick: SourcePick {
+                    doc: None,
+                    layer: None,
+                },
+            },
+            Some(AdjxKind::ReplaceColor { rc, swatch, .. }) => AdjxKind::ReplaceColor {
+                rc: rc.clone(),
+                swatch: *swatch,
+                show_image: false,
+            },
+            Some(k) => k.clone(),
+            None => kind,
         };
         self.adjx = Some(Box::new(AdjxState {
             kind,
@@ -834,6 +864,8 @@ impl App {
                 self.run(cmd.as_ref());
                 self.status = format!("{title}: {} ms", t.elapsed().as_millis());
             }
+            self.adjx_last.retain(|k| !same_kind(k, &st.kind));
+            self.adjx_last.push(st.kind.clone());
             self.mark(None);
             return;
         }
@@ -1125,6 +1157,33 @@ mod tests {
             assert_eq!(missing, Vec::<String>::new(), "in {id}");
             app.adjx = None;
         }
+    }
+
+    #[test]
+    fn dialogs_reopen_with_the_settings_last_applied() {
+        let mut app = small_app();
+        let ctx = crate::a11y_tests::ctx();
+        app.run_menu_action(ADJ_SH);
+        if let Some(AdjxKind::ShadowsHighlights(p)) = app.adjx.as_mut().map(|s| &mut s.kind) {
+            p.shadows.amount = 0.8;
+            p.midtone = 0.25;
+        }
+        app.adjx.as_mut().unwrap().debug_ok = true;
+        frames(&mut app, &ctx, 1);
+        app.run_menu_action(ADJ_SH);
+        match app.adjx.as_ref().map(|s| &s.kind) {
+            Some(AdjxKind::ShadowsHighlights(p)) => {
+                assert_eq!((p.shadows.amount, p.midtone), (0.8, 0.25));
+            }
+            _ => panic!("Shadows/Highlights did not open"),
+        }
+        // Cancel keeps the last applied settings; other kinds start fresh.
+        app.adjx = None;
+        app.run_menu_action("adjd-levels");
+        assert!(matches!(
+            app.adjx.as_ref().map(|s| &s.kind),
+            Some(AdjxKind::Adjust(a)) if *a == Adjustment::levels_default()
+        ));
     }
 
     #[test]
