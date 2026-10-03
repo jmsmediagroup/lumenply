@@ -5,6 +5,7 @@
 //! so a menu item, its palette entry and its key always agree.
 
 use super::*;
+use crate::selection_tools::remembered;
 
 #[derive(Default)]
 pub(crate) struct Palette {
@@ -82,7 +83,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Invert selection", "invert-sel"),
     ("Select colour range...", "color-range"),
     ("Toggle quick mask", "quick-mask"),
-    ("Feather selection", "feather"),
+    ("Feather selection...", "feather"),
     ("Layer mask from selection", "mask-from-sel"),
     ("New layer", "new-layer"),
     ("New layer from selection (layer via copy)", "layer-via-copy"),
@@ -860,7 +861,7 @@ impl App {
             "invert-sel" => self.run(&InvertSelection),
             "color-range" => self.dialog = Some(Dialog::ColorRange(25.0, false)),
             "quick-mask" => self.toggle_quick_mask(),
-            "feather" => self.run(&FeatherSelection { radius: self.feather }),
+            "feather" => self.dialog = Some(Dialog::SelectEdge(remembered(EdgeOp::Feather(2.0)), false)),
             "mask-from-sel" => {
                 if let Some(layer) = self.active {
                     self.run(&MaskFromSelection { layer });
@@ -872,7 +873,12 @@ impl App {
                     let name = self
                         .active_layer()
                         .map_or("Layer copy".into(), |l| format!("{} copy", l.name));
+                    // The copy becomes the active layer, as in Photoshop.
+                    let next = self.editor.doc().next_id();
                     self.run(&NewLayerFromSelection { layer, name });
+                    if self.editor.doc().layer(next).is_some() {
+                        self.set_active(Some(next));
+                    }
                 }
             }
             "rename" => {
@@ -1009,10 +1015,12 @@ impl App {
             "fit" => self.view_cmd = Some(ViewCmd::Fit),
             "actual" => self.view_cmd = Some(ViewCmd::Actual),
             "palette" => self.toggle_palette(),
-            "sel-expand" => self.dialog = Some(Dialog::SelectEdge(EdgeOp::Expand(4.0), false)),
-            "sel-contract" => self.dialog = Some(Dialog::SelectEdge(EdgeOp::Contract(4.0), false)),
-            "sel-border" => self.dialog = Some(Dialog::SelectEdge(EdgeOp::Border(8.0), false)),
-            "sel-smooth" => self.dialog = Some(Dialog::SelectEdge(EdgeOp::Smooth(4.0), false)),
+            "sel-expand" => self.dialog = Some(Dialog::SelectEdge(remembered(EdgeOp::Expand(4.0)), false)),
+            "sel-contract" => {
+                self.dialog = Some(Dialog::SelectEdge(remembered(EdgeOp::Contract(4.0)), false))
+            }
+            "sel-border" => self.dialog = Some(Dialog::SelectEdge(remembered(EdgeOp::Border(8.0)), false)),
+            "sel-smooth" => self.dialog = Some(Dialog::SelectEdge(remembered(EdgeOp::Smooth(4.0)), false)),
             "sel-grow" | "sel-similar" => {
                 let sample = match self.active {
                     Some(l) if !self.sample_merged && self.active_is_pixel() => SampleSource::Layer(l),

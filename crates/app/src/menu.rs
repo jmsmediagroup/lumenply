@@ -472,12 +472,11 @@ impl App {
             self.act(ui, "Smooth...", "sel-smooth");
             self.act(ui, "Expand...", "sel-expand");
             self.act(ui, "Contract...", "sel-contract");
+            self.act(ui, "Feather...", "feather");
         });
         self.act(ui, "Grow", "sel-grow");
         self.act(ui, "Similar", "sel-similar");
         menu_separator(ui);
-        let feather = format!("Feather {:.0} px", self.feather);
-        self.act(ui, &feather, "feather");
         self.act(ui, "Layer mask from selection", "mask-from-sel");
         menu_separator(ui);
         self.act(ui, "Save selection...", "save-selection");

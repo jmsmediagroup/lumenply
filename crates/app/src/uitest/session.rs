@@ -1384,6 +1384,23 @@ impl Session {
         })
     }
 
+    /// `click_offset` with modifier keys held (Cmd-click a layer thumbnail).
+    pub(crate) fn click_offset_with(
+        &mut self,
+        name: &str,
+        dx: f32,
+        dy: f32,
+        keys: &str,
+        what: &str,
+    ) -> UiResult {
+        let mods = Self::mods(keys)?;
+        self.step("action", format!("{keys}-click {what} in “{name}”"), |s| {
+            s.aim(None, name, &|n: &Node| vec![n.rect.min + egui::vec2(dx, dy)])?;
+            s.with_modifiers(mods, |s| s.click_here(PointerButton::Primary, 1))?;
+            s.settle(20)
+        })
+    }
+
     /// Click inside a control at a fraction (fx, fy) of its size.
     pub(crate) fn click_in(&mut self, name: &str, fx: f32, fy: f32, what: &str) -> UiResult {
         self.step("action", format!("Click {what} in “{name}”"), |s| {
@@ -1668,6 +1685,61 @@ impl Session {
                 }
                 s.frame()?;
                 s.button(PointerButton::Primary, false)?;
+                s.settle(30)
+            },
+        )
+    }
+
+    /// A drag on the canvas through document points with the modifier keys
+    /// held from each point on (`""` for none): keys pressed or released
+    /// partway through a drag, as Photoshop's marquee reads them (Shift
+    /// pressed after the drag starts constrains, Alt draws from the centre).
+    pub(crate) fn canvas_path(
+        &mut self,
+        points: &[((f32, f32), &str)],
+        steps_per_segment: usize,
+    ) -> UiResult {
+        let mods: Vec<Modifiers> = points
+            .iter()
+            .map(|(_, k)| Self::mods(k))
+            .collect::<UiResult<_>>()?;
+        self.step(
+            "action",
+            format!(
+                "Drag on the canvas through {} points, keys: {}",
+                points.len(),
+                points
+                    .iter()
+                    .map(|(_, k)| if k.is_empty() { "–" } else { k })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            |s| {
+                let pts: Vec<Pos2> = points
+                    .iter()
+                    .map(|((x, y), _)| s.doc_to_screen(*x, *y))
+                    .collect::<UiResult<_>>()?;
+                let (first, rest) = pts.split_first().ok_or("no points")?;
+                s.aim_canvas(*first, points[0].0)?;
+                let before = s.modifiers;
+                s.modifiers = mods[0];
+                s.frame()?;
+                s.button(PointerButton::Primary, true)?;
+                let mut at = *first;
+                for (k, p) in rest.iter().enumerate() {
+                    let n = steps_per_segment.max(1);
+                    for i in 1..=n {
+                        let q = at + (*p - at) * (i as f32 / n as f32);
+                        s.pointer = q;
+                        s.events.push(Event::PointerMoved(q));
+                        s.frame()?;
+                    }
+                    s.modifiers = mods[k + 1];
+                    at = *p;
+                }
+                s.frame()?;
+                s.button(PointerButton::Primary, false)?;
+                s.modifiers = before;
                 s.settle(30)
             },
         )

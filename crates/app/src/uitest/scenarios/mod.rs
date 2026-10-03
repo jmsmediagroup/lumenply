@@ -11,6 +11,7 @@ use super::Scenario;
 mod adjust;
 mod b_layers;
 mod basics;
+mod c_selections;
 mod selection;
 
 /// Every area's scenarios, in the order `--uitest` runs them.
@@ -18,5 +19,6 @@ pub(crate) const AREAS: &[&[Scenario]] = &[
     basics::SCENARIOS,
     adjust::SCENARIOS,
     selection::SCENARIOS,
+    c_selections::SCENARIOS,
     b_layers::SCENARIOS,
 ];

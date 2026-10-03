@@ -327,20 +327,6 @@ impl App {
         });
     }
 
-    /// Layer via Copy (Cmd+J with a selection): the selected pixels on a
-    /// new layer right above, which becomes the active one.
-    pub(crate) fn layer_via_copy(&mut self) {
-        let Some(layer) = self.active else { return };
-        let name = self
-            .active_layer()
-            .map_or("Layer copy".into(), |l| format!("{} copy", l.name));
-        let next = self.editor.doc().next_id();
-        self.run(&NewLayerFromSelection { layer, name });
-        if self.editor.doc().layer(next).is_some() {
-            self.set_active(Some(next));
-        }
-    }
-
     /// Alt+Cmd+G: clip the active layer, or release it when clipped.
     fn clip_toggle_id(&self) -> &'static str {
         if self.active_layer().is_some_and(|l| l.clip) {
@@ -545,7 +531,6 @@ impl App {
             "flatten" => self.flatten_image(),
             "stamp-visible" => self.stamp_visible(),
             "add-mask" => self.add_mask_auto(false),
-            "layer-via-copy" => self.layer_via_copy(),
             "mask-apply" => {
                 if let Some(layer) = self.active {
                     self.run(&ApplyLayerMask { layer });
