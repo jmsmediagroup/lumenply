@@ -370,10 +370,11 @@ impl App {
         }
         let raster = PerspectiveCrop::rasterized_layers(self.editor.doc()).len();
         if raster > 0 {
+            let layers = if raster == 1 { "layer" } else { "layers" };
             let text = if tier == options_bar::Tier::Wide {
-                format!("rasterizes {raster} text/vector layer(s)")
+                format!("rasterizes {raster} text/vector {layers}")
             } else {
-                format!("rasterizes {raster}")
+                format!("rasterizes {raster} {layers}")
             };
             ui.label(RichText::new(text).color(ACCENT)).on_hover_text(format!(
                 "{raster} text, shape or smart-object layer(s) cannot follow a perspective \
