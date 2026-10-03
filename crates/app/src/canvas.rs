@@ -753,6 +753,22 @@ impl App {
                 changed = true;
             } else if let (Some(a), Some(b)) = (self.drag_start, resp.interact_pointer_pos()) {
                 match h {
+                    Handle::Corner(i) if ctx.input(|inp| inp.modifiers.shift) => {
+                        // Shift frees the aspect ratio: each axis follows the
+                        // pointer in the box's un-rotated frame (corners are
+                        // top-left, top-right, bottom-right, bottom-left).
+                        let (px, py) = to_doc(b);
+                        let v = (px - (cx + x.dx), py - (cy + x.dy));
+                        let (s, c) = (-x.angle).sin_cos();
+                        let local = (v.0 * c - v.1 * s, v.0 * s + v.1 * c);
+                        let (sx, sy) = ([-1.0, 1.0, 1.0, -1.0][i], [-1.0, -1.0, 1.0, 1.0][i]);
+                        let clamp = |v: f32| {
+                            let m = v.abs().clamp(0.02, 50.0);
+                            m * v.signum()
+                        };
+                        x.sx = clamp(sx * local.0 / (x.bounds.w as f32 / 2.0));
+                        x.sy = clamp(sy * local.1 / (x.bounds.h as f32 / 2.0));
+                    }
                     Handle::Corner(_) => {
                         // Corners scale both axes by the same ratio.
                         let d0 = a.distance(centre_s).max(1.0);

@@ -494,6 +494,76 @@ mod pick_tests {
     }
 
     #[test]
+    fn shift_dragging_a_transform_corner_scales_the_axes_freely() {
+        let mut doc = Document::new(200, 120);
+        let id = doc.add_pixel_layer("box");
+        for y in 40..80 {
+            for x in 60..140 {
+                doc.layer_mut(id).unwrap().pixels_mut().unwrap().set_pixel(
+                    x,
+                    y,
+                    Rgba::new(0.0, 1.0, 0.0, 1.0),
+                );
+            }
+        }
+        let mut app = App::launch(&[]);
+        app.open_in_new_tab(Editor::new(doc), None);
+        app.dialog = None;
+        app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
+        app.set_active(Some(id));
+        let ctx = crate::a11y_tests::ctx();
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![], false);
+        }
+        app.begin_free_transform();
+        frame(&mut app, &ctx, vec![], false);
+        // Calibrate document → screen with a probe.
+        let probe = egui::pos2(620.0, 450.0);
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(probe)], false);
+        let (qx, qy) = app.cursor_doc.unwrap();
+        let z = app.zoom;
+        let at = |x: f32, y: f32| {
+            egui::pos2(
+                probe.x + (x - (qx as f32 + 0.5)) * z,
+                probe.y + (y - (qy as f32 + 0.5)) * z,
+            )
+        };
+        // Drag the bottom-right corner (140, 80) right only, with Shift.
+        let (from, to) = (at(140.0, 80.0), at(180.0, 80.0));
+        let shift = egui::Modifiers::SHIFT;
+        let raw = |events| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+            events,
+            modifiers: shift,
+            ..Default::default()
+        };
+        let press = |pressed, pos| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: shift,
+        };
+        let _ = ctx.run(raw(vec![egui::Event::PointerMoved(from)]), |c| app.frame(c));
+        let _ = ctx.run(raw(vec![press(true, from)]), |c| app.frame(c));
+        for k in 1..=6 {
+            let t = k as f32 / 6.0;
+            let _ = ctx.run(
+                raw(vec![egui::Event::PointerMoved(from + (to - from) * t)]),
+                |c| app.frame(c),
+            );
+        }
+        let x = app.xform.as_ref().expect("transforming");
+        // Width 80 → 120 about the centre (100): right edge 180, so sx = 2;
+        // height unchanged.
+        assert!(
+            (x.sx - 2.0).abs() < 0.05 && (x.sy - 1.0).abs() < 0.05,
+            "{} {}",
+            x.sx,
+            x.sy
+        );
+    }
+
+    #[test]
     fn shift_click_paints_a_straight_line_from_the_last_stroke() {
         let mut doc = Document::new(200, 120);
         let id = doc.add_pixel_layer("ink");
