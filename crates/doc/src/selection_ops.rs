@@ -210,6 +210,8 @@ pub enum EdgeOp {
     /// Majority vote over a square window of this radius: rounds corners
     /// and drops specks and pinholes smaller than the window.
     Smooth(f32),
+    /// Soften the edge over this radius ([`Selection::feather`]).
+    Feather(f32),
 }
 
 impl EdgeOp {
@@ -219,12 +221,17 @@ impl EdgeOp {
             EdgeOp::Contract(_) => "Contract",
             EdgeOp::Border(_) => "Border",
             EdgeOp::Smooth(_) => "Smooth",
+            EdgeOp::Feather(_) => "Feather",
         }
     }
 
     /// The pixel amount, sanitised to 0..=1000.
     pub fn amount(self) -> f32 {
-        let (EdgeOp::Expand(v) | EdgeOp::Contract(v) | EdgeOp::Border(v) | EdgeOp::Smooth(v)) = self;
+        let (EdgeOp::Expand(v)
+        | EdgeOp::Contract(v)
+        | EdgeOp::Border(v)
+        | EdgeOp::Smooth(v)
+        | EdgeOp::Feather(v)) = self;
         crate::sane_radius(v)
     }
 }
@@ -237,6 +244,10 @@ impl Selection {
         }
         let n = op.amount();
         if n <= 0.0 {
+            return;
+        }
+        if let EdgeOp::Feather(_) = op {
+            self.feather(n);
             return;
         }
         // Only the selection's tiles (plus the reach) need work, unless it
@@ -266,6 +277,7 @@ impl Selection {
                 s.into_iter().map(|s| f(s).clamp(0.0, 1.0)).collect()
             }
             EdgeOp::Smooth(_) => smooth(&cov, w, h, n.round().max(1.0) as usize),
+            EdgeOp::Feather(_) => unreachable!("feathered above"),
         };
         write_canvas(&mut self.coverage, canvas, area, &out);
     }
@@ -334,6 +346,26 @@ mod tests {
         assert_eq!(s.value(18, 18), 1.0);
         assert!((s.value(17, 18) - 0.394).abs() < 1e-3, "{}", s.value(17, 18));
         assert_eq!(s.value(35, 30), 1.0, "inside stays selected");
+    }
+
+    #[test]
+    fn feather_softens_the_edge_like_select_feather() {
+        let mut s = Selection::rect(Rect::new(20, 20, 40, 40)); // x 20..60
+        let mut plain = s.clone();
+        s.modify_edge(EdgeOp::Feather(6.0), CANVAS);
+        plain.feather(6.0);
+        assert_eq!(
+            row(&s, 40, 10..70),
+            row(&plain, 40, 10..70),
+            "the same as Selection::feather"
+        );
+        // Half selected on the old edge, rising across it, whole inside.
+        let edge = (s.value(19, 40) + s.value(20, 40)) / 2.0;
+        assert!((edge - 0.5).abs() < 0.03, "{edge}");
+        assert!(s.value(14, 40) < s.value(19, 40) && s.value(20, 40) < s.value(26, 40));
+        assert!(s.value(10, 40) < 0.01 && s.value(40, 40) > 0.99);
+        assert_eq!(EdgeOp::Feather(6.0).name(), "Feather");
+        assert_eq!(EdgeOp::Feather(f32::NAN).amount(), 0.0);
     }
 
     #[test]
