@@ -26,6 +26,8 @@ impl App {
             "select-layer-pixels" => None,
             "layer-front" | "layer-back" if self.active_layer().is_none() => Some("Select a layer first"),
             "layer-front" | "layer-back" | "duplicate-doc" => None,
+            "fill-bg" if !self.active_is_pixel() => Some("Select a pixel layer first"),
+            "fill-bg" => None,
             _ => return None,
         })
     }
@@ -46,6 +48,12 @@ impl App {
                 }
             }
             "reselect" => self.run(&Reselect),
+            "fill-bg" => {
+                if let Some(layer) = self.active {
+                    let color = linear_rgba(self.bg_rgb, 1.0);
+                    self.run(&lumenply_core::commands::Fill { layer, color });
+                }
+            }
             "stroke-selection" => self.dialog = Some(Dialog::Stroke(3.0, StrokeLocation::Center, 100.0)),
             "select-layer-pixels" => {
                 if let Some(layer) = self.active {
@@ -78,6 +86,7 @@ impl App {
         let both = M::COMMAND | M::SHIFT;
         let (m, k) = match id {
             "layer-front" => (both, Key::CloseBracket),
+            "fill-bg" => (M::COMMAND, Key::Backspace),
             "layer-back" => (both, Key::OpenBracket),
             _ => return None,
         };
@@ -300,6 +309,21 @@ mod tests {
         app.run_menu_action("select-layer-pixels");
         let s = app.editor.doc().selection.clone().unwrap();
         assert_eq!((s.value(25, 25), s.value(5, 5)), (1.0, 0.0));
+        // Cmd+Backspace's action: fill with the background colour.
+        app.bg_rgb = [1.0, 1.0, 0.0];
+        app.run(&SetSelection {
+            selection: Some(Selection::rect(Rect::new(0, 0, 4, 4))),
+        });
+        app.run_menu_action("fill-bg");
+        let p = app
+            .editor
+            .doc()
+            .layer(id)
+            .unwrap()
+            .pixels()
+            .unwrap()
+            .get_pixel(1, 1);
+        assert!(p.r > 0.99 && p.g > 0.99 && p.b < 0.01 && p.a == 1.0, "{p:?}");
         // Duplicate the document into a new, unsaved tab.
         let tabs = app.tab_infos().len();
         app.run_menu_action("duplicate-doc");

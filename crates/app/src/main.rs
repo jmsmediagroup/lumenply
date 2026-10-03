@@ -1190,16 +1190,23 @@ impl App {
                 self.run_menu_action(id);
             }
         }
-        let (fill, delete, fill_dialog) = ctx.input(|i| {
-            let back = i.key_pressed(Key::Backspace);
+        let (fill, delete, fill_dialog, fill_bg) = ctx.input(|i| {
+            let back = i.key_pressed(Key::Backspace) || i.key_pressed(Key::Delete);
+            let m = i.modifiers;
             (
-                i.modifiers.shift && i.key_pressed(Key::F5),
-                i.key_pressed(Key::Delete) || (back && !i.modifiers.shift),
-                back && i.modifiers.shift,
+                // Shift+F5, or Alt+Backspace: fill with the foreground colour.
+                (m.shift && i.key_pressed(Key::F5)) || (back && m.alt && !m.command && !m.shift),
+                back && !m.shift && !m.alt && !m.command,
+                back && m.shift && !m.alt && !m.command,
+                // Cmd+Backspace: fill with the background colour.
+                back && m.command && !m.alt && !m.shift,
             )
         });
         if fill {
             self.run_menu_action("fill");
+        }
+        if fill_bg {
+            self.run_menu_action("fill-bg");
         }
         // Shift+Backspace: Photoshop's Fill dialog (content-aware or colour).
         if fill_dialog && delete_key_action(self.tool).is_some() {

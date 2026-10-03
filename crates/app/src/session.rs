@@ -31,8 +31,13 @@ pub(crate) const SHORTCUTS: &[(&str, &str, bool, bool, &str)] = &[
     // Before "deselect": Shift+Cmd+D contains Cmd+D.
     ("reselect", "Reselect", true, true, "D"),
     ("deselect", "Deselect", true, false, "D"),
+    // Before "save": Shift+Cmd+S contains Cmd+S.
+    ("saveas", "Save as", true, true, "S"),
     ("save", "Save", true, false, "S"),
     ("open", "Open", true, false, "O"),
+    // Before "new": Shift+Cmd+N contains Cmd+N.
+    ("new-layer", "New layer", true, true, "N"),
+    ("new", "New document", true, false, "N"),
     ("close", "Close document", true, false, "W"),
     ("xform", "Free transform", true, false, "T"),
     ("group", "Group layers", true, false, "G"),

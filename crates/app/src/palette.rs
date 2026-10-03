@@ -205,6 +205,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Bring layer to front", "layer-front"),
     ("Send layer to back", "layer-back"),
     ("Duplicate document", "duplicate-doc"),
+    ("Fill with background colour", "fill-bg"),
     ("New fill layer: pattern...", "fill-pattern"),
     ("Define Pattern", "define-pattern"),
     ("Import patterns (.pat)...", "import-patterns"),
@@ -968,7 +969,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 155); // + load-lut, export-lut
+        assert_eq!(n, 156); // + load-lut, export-lut
     }
 
     #[test]

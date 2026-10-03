@@ -412,6 +412,7 @@ impl App {
         self.act(ui, "Puppet Warp", "puppet-warp");
         menu_separator(ui);
         self.act(ui, "Fill with brush colour", "fill");
+        self.act(ui, "Fill with background colour", "fill-bg");
         self.act(ui, "Fill...", "fill-dialog");
         self.act(ui, "Stroke...", "stroke-selection");
         self.act(ui, "Content-Aware Fill...", "content-aware");
