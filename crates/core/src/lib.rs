@@ -146,7 +146,12 @@ struct Step {
     /// The document this version stands for, projected when
     /// [`Editor::state`] first asks for it.
     doc: OnceLock<Document>,
+    /// This version's identity (see [`Editor::version`]).
+    serial: u64,
 }
+
+/// Serials for [`Step::serial`], unique across every editor in the process.
+static NEXT_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Step {
     fn new(
@@ -161,6 +166,7 @@ impl Step {
             bytes,
             blob_ids,
             doc: OnceLock::new(),
+            serial: NEXT_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
 }
@@ -648,6 +654,16 @@ impl Editor {
         )
     }
 
+    /// The current version's identity: a number no other version of any
+    /// document shares. Undo and redo return to a version's own number;
+    /// any edit (a coalesced slider tick too) makes a new one. Comparing it
+    /// with the number at the last save tells whether the document differs
+    /// from its file, which the history's length cannot (undo, then a
+    /// different edit; or edits past the history limit).
+    pub fn version(&self) -> u64 {
+        self.history.current_version().payload.serial
+    }
+
     /// Labels of the undo stack, oldest first.
     pub fn history(&self) -> Vec<&str> {
         let v = self.history.versions();
@@ -765,6 +781,59 @@ mod tests {
         });
         assert!(matches!(err, Err(EditError::NoLayer(42))));
         assert!(!ed.can_undo());
+    }
+
+    #[test]
+    fn a_version_number_tells_whether_the_document_is_the_one_saved() {
+        let mut ed = Editor::new(Document::new(16, 16));
+        ed.execute(&AddPixelLayer::new("L")).unwrap();
+        let id = ed.doc().layers()[0].id;
+        let opacity = |o: f32| SetOpacity {
+            layer: id,
+            opacity: o,
+        };
+        let saved = ed.version();
+        // A failed edit changes nothing.
+        assert!(ed
+            .execute(&SetOpacity {
+                layer: 99,
+                opacity: 0.5
+            })
+            .is_err());
+        assert_eq!(ed.version(), saved);
+        ed.execute(&opacity(0.5)).unwrap();
+        let half = ed.version();
+        assert_ne!(half, saved);
+        // Undo returns to the saved version's own number, redo to the edit's.
+        ed.undo();
+        assert_eq!(ed.version(), saved);
+        ed.redo();
+        assert_eq!(ed.version(), half);
+        // Undo, then a different edit: the history is as long as when
+        // saved, but this is a version never saved.
+        ed.undo();
+        ed.execute(&opacity(0.25)).unwrap();
+        assert_eq!(ed.history().len(), 2);
+        assert_ne!(ed.version(), saved);
+        assert_ne!(ed.version(), half);
+        // Every tick of a coalesced drag is a new version.
+        let before = ed.version();
+        ed.execute_coalescing(&opacity(0.3), "drag").unwrap();
+        let tick = ed.version();
+        ed.execute_coalescing(&opacity(0.4), "drag").unwrap();
+        assert!(before != tick && tick != ed.version());
+        // At the history limit the length stops growing; versions don't.
+        ed.history_limit = 2;
+        let mut seen = vec![ed.version()];
+        for o in [0.6, 0.7, 0.8] {
+            ed.execute(&opacity(o)).unwrap();
+            assert!(!seen.contains(&ed.version()));
+            seen.push(ed.version());
+        }
+        assert_eq!(ed.history().len(), 2);
+        // Another editor never shares a number.
+        let other = Editor::new(Document::new(16, 16));
+        assert!(!seen.contains(&other.version()) && other.version() != saved);
     }
 
     #[test]

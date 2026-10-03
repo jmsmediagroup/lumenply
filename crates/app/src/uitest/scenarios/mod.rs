@@ -8,9 +8,15 @@
 
 use super::Scenario;
 
+mod a_files;
 mod adjust;
 mod basics;
 mod selection;
 
 /// Every area's scenarios, in the order `--uitest` runs them.
-pub(crate) const AREAS: &[&[Scenario]] = &[basics::SCENARIOS, adjust::SCENARIOS, selection::SCENARIOS];
+pub(crate) const AREAS: &[&[Scenario]] = &[
+    basics::SCENARIOS,
+    adjust::SCENARIOS,
+    selection::SCENARIOS,
+    a_files::SCENARIOS,
+];

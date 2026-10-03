@@ -65,16 +65,16 @@ impl App {
             "layer-front" | "layer-back" => self.layer_to_end(id == "layer-front"),
             "duplicate-doc" => {
                 let doc = self.editor.doc().clone();
-                let title = self
-                    .path
-                    .as_ref()
-                    .map(|p| file_name(&p.to_string_lossy()))
-                    .unwrap_or_else(|| self.untitled.clone());
-                let name = format!("{title} copy");
+                // "poster.lumen" and "photo.jpg" give "poster copy" and
+                // "photo copy", as in Photoshop.
+                let name = format!(
+                    "{} copy",
+                    crate::dialogs::default_stem(self.path.as_deref(), &self.untitled)
+                );
                 self.open_in_new_tab(Editor::new(doc), None);
                 self.untitled = name;
                 // A duplicate is new work, never saved anywhere yet.
-                self.saved_rev = usize::MAX;
+                self.saved_rev = None;
                 self.status = "Duplicated the document".into();
             }
             _ => return false,
@@ -392,8 +392,11 @@ mod tests {
         assert_eq!(app.editor.doc().layers().len(), before);
         // Duplicate the document into a new, unsaved tab.
         let tabs = app.tab_infos().len();
+        app.path = Some(PathBuf::from("/work/poster.lumen"));
         app.run_menu_action("duplicate-doc");
         assert_eq!(app.tab_infos().len(), tabs + 1);
+        // Named as Photoshop names it: the file's name, extension dropped.
+        assert_eq!(app.tab_infos()[app.cur_tab], ("poster copy".to_string(), true));
         assert_eq!(app.editor.doc().layers().len(), 3);
         assert!(app.any_unsaved());
     }

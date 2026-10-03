@@ -426,7 +426,7 @@ impl App {
     }
 
     fn image_menu(&mut self, ui: &mut egui::Ui) {
-        self.act(ui, "Duplicate...", "duplicate-doc");
+        self.act(ui, "Duplicate", "duplicate-doc");
         menu_separator(ui);
         self.act(ui, "Image size...", "image-size");
         self.act(ui, "Canvas size...", "canvas-size");
@@ -728,6 +728,16 @@ impl App {
                 let c = resp.rect.right_center() + egui::vec2(-9.0, 0.0);
                 ui.painter().circle_filled(c, 3.0, ACCENT);
             }
+            // Screen readers hear the name and the unsaved state, not
+            // the padding that makes room for the dot.
+            a11y_name(
+                &resp,
+                &if unsaved {
+                    format!("{name}, unsaved changes")
+                } else {
+                    name.clone()
+                },
+            );
             let resp = resp.on_hover_text(if unsaved {
                 "Unsaved changes — middle-click closes"
             } else {
@@ -747,6 +757,7 @@ impl App {
                         .fill(Color32::TRANSPARENT)
                         .frame(false),
                 );
+                a11y_name(&x, "Close document");
                 if x.on_hover_text("Close document").clicked() {
                     close = Some(i);
                 }
@@ -757,6 +768,7 @@ impl App {
                 .fill(Color32::TRANSPARENT)
                 .frame(false),
         );
+        a11y_name(&plus, "New document");
         if plus.on_hover_text("New document (tab)").clicked() {
             self.dialog = Some(Dialog::New(1920, 1080, 72.0));
         }
