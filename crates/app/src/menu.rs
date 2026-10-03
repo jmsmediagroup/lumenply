@@ -442,6 +442,8 @@ impl App {
         self.act(ui, "Flip image horizontal", "img-flip-h");
         self.act(ui, "Flip image vertical", "img-flip-v");
         menu_separator(ui);
+        menu(ui, "Adjustments", |ui| self.adjustments_menu(ui));
+        self.act(ui, "Auto tone", "auto-tone");
         self.act(ui, "Auto contrast", "auto-contrast");
         self.act(ui, "Auto color", "auto-color");
         menu_separator(ui);

@@ -13,6 +13,7 @@
 //! formulas will be ported to WGSL for the GPU path; this CPU path stays as
 //! the reference and fallback.
 
+pub mod adjust_more;
 pub mod blend;
 pub mod cache;
 pub mod develop;

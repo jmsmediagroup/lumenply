@@ -1363,7 +1363,7 @@ const DIALOG_MARGIN: f32 = 16.0;
 /// egui's window title bar (title row, a gap of both frame margins, the
 /// hairline one margin below the title text). egui's own bar is a focusable
 /// control with no name, and the first Tab stop; this title is plain paint.
-fn titled<R>(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+pub(crate) fn titled<R>(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let galley = egui::WidgetText::from(title).into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
@@ -1398,7 +1398,7 @@ pub(crate) fn note(ui: &mut egui::Ui, text: &str) {
 
 /// The dialog footer: a hairline, then buttons laid right to left (add
 /// the primary action first so it sits at the far right).
-fn footer(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn footer(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     // As wide as the content above, never wider: a full-width layout
     // would stretch the auto-sized window to its maximum.
     let w = ui.min_rect().width();

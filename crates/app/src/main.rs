@@ -22,6 +22,7 @@ use lumenply_doc::{
 use lumenply_io::project;
 use lumenply_tiles::{Affine, Raster, Rect};
 
+mod adjust_dialogs;
 mod adjust_ui;
 mod blend_ui;
 mod brand;
@@ -334,6 +335,10 @@ struct App {
     cas: Option<Box<cas_ui::CasState>>,
     /// The Camera Raw develop workspace, while a RAW file is being opened.
     camera_raw: Option<Box<camera_raw::CameraRawState>>,
+    /// The open Image ▸ Adjustments dialog (Shadows/Highlights, ...).
+    adjx: Option<Box<adjust_dialogs::AdjxState>>,
+    /// The settings each adjustment dialog was last OK'd with.
+    adjx_last: Vec<adjust_dialogs::AdjxKind>,
     /// Select ▸ Select and Mask's workspace, while open (it replaces the
     /// editor UI), and the settings it remembers between openings.
     select_mask: Option<Box<select_mask::SelectMaskState>>,
@@ -545,6 +550,8 @@ impl App {
             quick: Default::default(),
             clip: None,
             camera_raw: None,
+            adjx: None,
+            adjx_last: Vec::new(),
             select_mask: None,
             select_mask_prefs: Default::default(),
             clone_source: None,
@@ -1106,7 +1113,10 @@ impl App {
         // The palette toggle works even while a text field has focus (but
         // not under a modal dialog, which would cover it). On the welcome
         // screen it lists the actions with document-only ones greyed out.
-        if self.dialog.is_none() && ctx.input_mut(|i| i.consume_key(M::COMMAND, Key::K)) {
+        if self.dialog.is_none()
+            && self.adjx.is_none()
+            && ctx.input_mut(|i| i.consume_key(M::COMMAND, Key::K))
+        {
             self.toggle_palette();
         }
         if self.palette.is_some() || ctx.wants_keyboard_input() {
@@ -1115,7 +1125,7 @@ impl App {
         // A modal dialog owns the keyboard even when no text field has
         // focus, and a shortcut firing mid-drag would edit the document
         // under an in-progress stroke or move.
-        if self.dialog.is_some() || self.drag.is_some() {
+        if self.dialog.is_some() || self.adjx.is_some() || self.drag.is_some() {
             return;
         }
         if self.xform.is_some() {
@@ -1532,6 +1542,7 @@ impl App {
             self.floating_panels(ctx);
         }
         self.dialogs(ctx);
+        self.adjx_ui(ctx);
         self.palette_ui(ctx);
         self.pattern_picker_ui(ctx);
         if !self.no_doc

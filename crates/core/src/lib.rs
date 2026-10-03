@@ -6,6 +6,7 @@
 //! plugins all go through this one path, so undo, macros and the headless
 //! CLI behave identically.
 
+pub mod adjust_cmds;
 pub mod align;
 pub mod brush_tip;
 pub mod canvas_ops;

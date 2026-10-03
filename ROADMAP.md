@@ -369,6 +369,17 @@ None of these could be tested in the container.
 - [x] Adjustments: Gradient Map, Channel Mixer, Photo Filter, Selective Color
       (gamma-domain; GPU falls back to CPU for them); PSD grdm/mixr/phfl/selc
       round-trip, psd-tools-verified
+- [x] Image ▸ Adjustments (Photoshop's destructive set): Shadows/Highlights
+      (edge-aware local tone, no halos, presets, tile-exact), Equalize (selection
+      histogram, hue kept), Desaturate (Shift+Cmd+U), Replace Color (Color Range
+      mask, +/− samples), Match Color (Lab mean/spread from another document or
+      layer, Fade, Neutralize). Every adjustment-layer kind can also be applied to
+      pixels (Cmd+L/M/U/I); each is one undo step inside the selection, previews
+      live and reopens with its last settings
+- [x] Auto Tone (Shift+Cmd+L): one shared black/white point for R, G and B,
+      as a Levels adjustment layer
+- [ ] Shadows/Highlights as a smart filter; its Black/White clip; Replace
+      Color's localized clusters; Match Color statistics saving; HDR Toning
 - [x] Fill layers: Solid Color and Gradient (linear/radial/angle/reflected/
       diamond, angle, scale, reverse, offset) compositing like pixel layers from
       a derived canvas cache; Layer ▸ New fill layer; PSD SoCo/GdFl round-trip
