@@ -1586,8 +1586,11 @@ impl Session {
 
     /// The canvas node of the last frame.
     fn canvas_node(&self) -> UiResult<Node> {
-        self.tree
-            .matches("Canvas", None)
+        // While text is edited on it, the canvas is a text field called
+        // "Text on canvas".
+        let mut found = self.tree.matches("Canvas", None);
+        found.extend(self.tree.matches("Text on canvas", None));
+        found
             .into_iter()
             .max_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))
             .cloned()
@@ -1674,6 +1677,22 @@ impl Session {
                 let p = s.doc_to_screen(at.0, at.1)?;
                 s.aim_canvas(p, at)?;
                 s.with_modifiers(mods, |s| s.click_here(PointerButton::Primary, 1))?;
+                s.settle(30)
+            },
+        )
+    }
+
+    /// Click a document point `count` times in quick succession (2: a
+    /// double click, 3: a triple click), with `keys` held.
+    pub(crate) fn canvas_multi_click(&mut self, at: (f32, f32), count: usize, keys: &str) -> UiResult {
+        let mods = Self::mods(keys)?;
+        self.step(
+            "action",
+            format!("Click the canvas {count} times at ({:.0}, {:.0})", at.0, at.1),
+            |s| {
+                let p = s.doc_to_screen(at.0, at.1)?;
+                s.aim_canvas(p, at)?;
+                s.with_modifiers(mods, |s| s.click_here(PointerButton::Primary, count))?;
                 s.settle(30)
             },
         )
