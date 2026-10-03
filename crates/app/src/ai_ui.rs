@@ -677,6 +677,9 @@ impl App {
             });
         if let Some(shown) = shown {
             ctx.move_to_top(shown.response.layer_id);
+            // Just above its backdrop, as in dialogs.rs: reopened after
+            // another dialog it would otherwise stay below it, unclickable.
+            ctx.set_sublayer(crate::dialogs::backdrop_layer(), shown.response.layer_id);
             ctx.accesskit_node_builder(shown.response.id, |b| {
                 b.set_role(egui::accesskit::Role::Dialog);
                 b.set_name(title);

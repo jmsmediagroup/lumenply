@@ -618,3 +618,26 @@ fn the_first_use_dialog_fits_a_900_by_600_window() {
     assert!(screen.contains_rect(r), "{r:?}");
     assert!(r.width() <= 460.0, "{r:?}");
 }
+
+#[test]
+fn the_first_use_dialog_shown_again_after_another_dialog_is_clickable() {
+    let (mut app, _) = card_app(installed(&[]));
+    let ctx = a11y_ctx();
+    let consent = egui::Id::new("ai-consent");
+    app.run_menu_action(SELECT_SUBJECT);
+    assert!(app.ai.consent.is_some(), "the first-use dialog");
+    let layer_at_centre = crate::dialogs::tests::layer_at_centre;
+    assert_eq!(layer_at_centre(&mut app, &ctx, 4), Some(consent));
+    // Another dialog over the same backdrop in between.
+    let asked = app.ai.consent.take();
+    app.dialog = Some(Dialog::New(800, 600, 72.0));
+    assert_eq!(
+        layer_at_centre(&mut app, &ctx, 4),
+        Some(egui::Id::new("New document"))
+    );
+    app.dialog = None;
+    layer_at_centre(&mut app, &ctx, 2);
+    app.ai.consent = asked;
+    // It used to stay under the backdrop, which took every click.
+    assert_eq!(layer_at_centre(&mut app, &ctx, 4), Some(consent));
+}
