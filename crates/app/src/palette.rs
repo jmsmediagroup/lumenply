@@ -207,6 +207,8 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Send layer to back", "layer-back"),
     ("Duplicate document", "duplicate-doc"),
     ("Fill with background colour", "fill-bg"),
+    ("Export PDF...", "export-pdf"),
+    ("New history snapshot", "new-snapshot"),
     ("New fill layer: pattern...", "fill-pattern"),
     ("Define Pattern", "define-pattern"),
     ("Import patterns (.pat)...", "import-patterns"),
@@ -215,6 +217,37 @@ const ACTIONS: &[(&str, &str)] = &[
         "Perspective Crop tool (Crop ▸ Perspective)",
         "tool-perspective-crop",
     ),
+    ("Shadows/Highlights...", "adj-shadows-highlights"),
+    ("Replace Color...", "adj-replace-color"),
+    ("Match Color...", "adj-match-color"),
+    ("Desaturate", "adj-desaturate"),
+    ("Equalize", "adj-equalize"),
+    ("Auto tone", "auto-tone"),
+    (
+        "Brightness/Contrast (apply to pixels)...",
+        "adjd-brightness-contrast",
+    ),
+    ("Levels (apply to pixels)...", "adjd-levels"),
+    ("Curves (apply to pixels)...", "adjd-curves"),
+    ("Exposure (apply to pixels)...", "adjd-exposure"),
+    ("Vibrance (apply to pixels)...", "adjd-vibrance"),
+    ("Hue/Saturation (apply to pixels)...", "adjd-hue-saturation"),
+    ("Color Balance (apply to pixels)...", "adjd-color-balance"),
+    ("Black & White (apply to pixels)...", "adjd-black-white"),
+    ("Photo Filter (apply to pixels)...", "adjd-photo-filter"),
+    ("Channel Mixer (apply to pixels)...", "adjd-channel-mixer"),
+    ("Invert (apply to pixels)", "adjd-invert"),
+    ("Posterize (apply to pixels)...", "adjd-posterize"),
+    ("Threshold (apply to pixels)...", "adjd-threshold"),
+    ("Gradient Map (apply to pixels)...", "adjd-gradient-map"),
+    ("Selective Color (apply to pixels)...", "adjd-selective-color"),
+    (
+        "Show or hide the Actions panel",
+        crate::actions_panel::ACTIONS_PANEL,
+    ),
+    ("Record an action", crate::actions_panel::ACTION_RECORD),
+    ("Stop recording the action", crate::actions_panel::ACTION_STOP),
+    ("Play the selected action", crate::actions_panel::ACTION_PLAY),
 ];
 
 impl App {
@@ -595,6 +628,12 @@ impl App {
         if let Some(block) = self.crf_action_block(id) {
             return block;
         }
+        if let Some(block) = self.adjx_action_block(id) {
+            return block;
+        }
+        if let Some(block) = self.actions_action_block(id) {
+            return block;
+        }
         match id {
             "export-lut" if !self.has_visible_adjustments() => Some("Add an adjustment layer first"),
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
@@ -735,6 +774,16 @@ impl App {
     /// Shared runner for actions reachable from menus, the palette and
     /// keys. A blocked action reports why in the status bar.
     pub(crate) fn run_menu_action(&mut self, id: &str) {
+        // While an action records, a recordable edit becomes a step.
+        let recorded = self.action_block(id).is_none() && self.record_menu(id);
+        self.run_menu_action_unrecorded(id);
+        if recorded {
+            self.record_menu_done();
+        }
+    }
+
+    /// [`App::run_menu_action`] without recording (action playback).
+    pub(crate) fn run_menu_action_unrecorded(&mut self, id: &str) {
         if let Some(why) = self.action_block(id) {
             self.status = why.into();
             return;
@@ -746,7 +795,10 @@ impl App {
         {
             return;
         }
-        if self.run_panel_action(id) || self.run_everyday_action(id) || self.run_resolution_action(id) {
+        if self.run_panel_action(id) || self.run_everyday_action(id) || self.run_adjx_action(id) {
+            return;
+        }
+        if self.run_actions_panel_action(id) || self.run_resolution_action(id) {
             return;
         }
         match id {
@@ -759,6 +811,7 @@ impl App {
             "save" => self.save_live(),
             "saveas" => self.pick_save(),
             "export-png" => self.pick_export_png(),
+            "export-pdf" => self.pick_export_pdf(),
             "export-jpeg" => self.pick_export_jpeg(),
             "export-psd" => self.pick_export_psd(),
             "export-psd16" => self.pick_export_psd16(),
@@ -981,7 +1034,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 159); // + content-aware scale, perspective crop, print size
+        assert_eq!(n, 186); // + Actions panel, record, stop, play, print size
     }
 
     #[test]

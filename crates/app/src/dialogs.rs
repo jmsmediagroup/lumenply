@@ -422,6 +422,38 @@ impl App {
         }
     }
 
+    /// File ▸ Export ▸ PDF: one page at print size, JPEG-compressed
+    /// unless the image has transparency (then lossless, with a mask).
+    pub(crate) fn pick_export_pdf(&mut self) {
+        if let Some(p) = self.pick_save_path("Export PDF", "PDF document", &["pdf"]) {
+            self.export_pdf(&p);
+        }
+    }
+
+    pub(crate) fn export_pdf(&mut self, path: &str) {
+        use lumenply_io::pdf::{encode_pdf, PdfImage};
+        let flat = lumenply_render::composite_raster(self.editor.doc());
+        let clear = flat.pixels.iter().any(|p| p.a < 1.0);
+        let image = if clear {
+            PdfImage::Lossless
+        } else {
+            PdfImage::Jpeg(92)
+        };
+        let ppi = self.editor.doc().resolution;
+        let written = encode_pdf(&flat, ppi, image).and_then(|b| std::fs::write(path, b).map_err(Into::into));
+        match written {
+            Ok(()) => {
+                let how = if clear {
+                    "lossless, with transparency"
+                } else {
+                    "JPEG 92"
+                };
+                self.status = format!("Exported {path} ({how})");
+            }
+            Err(e) => self.status = format!("Could not export: {e}"),
+        }
+    }
+
     pub(crate) fn export_jpeg(&mut self, path: &str, quality: u8) {
         let flat = lumenply_render::composite_raster(self.editor.doc());
         match lumenply_io::resolution::save_jpeg(path, &flat, quality, self.editor.doc().resolution) {
@@ -1145,6 +1177,8 @@ impl App {
             }
         }
         if confirmed {
+            // While an action records, the confirmed settings become a step.
+            self.record_dialog(&d);
             match &d {
                 Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) | Dialog::Recover | Dialog::About => {}
                 // The previewed step already is the result.
@@ -1310,7 +1344,7 @@ const DIALOG_MARGIN: f32 = 16.0;
 /// egui's window title bar (title row, a gap of both frame margins, the
 /// hairline one margin below the title text). egui's own bar is a focusable
 /// control with no name, and the first Tab stop; this title is plain paint.
-fn titled<R>(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+pub(crate) fn titled<R>(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let galley = egui::WidgetText::from(title).into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
@@ -1345,7 +1379,7 @@ pub(crate) fn note(ui: &mut egui::Ui, text: &str) {
 
 /// The dialog footer: a hairline, then buttons laid right to left (add
 /// the primary action first so it sits at the far right).
-fn footer(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn footer(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     // As wide as the content above, never wider: a full-width layout
     // would stretch the auto-sized window to its maximum.
     let w = ui.min_rect().width();

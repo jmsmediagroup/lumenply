@@ -51,6 +51,13 @@ pub(crate) const SHORTCUTS: &[(&str, &str, bool, bool, &str)] = &[
     ("snap", "Snap", true, true, "Semicolon"),
     ("guides", "Show guides", true, false, "Semicolon"),
     ("grid", "Show grid", true, false, "Quote"),
+    ("adj-desaturate", "Desaturate", true, true, "U"),
+    ("auto-tone", "Auto tone", true, true, "L"),
+    // After their Shift chords above, which contain these.
+    ("adjd-levels", "Levels", true, false, "L"),
+    ("adjd-curves", "Curves", true, false, "M"),
+    ("adjd-hue-saturation", "Hue/Saturation", true, false, "U"),
+    ("adjd-invert", "Invert", true, false, "I"),
 ];
 
 /// The effective chord for an action: the user's binding when it parses,
@@ -224,8 +231,15 @@ impl Prefs {
 pub(crate) fn data_dir() -> Option<PathBuf> {
     // Unit tests drive the real open/save paths; they must never read or
     // write the user's recent list, prefs or autosave backup.
+    // Each test thread gets its own folder: tests run in parallel, and one
+    // test's autosave backup would otherwise put a Recover prompt in front
+    // of another test's keystrokes.
     if cfg!(test) {
-        return Some(std::env::temp_dir().join("lumenply-unit-test-data"));
+        let base = std::env::temp_dir().join("lumenply-unit-test-data");
+        return Some(match std::thread::current().name() {
+            Some(test) => base.join(test.replace("::", "-")),
+            None => base,
+        });
     }
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))

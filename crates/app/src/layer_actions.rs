@@ -381,8 +381,8 @@ impl App {
         // As tall as the toggles, no taller (`horizontal` would pad the
         // row to the interact height and push the list down).
         let row = egui::vec2(ui.available_width(), 18.0);
+        let mut filter = std::mem::take(&mut self.layer_filter);
         ui.allocate_ui_with_layout(row, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.label(RichText::new("LAYERS").small().strong().color(MUTED));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for (kind, name) in LOCK_TOGGLES.iter().rev() {
@@ -405,8 +405,19 @@ impl App {
                     }
                 }
                 ui.label(RichText::new("Lock").small().color(MUTED));
+                ui.add_space(6.0);
+                // The rest of the row: find layers by name.
+                let w = (ui.available_width() - 2.0).max(40.0);
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut filter)
+                        .hint_text("Filter layers")
+                        .desired_width(w)
+                        .font(egui::TextStyle::Small),
+                );
+                a11y_name(&r, "Filter layers by name");
             });
         });
+        self.layer_filter = filter;
         if let Some(kind) = clicked {
             self.toggle_lock(kind);
         }

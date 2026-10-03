@@ -176,6 +176,9 @@ None of these could be tested in the container.
       resampling in linear light (render::resample), a preview of the encoded
       result (JPEG decoded back, so artefacts show) and its real file size,
       encoded on a worker thread
+- [x] PDF export (File ▸ Export ▸ PDF, `lumenply batch --format pdf`): one
+      page at print size, JPEG 92 or lossless Flate with an alpha soft
+      mask, sRGB ICC-based colour; checked with qpdf, pdfinfo and PyMuPDF
 - [x] GIF, BMP, TGA, ICO, QOI and PNM open; GIF export (Export As, batch):
       an exact palette for up to 256 colours, NeuQuant above, hard
       transparency
@@ -366,6 +369,17 @@ None of these could be tested in the container.
 - [x] Adjustments: Gradient Map, Channel Mixer, Photo Filter, Selective Color
       (gamma-domain; GPU falls back to CPU for them); PSD grdm/mixr/phfl/selc
       round-trip, psd-tools-verified
+- [x] Image ▸ Adjustments (Photoshop's destructive set): Shadows/Highlights
+      (edge-aware local tone, no halos, presets, tile-exact), Equalize (selection
+      histogram, hue kept), Desaturate (Shift+Cmd+U), Replace Color (Color Range
+      mask, +/− samples), Match Color (Lab mean/spread from another document or
+      layer, Fade, Neutralize). Every adjustment-layer kind can also be applied to
+      pixels (Cmd+L/M/U/I); each is one undo step inside the selection, previews
+      live and reopens with its last settings
+- [x] Auto Tone (Shift+Cmd+L): one shared black/white point for R, G and B,
+      as a Levels adjustment layer
+- [ ] Shadows/Highlights as a smart filter; its Black/White clip; Replace
+      Color's localized clusters; Match Color statistics saving; HDR Toning
 - [x] Fill layers: Solid Color and Gradient (linear/radial/angle/reflected/
       diamond, angle, scale, reverse, offset) compositing like pixel layers from
       a derived canvas cache; Layer ▸ New fill layer; PSD SoCo/GdFl round-trip
@@ -423,7 +437,11 @@ None of these could be tested in the container.
       the Hand tool's Zoom mode (click in at the pointer, Alt-click out);
       Cmd+N, Shift+Cmd+N, Shift+Cmd+S; Shift-drag a transform corner
       scales freely; Alt-click an eye shows that layer alone (again
-      restores); Shift+[ / ] step the brush hardness
+      restores); Shift+[ / ] step the brush hardness; the Layers panel
+      filters by name (searching inside collapsed groups, keeping each
+      match's groups) in place of its duplicate title; History snapshots
+      (a card's menu ▸ New snapshot, or the palette): named states kept
+      ahead of the strip, clicked to return in one undo step
 - [x] Merge selected layers (Cmd+E with several layers selected, "Merge
       layers"): the selected visible siblings composite into the topmost
       one's slot and name; hidden ones stay; picture unchanged (tested)
@@ -559,6 +577,14 @@ None of these could be tested in the container.
       (camera tone curve, `--auto` exposure/whites/blacks), PSD and projects
       to PNG / JPEG / WebP with `--resize 50%|2048|1920x1080` (Lanczos, never
       enlarging a fit), per-file report, non-zero exit when any file fails
+- [x] Actions (ADR 0023): Window ▸ Actions with record/stop/play/new/rename/
+      delete; steps listed, with "not recordable yet" notes instead of silent
+      gaps; playing is one undo step that rolls back and names the failing
+      step; three built-ins; saved to actions.json; `lumenply batch --action
+      NAME|FILE [--action-file SET.json]`
+- [ ] Actions: record strokes, transforms, the Crop tool, text and the Image ▸
+      Adjustments dialogs (canvas-relative steps); edit, reorder and toggle
+      steps; import/export sets; File ▸ Automate ▸ Batch in the app
 
 - [ ] Scripting: Python via PyO3 on the command API; macro recording from history
 - [ ] Sandboxed WASM plugins (wasmtime)

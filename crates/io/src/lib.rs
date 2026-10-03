@@ -10,6 +10,7 @@ pub mod abr;
 pub mod lut_files;
 pub mod ora;
 pub mod pattern_files;
+pub mod pdf;
 pub mod project;
 pub mod psd;
 mod psd_channels;

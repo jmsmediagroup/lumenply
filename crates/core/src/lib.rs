@@ -6,6 +6,8 @@
 //! plugins all go through this one path, so undo, macros and the headless
 //! CLI behave identically.
 
+pub mod actions;
+pub mod adjust_cmds;
 pub mod align;
 pub mod brush_tip;
 pub mod canvas_ops;
@@ -439,6 +441,47 @@ impl Editor {
     /// Labels of steps that were undone and can be redone, in redo order.
     pub fn redo_history(&self) -> Vec<&str> {
         self.redo.iter().rev().map(|s| s.label.as_str()).collect()
+    }
+
+    /// Merge the newest `n` undo steps into one labelled `label`, so a
+    /// played action undoes in one go. `n` of 0 or 1 only relabels.
+    pub fn squash_newest(&mut self, n: usize, label: &str) {
+        let n = n.min(self.undo.len());
+        if n == 0 {
+            return;
+        }
+        self.coalesce_key = None;
+        let merged: Vec<Snapshot> = self.undo.drain(self.undo.len() - n..).collect();
+        let affected = merged
+            .iter()
+            .skip(1)
+            .fold(merged[0].affected, |a, s| union_opt(a, s.affected));
+        let first = merged.into_iter().next().expect("n > 0");
+        let bytes = delta_bytes(&first.doc, &self.doc);
+        self.last_affected = affected;
+        self.undo.push(Snapshot {
+            label: label.to_string(),
+            doc: first.doc,
+            affected,
+            bytes,
+        });
+    }
+
+    /// Throw away the newest `n` undo steps and their changes, leaving no
+    /// redo entry: a failed action taking back the steps it already ran.
+    pub fn rollback_newest(&mut self, n: usize) {
+        let n = n.min(self.undo.len());
+        if n == 0 {
+            return;
+        }
+        self.coalesce_key = None;
+        self.last_target = None;
+        let mut merged: Vec<Snapshot> = self.undo.drain(self.undo.len() - n..).collect();
+        self.last_affected = merged
+            .iter()
+            .skip(1)
+            .fold(merged[0].affected, |a, s| union_opt(a, s.affected));
+        self.doc = merged.swap_remove(0).doc;
     }
 }
 

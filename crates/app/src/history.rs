@@ -40,6 +40,9 @@ impl App {
                     .collect();
                 let mut jump = None;
                 let mut source = None;
+                let mut snap_from: Option<usize> = None;
+                let mut restore: Option<usize> = None;
+                let mut drop_snap: Option<usize> = None;
                 let mut toggle = false;
                 // Folded: one vertically centred line. Open: cards from the top.
                 let align = if collapsed {
@@ -65,6 +68,22 @@ impl App {
                     let scroll_out = egui::ScrollArea::horizontal().id_salt("history").show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
+                            // Snapshots first, as in Photoshop's History panel.
+                            for (k, (key, name, _)) in self.snapshots.iter().enumerate() {
+                                if *key != self.doc_key {
+                                    continue;
+                                }
+                                let resp = snapshot_card(ui, name);
+                                if resp.clicked() {
+                                    restore = Some(k);
+                                }
+                                context_menu(&resp, |ui| {
+                                    if ui.button("Delete snapshot").clicked() {
+                                        drop_snap = Some(k);
+                                        ui.close_menu();
+                                    }
+                                });
+                            }
                             // Keep the current step in view as history grows
                             // or jumps.
                             let seen_id = ui.id().with("seen-current");
@@ -78,6 +97,10 @@ impl App {
                                     jump = Some(i);
                                 }
                                 context_menu(&resp, |ui| {
+                                    if ui.button("New snapshot").clicked() {
+                                        snap_from = Some(i);
+                                        ui.close_menu();
+                                    }
                                     if ui.button("Use as history brush source").clicked() {
                                         source = Some(i);
                                         ui.close_menu();
@@ -95,6 +118,22 @@ impl App {
                 if let Some(i) = source {
                     self.set_history_source(i);
                 }
+                if let Some(i) = snap_from {
+                    self.new_snapshot(Some(i));
+                }
+                if let Some(k) = drop_snap {
+                    let (_, name, _) = self.snapshots.remove(k);
+                    self.status = format!("Deleted the snapshot \"{name}\"");
+                }
+                if let Some(k) = restore {
+                    let (_, name, doc) = self.snapshots[k].clone();
+                    self.run(&lumenply_core::everyday::RestoreSnapshot {
+                        doc,
+                        name: name.clone(),
+                    });
+                    self.fix_active();
+                    self.status = format!("Restored the snapshot \"{name}\"");
+                }
                 if let Some(n) = jump {
                     self.editor.jump_to(n);
                     self.below.note_change(self.editor.doc(), None);
@@ -104,6 +143,20 @@ impl App {
                     self.status = format!("Jumped to history step {n}");
                 }
             });
+    }
+
+    /// Keep the document as it is at history step `step` (now when
+    /// `None`) under a new name; clicking its card later brings it back.
+    pub(crate) fn new_snapshot(&mut self, step: Option<usize>) {
+        let doc = match step {
+            Some(i) => self.editor.state(i).cloned(),
+            None => Some(self.editor.doc().clone()),
+        };
+        let Some(doc) = doc else { return };
+        let n = self.snapshots.iter().filter(|(k, ..)| *k == self.doc_key).count() + 1;
+        let name = format!("Snapshot {n}");
+        self.status = format!("Kept \"{name}\" (click its card in History to go back to it)");
+        self.snapshots.push((self.doc_key, name, doc));
     }
 
     fn history_card(&self, ui: &mut egui::Ui, i: usize, label: &str, current: usize) -> egui::Response {
@@ -279,4 +332,36 @@ fn history_header(ui: &mut egui::Ui, collapsed: bool, current: usize, steps: usi
         )
     });
     resp.on_hover_text(tip).clicked()
+}
+
+/// A snapshot's card: its name in a well outlined in the accent colour.
+fn snapshot_card(ui: &mut egui::Ui, name: &str) -> egui::Response {
+    let sense = Sense {
+        click: true,
+        drag: false,
+        focusable: false,
+    };
+    let (rect, resp) = ui.allocate_exact_size(CARD, sense);
+    let p = ui.painter();
+    let well = egui::Rect::from_min_size(rect.min, egui::vec2(CARD.x, WELL_H));
+    p.rect_filled(well, 4.0, ACCENT_TINT);
+    p.rect_stroke(
+        well,
+        4.0,
+        Stroke::new(if resp.hovered() { 2.0 } else { 1.0 }, ACCENT),
+    );
+    // A small camera: body and lens.
+    let c = well.center();
+    p.rect_stroke(
+        egui::Rect::from_center_size(c, egui::vec2(18.0, 12.0)),
+        2.0,
+        Stroke::new(1.5, ACCENT),
+    );
+    p.circle_stroke(c, 3.5, Stroke::new(1.5, ACCENT));
+    let (galley, _) = elided(ui, name, FontId::proportional(10.5), TEXT, CARD.x);
+    p.galley(egui::pos2(rect.min.x, rect.min.y + WELL_H + 2.0), galley, TEXT);
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Snapshot {name}"))
+    });
+    resp.on_hover_text(format!("{name}: click to go back to it (one undo step)"))
 }

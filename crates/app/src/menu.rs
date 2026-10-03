@@ -72,6 +72,7 @@ impl App {
 
     pub(crate) fn add_adjustment(&mut self, adj: Adjustment) {
         let new_id = self.editor.doc().next_id();
+        self.record_adjust(&adj, new_id);
         let mut cmd = AddAdjustmentLayer::new(adj);
         cmd.above = self.active;
         self.run(&cmd);
@@ -376,6 +377,7 @@ impl App {
         menu_heading(ui, "FLATTENED IMAGE");
         self.act(ui, "PNG...", "export-png");
         self.act(ui, "JPEG...", "export-jpeg");
+        self.act(ui, "PDF...", "export-pdf");
         menu_heading(ui, "WITH LAYERS");
         self.act(ui, "Photoshop PSD...", "export-psd");
         self.act(ui, "Photoshop PSD (16-bit)...", "export-psd16");
@@ -441,6 +443,8 @@ impl App {
         self.act(ui, "Flip image horizontal", "img-flip-h");
         self.act(ui, "Flip image vertical", "img-flip-v");
         menu_separator(ui);
+        menu(ui, "Adjustments", |ui| self.adjustments_menu(ui));
+        self.act(ui, "Auto tone", "auto-tone");
         self.act(ui, "Auto contrast", "auto-contrast");
         self.act(ui, "Auto color", "auto-color");
         menu_separator(ui);

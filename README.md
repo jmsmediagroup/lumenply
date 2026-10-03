@@ -5,15 +5,44 @@ as familiar as Photoshop and run faster than GIMP. Non-destructive by
 default, with a tested GPU compositing path, reliable PSD round-trip and
 OpenRaster interchange.
 
-What's in: the Graphite & Signal dark UI with a command palette (Ctrl+K);
-sixteen tools including healing brush, clone stamp, pen paths and a
-quick-mask mode; layers with groups (isolated *and* pass-through), masks,
-clipping chains and non-destructive layer styles (shadow / glow / stroke);
-eleven adjustment layer types in the gamma-correct working space plus live
-filter layers; selections with feather, colour range and animated marching
-ants; drag-and-drop everything; autosave with crash recovery; `.lumen`
-projects (legacy `.lumen` loads), PSD, OpenRaster, 16-bit PNG/TIFF, WebP and
-OpenEXR.
+What's in:
+
+- **Layers**: groups (isolated and pass-through), masks, vector masks,
+  clipping, fill opacity, locks, all 27 Photoshop blend modes, smart objects
+  with smart filters, solid / gradient / pattern fill layers, shape layers,
+  editable text (on-canvas editing, paragraph boxes, per-character styles),
+  layer styles (shadows, glows, overlays incl. pattern, bevel, stroke),
+  Layers / Channels / Paths panels, Navigator and Info.
+- **Adjustments** (non-destructive, gamma-correct): Levels and Curves per
+  channel, Hue/Saturation with Colorize, Color Balance, Black & White,
+  Exposure, Vibrance, Photo Filter, Channel Mixer, Selective Color, Gradient
+  Map, Color Lookup (3D LUTs, .cube/.3dl), Invert, Posterize, Threshold.
+  Each can also be applied to pixels (Image ▸ Adjustments), next to
+  Shadows/Highlights, Replace Color, Match Color, Equalize, Desaturate and
+  Auto Tone.
+- **Selections**: marquees, lassos, Magic Wand, Quick Selection, Colour
+  Range, Select and Mask (refine edge, decontaminate), quick mask, saved
+  selections as alpha channels, Modify ▸ Expand/Contract/Border/Smooth.
+- **Painting and retouching**: brush engine with sampled tips, shape
+  dynamics and Photoshop .abr import; Spot Healing (content-aware), Healing,
+  Patch, Content-Aware Move, Red Eye, Clone, History brush, Blur/Sharpen,
+  Dodge/Burn/Sponge/Smudge, Background and Magic eraser; multi-stop
+  gradients in five styles.
+- **Transform and warp**: free transform, perspective, mesh warp, Puppet
+  Warp, Liquify, Content-Aware Scale, crop and perspective crop, Content-
+  Aware Fill.
+- **Filters** destructive, as live layers or as smart filters, plus the
+  Camera Raw Filter (also opening camera RAW files).
+- **Files**: `.lumen` projects; PSD/PSB in every colour mode and depth with
+  layers, masks, styles, editable text, patterns and LUTs (fidelity
+  measured against ~480 real Photoshop files, `scripts/psd_corpus.py`);
+  OpenRaster; PNG/JPEG/WebP/TIFF/EXR/GIF/BMP/TGA; HEIC/AVIF on macOS; camera
+  RAW; export to PNG/JPEG/WebP/GIF/PDF; `lumenply batch` for whole folders.
+- **Actions**: record edits, play them back as one undo step, or run them
+  over folders with `lumenply batch --action`.
+- **Everyday**: command palette (Ctrl+K), Photoshop shortcuts, clipboard
+  with other apps, tabs, autosave of every open document with crash
+  recovery, screen-reader names on every control.
 
 ![Lumenply](docs/screenshots/23-graphite-ui.png)
 

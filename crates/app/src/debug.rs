@@ -32,6 +32,8 @@ impl App {
             || self.debug_pattern(ctx, tok)
             || self.debug_cas(tok)
             || self.debug_pcrop(tok)
+            || self.debug_adjx(ctx, tok)
+            || self.debug_actions(tok)
             || self.debug_image_size(tok)
     }
 

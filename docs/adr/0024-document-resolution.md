@@ -1,4 +1,4 @@
-# ADR 0023: Document resolution is ppi metadata, stored per format
+# ADR 0024: Document resolution is ppi metadata, stored per format
 
 Date: 2026-10-03 · Status: accepted
 

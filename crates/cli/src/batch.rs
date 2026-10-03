@@ -5,7 +5,10 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use lumenply_core::actions::{self, Action};
+use lumenply_core::commands::AddPixelLayer;
+use lumenply_core::Editor;
 use lumenply_render::develop::{auto_develop, develop, Develop};
 use lumenply_render::resample::resample;
 use lumenply_tiles::{Raster, Rgba};
@@ -70,6 +73,68 @@ pub struct Options {
     pub resize: Option<Resize>,
     pub auto: bool,
     pub flatten: bool,
+    /// Played on each file before resizing and encoding.
+    pub action: Option<Action>,
+}
+
+/// `--action NAME|FILE` (with `--action-file FILE` to look NAME up in a
+/// set, such as the app's `actions.json`): a built-in by name, else a JSON
+/// file holding one action.
+pub fn resolve_action(spec: &str, file: Option<&Path>) -> Result<Action> {
+    let read = |p: &Path| -> Result<Vec<Action>> {
+        let text = std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
+        actions::from_json(&text).map_err(|e| anyhow!("{}: {e}", p.display()))
+    };
+    let pick = |list: Vec<Action>, from: &str| {
+        let names: Vec<String> = list.iter().map(|a| format!("\"{}\"", a.name)).collect();
+        list.into_iter()
+            .find(|a| a.name.eq_ignore_ascii_case(spec))
+            .with_context(|| format!("no action \"{spec}\" in {from} (it has {})", names.join(", ")))
+    };
+    if let Some(f) = file {
+        return pick(read(f)?, &f.display().to_string());
+    }
+    let path = Path::new(spec);
+    if path.is_file() {
+        let mut list = read(path)?;
+        if list.len() != 1 {
+            bail!(
+                "{} holds {} actions; name one with --action NAME --action-file {}",
+                path.display(),
+                list.len(),
+                path.display()
+            );
+        }
+        return Ok(list.remove(0));
+    }
+    pick(actions::builtin_actions(), "the built-in actions")
+}
+
+/// Any file Lumenply opens, as a document an action can play on: projects
+/// and PSDs keep their layers, images become one "Background" layer.
+fn open_doc(path: &Path, auto: bool) -> Result<lumenply_doc::Document> {
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    if [".lumen", ".nge", ".psd", ".psb"]
+        .iter()
+        .any(|e| lower.ends_with(e))
+    {
+        return super::load_any(&path.to_path_buf());
+    }
+    let (raster, ppi) = open_flat(path, auto)?;
+    let mut doc = lumenply_doc::Document::new(raster.width, raster.height);
+    doc.resolution = ppi;
+    let mut ed = Editor::new(doc);
+    ed.execute(&AddPixelLayer::from_raster("Background", raster, 0, 0))?;
+    Ok(ed.doc().clone())
+}
+
+/// Open `path`, play `action` on it, and return the flattened result with
+/// its resolution (which the action may have changed).
+fn open_with_action(path: &Path, auto: bool, action: &Action) -> Result<(Raster, f32)> {
+    let mut ed = Editor::new(open_doc(path, auto)?);
+    actions::play(&mut actions::CoreHost::new(&mut ed), action)
+        .map_err(|e| anyhow!("action \"{}\": {e}", action.name))?;
+    Ok((lumenply_render::composite_raster(ed.doc()), ed.doc().resolution))
 }
 
 /// The flattened image of any file Lumenply opens, with its print
@@ -99,13 +164,21 @@ fn open_flat(path: &Path, auto: bool) -> Result<(Raster, f32)> {
     Ok((raster, ppi))
 }
 
-fn encode(r: &Raster, o: &Options) -> Result<(Vec<u8>, &'static str)> {
+fn encode(r: &Raster, o: &Options, ppi: f32) -> Result<(Vec<u8>, &'static str)> {
     Ok(match o.format.to_ascii_lowercase().as_str() {
         "png" => (lumenply_io::encode_png(r, !o.flatten)?, "png"),
         "jpg" | "jpeg" => (lumenply_io::encode_jpeg(r, o.quality)?, "jpg"),
         "webp" => (lumenply_io::encode_webp(r, !o.flatten)?, "webp"),
         "gif" => (lumenply_io::encode_gif(r, !o.flatten)?, "gif"),
-        other => bail!("unknown format '{other}' (png, jpeg, webp or gif)"),
+        "pdf" => {
+            let image = if o.flatten {
+                lumenply_io::pdf::PdfImage::Jpeg(o.quality)
+            } else {
+                lumenply_io::pdf::PdfImage::Lossless
+            };
+            (lumenply_io::pdf::encode_pdf(r, ppi, image)?, "pdf")
+        }
+        other => bail!("unknown format '{other}' (png, jpeg, webp, gif or pdf)"),
     })
 }
 
@@ -117,7 +190,10 @@ pub fn run(inputs: &[PathBuf], o: &Options) -> Result<usize> {
     for input in inputs {
         let t = Instant::now();
         let result = (|| -> Result<PathBuf> {
-            let (mut img, ppi) = open_flat(input, o.auto)?;
+            let (mut img, ppi) = match &o.action {
+                Some(a) => open_with_action(input, o.auto, a)?,
+                None => open_flat(input, o.auto)?,
+            };
             if let Some(rs) = o.resize {
                 let (w, h) = rs.apply(img.width, img.height);
                 img = resample(&img, w, h);
@@ -127,7 +203,7 @@ pub fn run(inputs: &[PathBuf], o: &Options) -> Result<usize> {
                     *p = p.over(Rgba::WHITE);
                 }
             }
-            let (bytes, ext) = encode(&img, o)?;
+            let (bytes, ext) = encode(&img, o, ppi)?;
             let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
             let dest = o.out.join(format!("{stem}.{ext}"));
             if dest.canonicalize().ok() == input.canonicalize().ok() && dest.exists() {
@@ -201,6 +277,7 @@ mod tests {
             resize: Some(Resize::Percent(0.5)),
             auto: false,
             flatten: true,
+            action: None,
         };
         let failed = run(&[src, missing], &opts).unwrap();
         assert_eq!(failed, 1);
@@ -228,12 +305,88 @@ mod tests {
                 resize: None,
                 auto: false,
                 flatten: true,
+                action: None,
             };
             assert_eq!(run(&[src.clone(), proj.clone()], &opts).unwrap(), 0);
             let ppi = |name: &str| lumenply_io::resolution::file_ppi(out.join(format!("{name}.{ext}")));
             assert_eq!(ppi("b"), Some(300.0), "{format}");
             assert_eq!(ppi("c"), Some(240.0), "{format}");
         }
+        // PDF: the page is the print size (8 × 6 px at 300 ppi = 1.92 × 1.44 pt).
+        let opts = Options {
+            out: out.clone(),
+            format: "pdf".into(),
+            quality: 80,
+            resize: None,
+            auto: false,
+            flatten: true,
+            action: None,
+        };
+        assert_eq!(run(std::slice::from_ref(&src), &opts).unwrap(), 0);
+        let pdf = std::fs::read(out.join("b.pdf")).unwrap();
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/MediaBox [0 0 1.920 1.440]"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_batch_plays_an_action_before_resizing() {
+        use lumenply_core::actions::Step;
+        let dir = std::env::temp_dir().join(format!("lumenply-batch-action-{}", std::process::id()));
+        let out = dir.join("out");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut r = Raster::new(60, 30);
+        for p in &mut r.pixels {
+            *p = Rgba::new(0.0, 0.0, 0.0, 1.0);
+        }
+        let (a, b) = (dir.join("a.png"), dir.join("b.png"));
+        lumenply_io::save_png(&a, &r).unwrap();
+        lumenply_io::save_png(&b, &Raster::new(30, 60)).unwrap();
+        // Rotate, invert (as an adjustment layer), then fit in 20 px.
+        let action = Action {
+            name: "Test".into(),
+            steps: vec![
+                Step::Menu { id: "rot-cw".into() },
+                Step::Adjust {
+                    adjustment: lumenply_doc::Adjustment::Invert,
+                },
+                Step::FitImage { long_edge: 20 },
+            ],
+            builtin: false,
+        };
+        let json = dir.join("test.json");
+        std::fs::write(&json, actions::to_json(std::slice::from_ref(&action))).unwrap();
+        let loaded = resolve_action(json.to_str().unwrap(), None).unwrap();
+        assert_eq!(loaded, action);
+        assert_eq!(resolve_action("vintage fade", None).unwrap().name, "Vintage fade");
+        assert!(resolve_action("Nope", None)
+            .unwrap_err()
+            .to_string()
+            .contains("Vintage fade"));
+        assert_eq!(resolve_action("test", Some(&json)).unwrap(), action);
+        let opts = Options {
+            out: out.clone(),
+            format: "png".into(),
+            quality: 90,
+            resize: Some(Resize::Percent(0.5)),
+            auto: false,
+            flatten: false,
+            action: Some(loaded),
+        };
+        assert_eq!(run(&[a, b], &opts).unwrap(), 0);
+        // 60×30 rotates to 30×60, fits to 10×20, then 50% gives 5×10.
+        let img = image::open(out.join("a.png")).unwrap().to_rgba8();
+        assert_eq!((img.width(), img.height()), (5, 10));
+        assert_eq!(
+            img.get_pixel(2, 5).0,
+            [255, 255, 255, 255],
+            "black inverted to white"
+        );
+        // 30×60 rotates to 60×30, fits to 20×10, then 50% gives 10×5;
+        // transparent pixels stay transparent under Invert.
+        let img = image::open(out.join("b.png")).unwrap().to_rgba8();
+        assert_eq!((img.width(), img.height()), (10, 5));
+        assert_eq!(img.get_pixel(1, 1).0[3], 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
