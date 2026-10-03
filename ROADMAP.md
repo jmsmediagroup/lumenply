@@ -603,9 +603,11 @@ None of these could be tested in the container.
       delete; steps listed, with "not recordable yet" notes instead of silent
       gaps; playing is one undo step that rolls back and names the failing
       step; three built-ins; saved to actions.json; `lumenply batch --action
-      NAME|FILE [--action-file SET.json]`
-- [ ] Actions: record strokes, transforms, the Crop tool, text and the Image ▸
-      Adjustments dialogs (canvas-relative steps); edit, reorder and toggle
+      NAME|FILE [--action-file SET.json]`. Image ▸ Adjustments applied to
+      pixels (Levels, Curves, … via their dialogs), Desaturate, Invert and Auto
+      Tone record as steps
+- [ ] Actions: record strokes, transforms, the Crop tool, text (canvas-relative
+      steps), Shadows/Highlights, Replace Color and Match Color; edit, reorder and toggle
       steps; import/export sets; File ▸ Automate ▸ Batch in the app
 
 - [ ] Scripting: Python via PyO3 on the command API; macro recording from history

@@ -215,6 +215,14 @@ impl App {
         }
     }
 
+    /// An Image ▸ Adjustments "apply to pixels" dialog was confirmed
+    /// (called before it applies).
+    pub(crate) fn record_apply(&mut self, adjustment: &Adjustment) {
+        self.record_step(Step::Apply {
+            adjustment: adjustment.clone(),
+        });
+    }
+
     /// A registry action is about to run. Records it when it is a
     /// recordable edit; returns true when it did (the caller then calls
     /// [`App::record_menu_done`] once the action has run).

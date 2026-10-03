@@ -859,6 +859,9 @@ impl App {
         }
 
         if ok {
+            if let AdjxKind::Adjust(a) = &st.kind {
+                self.record_apply(a);
+            }
             if let Some(cmd) = self.adjx_command(&st) {
                 let t = std::time::Instant::now();
                 self.run(cmd.as_ref());
@@ -1217,6 +1220,41 @@ mod tests {
         app.adjx = None;
         let _ = ctx.run(raw, |ctx| app.frame(ctx));
         assert_eq!(app.editor.history().len(), n - 1);
+    }
+
+    #[test]
+    fn an_applied_adjustment_records_as_an_action_step() {
+        use lumenply_core::actions::Step;
+        let mut app = small_app();
+        let path = std::env::temp_dir().join(format!("lumenply-actions-apply-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        app.actions = crate::actions_panel::ActionsState::load_from(Some(path.clone()));
+        let ctx = crate::a11y_tests::ctx();
+        app.start_recording();
+        app.run_menu_action("adjd-posterize");
+        frames(&mut app, &ctx, 1);
+        let AdjxKind::Adjust(posterize) = app.adjx.as_ref().unwrap().kind.clone() else {
+            panic!("a Posterize dialog");
+        };
+        app.adjx.as_mut().unwrap().debug_ok = true;
+        frames(&mut app, &ctx, 1);
+        // Shadows/Highlights has no step kind yet: a note, not a silent gap.
+        app.run_menu_action(ADJ_SH);
+        frames(&mut app, &ctx, 1);
+        app.adjx.as_mut().unwrap().debug_ok = true;
+        frames(&mut app, &ctx, 1);
+        app.stop_recording();
+        let steps = app.actions.list.last().unwrap().action.steps.clone();
+        assert_eq!(steps.len(), 2, "{steps:?}");
+        assert_eq!(
+            steps[0],
+            Step::Apply {
+                adjustment: posterize.clone()
+            }
+        );
+        assert!(matches!(&steps[1], Step::Skipped { .. }), "{steps:?}");
+        assert_eq!(steps[0].describe(), format!("{} (pixels)", posterize.name()));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

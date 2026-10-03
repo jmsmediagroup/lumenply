@@ -87,7 +87,9 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
   `popups:type=…`/`popups:key=Shift+W`; tokens that toggle
   view prefs such as `rulers`/`grid` save prefs — another reason for a scratch
   `HOME`), and
-  `--window-size 960x640` for narrow layouts. Run screenshots with `HOME`
+  `--window-size 960x640` for narrow layouts. All `--screenshot-do` tokens run in
+  one frame (`popups:sleep` only pauses), so anything a dialog does on a later
+  frame, such as `adjx:ok`, lands after every token: put it last. Run screenshots with `HOME`
   pointed at a scratch folder so recent files, prefs and the autosave of the
   real user are never read or written. The dark theme is forced via
   `ctx.set_theme(ThemePreference::Dark)`; without it eframe follows the OS and

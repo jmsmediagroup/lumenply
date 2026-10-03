@@ -31,6 +31,9 @@ pub enum Step {
     Menu { id: String },
     /// Add an adjustment layer above the active layer, with these settings.
     Adjust { adjustment: Adjustment },
+    /// Apply an adjustment to the active layer's pixels (Image ▸
+    /// Adjustments, "apply to pixels").
+    Apply { adjustment: Adjustment },
     /// Run a filter on the active layer: baked into a pixel layer, or added
     /// as a smart filter on a smart object (as the filter dialogs do).
     Filter { filter: Filter },
@@ -124,6 +127,7 @@ impl Step {
         match self {
             Step::Menu { id } => menu_label(id).to_string(),
             Step::Adjust { adjustment } => format!("Add {} layer", adjustment.name()),
+            Step::Apply { adjustment } => format!("{} (pixels)", adjustment.name()),
             Step::Filter { filter } => filter.name().to_string(),
             Step::ImageSize {
                 width,
@@ -368,6 +372,18 @@ pub fn play_step<H: ActionHost + ?Sized>(host: &mut H, step: &Step) -> Result<()
             let mut cmd = AddAdjustmentLayer::new(adjustment.clone());
             cmd.above = host.active_layer();
             exec_new_layer(host, &cmd)
+        }
+        Step::Apply { adjustment } => {
+            let layer = host
+                .active_layer()
+                .ok_or_else(|| format!("{} needs an active layer", adjustment.name()))?;
+            exec(
+                host,
+                &crate::adjust_cmds::ApplyAdjustment {
+                    layer,
+                    adjustment: adjustment.clone(),
+                },
+            )
         }
         Step::Filter { filter } => {
             let layer = host.active_layer().ok_or("the filter needs an active layer")?;
@@ -636,6 +652,27 @@ mod tests {
         assert_eq!(doc.layers()[1].id, new_id, "the new layer is active and on top");
         approx(pixel(&ed, 1, 1), [1.0, 1.0, 1.0, 1.0]);
         assert_eq!(ed.history(), vec!["Action: Invert"]);
+    }
+
+    #[test]
+    fn an_apply_step_changes_the_active_layers_pixels() {
+        let mut ed = solid(4, 4, Rgba::new(0.0, 0.0, 0.0, 1.0));
+        let mut host = CoreHost::new(&mut ed);
+        let action = Action {
+            name: "Negative".into(),
+            steps: vec![Step::Apply {
+                adjustment: Adjustment::Invert,
+            }],
+            builtin: false,
+        };
+        assert_eq!(play(&mut host, &action), Ok(1));
+        assert_eq!(ed.doc().layers().len(), 1, "no adjustment layer");
+        approx(pixel(&ed, 0, 3), [1.0, 1.0, 1.0, 1.0]);
+        // It survives a save: the JSON names the step "apply".
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(json.contains(r#""step":"apply""#), "{json}");
+        let back: Action = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, action);
     }
 
     #[test]
