@@ -39,7 +39,7 @@ pub use model::{Graph, GraphError, Node, NodeId, FORMAT};
 pub use ops::{ClipMember, LayerProps, Op};
 pub use ops_content::PatternPixels;
 pub use ops_paint::StrokeBrush;
-pub use sync::{project, sync, Base, ContentEdit, DocState, EditInput, LayerRecord};
+pub use sync::{project, project_reusing, sync, Base, ContentEdit, DocState, EditInput, LayerRecord};
 pub use whole::WholeCache;
 
 #[cfg(test)]

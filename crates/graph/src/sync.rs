@@ -596,19 +596,28 @@ fn content_pixels(
 }
 
 impl LayerRecord {
-    fn to_layer(&self, graph: &Graph, blobs: &BlobStore, renderer: &Renderer, float: bool) -> Layer {
+    /// The layer, its pixels taken from `reuse` when it has them for this
+    /// record, else made from `content`.
+    fn to_layer(
+        &self,
+        graph: &Graph,
+        blobs: &BlobStore,
+        renderer: &Renderer,
+        float: bool,
+        reuse: &dyn Fn(&LayerRecord) -> Option<TileStore>,
+    ) -> Layer {
         let mut l = self.layer.clone();
         match &mut l.content {
             LayerContent::Pixel(s) if self.pixels_in_graph => {
                 if let Some(c) = self.content {
-                    *s = content_pixels(graph, blobs, renderer, c, float);
+                    *s = reuse(self).unwrap_or_else(|| content_pixels(graph, blobs, renderer, c, float));
                 }
             }
             LayerContent::Group(children) => {
                 *children = self
                     .children
                     .iter()
-                    .map(|r| r.to_layer(graph, blobs, renderer, float))
+                    .map(|r| r.to_layer(graph, blobs, renderer, float, reuse))
                     .collect();
             }
             _ => {}
@@ -619,10 +628,59 @@ impl LayerRecord {
 
 /// The document a version stands for.
 pub fn project(graph: &Graph, state: &DocState, blobs: &BlobStore, renderer: &Renderer) -> Document {
+    project_with(graph, state, blobs, renderer, &|_| None)
+}
+
+/// [`project`], taking the pixels of each pixel layer from `prev` when
+/// its content there has the same content key: `prev` is the document of
+/// another version of the same history (`prev_graph`, `prev_state`), as
+/// the editor holds it. Undo, redo and history jumps then evaluate only
+/// the content chains that differ between the two versions instead of
+/// every layer's (on a 6000 × 4000 document of 30 painted layers, 1.4 s
+/// per undo). Equal keys mean equal pixels, so the result is the same
+/// document [`project`] makes.
+pub fn project_reusing(
+    graph: &Graph,
+    state: &DocState,
+    blobs: &BlobStore,
+    renderer: &Renderer,
+    prev: (&Graph, &DocState, &Document),
+) -> Document {
+    let (prev_graph, prev_state, prev_doc) = prev;
+    if prev_state.float_mode != state.float_mode
+        || (prev_graph.width, prev_graph.height) != (graph.width, graph.height)
+    {
+        return project(graph, state, blobs, renderer);
+    }
+    let key = |g: &Graph, node: NodeId| renderer.keys(g, node).get(&node).copied();
+    let reuse = |r: &LayerRecord| -> Option<TileStore> {
+        let before = prev_state.layer(r.layer.id)?;
+        if !before.pixels_in_graph {
+            return None;
+        }
+        let (now, then) = (r.content?, before.content?);
+        if key(graph, now)? != key(prev_graph, then)? {
+            return None;
+        }
+        match &prev_doc.layer(r.layer.id)?.content {
+            LayerContent::Pixel(s) => Some(s.clone()),
+            _ => None,
+        }
+    };
+    project_with(graph, state, blobs, renderer, &reuse)
+}
+
+fn project_with(
+    graph: &Graph,
+    state: &DocState,
+    blobs: &BlobStore,
+    renderer: &Renderer,
+    reuse: &dyn Fn(&LayerRecord) -> Option<TileStore>,
+) -> Document {
     let layers = state
         .layers
         .iter()
-        .map(|r| r.to_layer(graph, blobs, renderer, state.float_mode))
+        .map(|r| r.to_layer(graph, blobs, renderer, state.float_mode, reuse))
         .collect();
     let mut doc = Document::from_parts(graph.width, graph.height, layers, state.next_id);
     doc.selection = state.selection.clone();

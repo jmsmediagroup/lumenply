@@ -468,14 +468,31 @@ impl Editor {
         self.renderer.prune();
     }
 
-    /// The current version's document.
-    fn project_current(&mut self) -> Document {
+    /// The current version's graph and state, to project another version
+    /// from later (see [`Editor::project_current`]).
+    fn current_parts(&self) -> (Arc<Graph>, Arc<DocState>) {
+        let v = self.history.current_version();
+        (v.graph.clone(), v.payload.state.clone())
+    }
+
+    /// The current version's document. `left` is the version the editor
+    /// was at, whose document `self.doc` still is: layers whose content
+    /// didn't change between the two keep their pixels from it rather
+    /// than being evaluated again.
+    fn project_current(&mut self, left: (Arc<Graph>, Arc<DocState>)) -> Document {
         let v = self.history.current_version_mut();
         // A projection made for `state` serves again.
         if let Some(doc) = v.payload.doc.take() {
             return doc;
         }
-        graph_sync::project(&v.graph, &v.payload.state, &self.blobs, &self.renderer)
+        let v = self.history.current_version();
+        graph_sync::project_reusing(
+            &v.graph,
+            &v.payload.state,
+            &self.blobs,
+            &self.renderer,
+            (&left.0, &left.1, &self.doc),
+        )
     }
 
     /// Apply a command, recording an undo step. On error the document is
@@ -544,11 +561,12 @@ impl Editor {
         if !self.coalescing(key) || self.history.cursor() == 0 {
             return false;
         }
+        let left = self.current_parts();
         let dropped = self.history.rollback(1);
         self.coalesce_key = None;
         self.last_target = None;
         self.last_affected = dropped.first().and_then(|v| v.payload.affected);
-        self.doc = self.project_current();
+        self.doc = self.project_current(left);
         self.collect_garbage();
         true
     }
@@ -600,9 +618,10 @@ impl Editor {
     pub fn undo(&mut self) -> Option<String> {
         self.coalesce_key = None;
         self.last_target = None;
+        let left = self.current_parts();
         let (label, affected) = self.step_back()?;
         self.last_affected = affected;
-        self.doc = self.project_current();
+        self.doc = self.project_current(left);
         Some(label)
     }
 
@@ -610,9 +629,10 @@ impl Editor {
     pub fn redo(&mut self) -> Option<String> {
         self.coalesce_key = None;
         self.last_target = None;
+        let left = self.current_parts();
         let (label, affected) = self.step_forward()?;
         self.last_affected = affected;
-        self.doc = self.project_current();
+        self.doc = self.project_current(left);
         Some(label)
     }
 
@@ -627,6 +647,7 @@ impl Editor {
             });
         };
         let mut moved = false;
+        let left = self.current_parts();
         while self.history.cursor() > steps {
             self.coalesce_key = None;
             self.last_target = None;
@@ -642,7 +663,7 @@ impl Editor {
             moved = true;
         }
         if moved {
-            self.doc = self.project_current();
+            self.doc = self.project_current(left);
         }
         if let Some(a) = acc {
             self.last_affected = a;
@@ -741,8 +762,9 @@ impl Editor {
         self.coalesce_key = None;
         self.last_target = None;
         self.last_affected = self.newest_affected(n);
+        let left = self.current_parts();
         self.history.rollback(n);
-        self.doc = self.project_current();
+        self.doc = self.project_current(left);
         self.collect_garbage();
     }
 }
