@@ -150,6 +150,10 @@ pub(super) fn adjustment_block(adj: &Adjustment) -> Option<(&'static [u8; 4], Ve
             }
             b"selc"
         }
+        Adjustment::ColorLookup { lut, name } => {
+            d = super::color_lookup::block_body(lut, name);
+            b"clrL"
+        }
         _ => return None,
     };
     Some((key, d))
@@ -301,6 +305,8 @@ pub(super) enum Val {
     Unit([u8; 4], f64),
     Obj(Desc),
     List(Vec<Val>),
+    /// Raw data (`tdta`), e.g. an embedded LUT file.
+    Raw(Vec<u8>),
 }
 
 /// A descriptor: class id and keyed items, in order.
@@ -406,6 +412,11 @@ fn put_val(d: &mut Vec<u8>, v: &Val) {
                 put_val(d, it);
             }
         }
+        Val::Raw(bytes) => {
+            d.extend_from_slice(b"tdta");
+            put_u32(d, bytes.len() as u32);
+            d.extend_from_slice(bytes);
+        }
     }
 }
 
@@ -491,11 +502,9 @@ fn read_val(d: &mut Rd, ty: &[u8; 4], depth: usize) -> Option<Val> {
             read_unicode(d)?;
             Val::Text(String::from_utf8_lossy(&read_key(d)?).into_owned())
         }
-        // Raw data: skipped, kept as an empty text.
         b"tdta" => {
             let n = d.u32().ok()? as usize;
-            d.skip(n).ok()?;
-            Val::Text(String::new())
+            Val::Raw(d.bytes(n).ok()?.to_vec())
         }
         _ => return None,
     })

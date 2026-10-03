@@ -19,6 +19,7 @@ use lumenply_tiles::{Raster, Rect, TileStore};
 
 use crate::{linear_to_srgb, IoError};
 
+mod color_lookup;
 mod color_modes;
 mod effects;
 mod extra;
@@ -1746,11 +1747,19 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                             layer_masks.shaped = true;
                         }
                         b"levl" | b"curv" | b"brit" | b"CgEd" | b"hue2" | b"hue " | b"blnc" | b"blwh"
-                        | b"expA" | b"vibA" | b"thrs" | b"post" | b"nvrt" | b"phfl" | b"mixr" | b"clrL"
-                        | b"grdm" | b"selc" => {
+                        | b"expA" | b"vibA" | b"thrs" | b"post" | b"nvrt" | b"phfl" | b"mixr" | b"grdm"
+                        | b"selc" => {
                             is_adjustment = true;
                             if adjustment.is_none() {
                                 adjustment = cm.adjustment(&k, data)?;
+                            }
+                        }
+                        b"clrL" => {
+                            is_adjustment = true;
+                            let (adj, warning) = color_lookup::parse(data);
+                            adjustment = adjustment.or(Some(adj));
+                            if let Some(w) = warning {
+                                warnings.push(format!("color lookup '{name}': {w}"));
                             }
                         }
                         _ => {}

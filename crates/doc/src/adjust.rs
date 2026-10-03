@@ -4,9 +4,12 @@
 //! Per-channel adjustments (Levels, Curves) are compiled to a lookup table
 //! once per tile by the renderer; see [`Adjustment::compile`].
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use crate::gradient::Gradient;
+use crate::lut::Lut3D;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -119,6 +122,17 @@ pub enum Adjustment {
         #[serde(default)]
         absolute: bool,
     },
+    /// Photoshop's Color Lookup: a 3D LUT (optionally with a 1D shaper)
+    /// run on gamma-encoded RGB with tetrahedral interpolation. The table
+    /// is shared, so cloning the adjustment (undo, compile) is cheap.
+    ColorLookup {
+        #[serde(with = "crate::lut::shared")]
+        lut: Arc<Lut3D>,
+        /// What the table is called in the UI: the file or look it came
+        /// from; empty while no table is chosen (the identity).
+        #[serde(default)]
+        name: String,
+    },
 }
 
 /// The colour families of [`Adjustment::SelectiveColor`], in storage order.
@@ -194,6 +208,15 @@ impl Adjustment {
             Adjustment::ChannelMixer { .. } => "Channel Mixer",
             Adjustment::PhotoFilter { .. } => "Photo Filter",
             Adjustment::SelectiveColor { .. } => "Selective Color",
+            Adjustment::ColorLookup { .. } => "Color Lookup",
+        }
+    }
+
+    /// Photoshop's fresh Color Lookup: no table chosen yet (the identity).
+    pub fn color_lookup_default() -> Self {
+        Adjustment::ColorLookup {
+            lut: Arc::new(Lut3D::identity(2)),
+            name: String::new(),
         }
     }
 
@@ -380,6 +403,7 @@ impl Adjustment {
                 }
                 CompiledAdjustment::Map(map)
             }
+            Adjustment::ColorLookup { lut, .. } => CompiledAdjustment::Cube(lut.clone()),
             other => CompiledAdjustment::Direct(other.clone(), other.gamma_space()),
         }
     }
@@ -457,6 +481,8 @@ pub enum CompiledAdjustment {
     LutRgb(Box<[[f32; LUT_SIZE]; 3]>),
     /// Gamma luminance → linear RGB (Gradient Map).
     Map(Box<[[f32; 3]; LUT_SIZE]>),
+    /// A 3D table on gamma RGB (Color Lookup); shared, never copied.
+    Cube(Arc<Lut3D>),
 }
 
 impl CompiledAdjustment {
@@ -487,6 +513,10 @@ impl CompiledAdjustment {
                     a[1] + (b[1] - a[1]) * t,
                     a[2] + (b[2] - a[2]) * t,
                 ]
+            }
+            CompiledAdjustment::Cube(lut) => {
+                let out = lut.apply([fast_encode(rgb[0]), fast_encode(rgb[1]), fast_encode(rgb[2])]);
+                [fast_decode(out[0]), fast_decode(out[1]), fast_decode(out[2])]
             }
             CompiledAdjustment::Direct(adj, gamma) => {
                 let [r, g, b] = if *gamma {
@@ -626,7 +656,8 @@ impl CompiledAdjustment {
                 | Adjustment::Posterize { .. }
                 | Adjustment::Levels { .. }
                 | Adjustment::Curves { .. }
-                | Adjustment::GradientMap { .. } => {
+                | Adjustment::GradientMap { .. }
+                | Adjustment::ColorLookup { .. } => {
                     unreachable!("per-channel adjustments compile to a LUT")
                 }
             }
@@ -1294,5 +1325,40 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(gm, Adjustment::GradientMap { reverse: false, .. }));
+    }
+
+    #[test]
+    fn color_lookup_runs_its_table_on_gamma_values() {
+        let lookup = |lut: Lut3D| Adjustment::ColorLookup {
+            lut: Arc::new(lut),
+            name: "test".into(),
+        };
+        // The identity leaves linear pixels alone (only the 4096-entry
+        // transfer tables stand between input and output).
+        let id = lookup(Lut3D::identity(33));
+        assert!(matches!(id.compile(), CompiledAdjustment::Cube(_)));
+        for rgb in [[0.0, 0.5, 1.0], [0.0031, 0.2140, 0.9], [0.05, 0.6, 0.33]] {
+            let out = id.apply(rgb);
+            assert!(
+                (0..3).all(|c| (out[c] - rgb[c]).abs() < 1e-4),
+                "{rgb:?} -> {out:?}"
+            );
+        }
+        assert!(Adjustment::color_lookup_default().apply([0.3, 0.6, 0.9])[1] - 0.6 < 1e-4);
+        // Swapping red and blue swaps them.
+        let swap = lookup(Lut3D::from_fn(17, |[r, g, b]| [b, g, r]));
+        let o = swap.apply([0.8, 0.4, 0.1]);
+        assert!(close(o[0], 0.1) && close(o[1], 0.4) && close(o[2], 0.8), "{o:?}");
+        // The table sees gamma values: one halving every channel turns
+        // sRGB 0.5 (linear 0.2140) into sRGB 0.25 (linear 0.0508).
+        let half = lookup(Lut3D::from_fn(2, |c| c.map(|v| v * 0.5)));
+        let o = in_gamma(&half, [0.5, 1.0, 0.0]);
+        assert!(close(o[0], 0.25) && close(o[1], 0.5) && close(o[2], 0.0), "{o:?}");
+        assert!(close(half.apply([srgb_decode(0.5); 3])[0], 0.0508));
+        // Serde keeps the table and the name.
+        let json = serde_json::to_string(&swap).unwrap();
+        let back: Adjustment = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, swap);
+        assert_eq!(swap.name(), "Color Lookup");
     }
 }

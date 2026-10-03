@@ -7,6 +7,7 @@
 //! The native project format lives in [`project`].
 
 pub mod abr;
+pub mod lut_files;
 pub mod ora;
 pub mod project;
 pub mod psd;
