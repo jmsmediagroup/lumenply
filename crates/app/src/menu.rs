@@ -410,6 +410,7 @@ impl App {
         self.act(ui, "Perspective", "perspective");
         self.act(ui, "Warp", "warp");
         self.act(ui, "Puppet Warp", "puppet-warp");
+        self.act(ui, "Content-Aware Scale", "content-aware-scale");
         menu_separator(ui);
         self.act(ui, "Fill with brush colour", "fill");
         self.act(ui, "Fill with background colour", "fill-bg");

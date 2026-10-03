@@ -209,6 +209,11 @@ const ACTIONS: &[(&str, &str)] = &[
     ("New fill layer: pattern...", "fill-pattern"),
     ("Define Pattern", "define-pattern"),
     ("Import patterns (.pat)...", "import-patterns"),
+    ("Content-Aware Scale", "content-aware-scale"),
+    (
+        "Perspective Crop tool (Crop ▸ Perspective)",
+        "tool-perspective-crop",
+    ),
 ];
 
 impl App {
@@ -608,6 +613,7 @@ impl App {
             }
             "liquify" if !pixel => need_pixel,
             "puppet-warp" => self.puppet_block(),
+            "content-aware-scale" => self.cas_block(),
             "smart-edit" | "smart-replace" if !smart => Some("Select a smart object first"),
             "save-selection" if !selection => need_selection,
             "cut" if !pixel => need_pixel,
@@ -709,6 +715,7 @@ impl App {
             "quick-mask" => (M::NONE, Key::Q),
             "palette" => (M::COMMAND, Key::K),
             "select-mask" => (M::COMMAND | M::ALT, Key::R),
+            "content-aware-scale" => (M::COMMAND | M::SHIFT | M::ALT, Key::C),
             _ => return String::new(),
         };
         shortcut_text(ctx, m, k)
@@ -888,6 +895,8 @@ impl App {
             "paste-in-place" => self.paste_pixels(true),
             "liquify" => self.open_liquify(),
             "puppet-warp" => self.open_puppet(),
+            "content-aware-scale" => self.open_cas(),
+            "tool-perspective-crop" => self.pick_perspective_crop(),
             "export-as" => self.open_export_as(),
             "smart-edit" => self.edit_smart_contents(),
             "save-selection" => {
@@ -969,7 +978,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 156); // + load-lut, export-lut
+        assert_eq!(n, 158); // + content-aware scale, perspective crop
     }
 
     #[test]

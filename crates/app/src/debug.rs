@@ -30,6 +30,8 @@ impl App {
             || self.debug_puppet(tok)
             || self.debug_camera_raw_filter(ctx, tok)
             || self.debug_pattern(ctx, tok)
+            || self.debug_cas(tok)
+            || self.debug_pcrop(tok)
     }
 
     /// Selections and what acts on them (`select:...`):

@@ -12,6 +12,7 @@ pub mod canvas_ops;
 pub mod channels;
 pub mod commands;
 mod content_aware;
+pub mod content_aware_scale;
 pub mod crop;
 pub mod demo;
 #[cfg(test)]
@@ -28,6 +29,7 @@ pub mod locks;
 pub mod paste;
 pub mod path_ops;
 pub mod pattern_cmds;
+pub mod perspective_crop;
 pub mod puppet;
 pub mod quick_select;
 pub mod refine;

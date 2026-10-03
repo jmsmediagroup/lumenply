@@ -29,6 +29,7 @@ mod brush_panel;
 mod camera_raw;
 mod camera_raw_filter;
 mod canvas;
+mod cas_ui;
 mod channels_panel;
 mod clipboard;
 mod color_picker;
@@ -56,6 +57,7 @@ mod panels;
 mod paths_panel;
 mod pattern_ui;
 mod pen;
+mod perspective_crop_ui;
 mod properties;
 mod puppet_ui;
 mod quick_select_tool;
@@ -328,6 +330,8 @@ struct App {
     liquify: Option<Box<liquify::LiquifyState>>,
     /// Edit ▸ Puppet Warp's workspace, while open (it replaces the editor UI).
     puppet: Option<Box<puppet_ui::PuppetState>>,
+    /// Edit ▸ Content-Aware Scale's workspace, while open.
+    cas: Option<Box<cas_ui::CasState>>,
     /// The Camera Raw develop workspace, while a RAW file is being opened.
     camera_raw: Option<Box<camera_raw::CameraRawState>>,
     /// Select ▸ Select and Mask's workspace, while open (it replaces the
@@ -529,6 +533,7 @@ impl App {
             text_new_armed: false,
             liquify: None,
             puppet: None,
+            cas: None,
             doc_key: 0,
             next_doc_key: 0,
             smart_link: None,
@@ -1146,6 +1151,10 @@ impl App {
             if i.consume_key(M::COMMAND | M::SHIFT | M::ALT, Key::E) {
                 fired.push("stamp-visible");
             }
+            // Content-Aware Scale (Alt+Shift+Cmd+C) holds Copy merged.
+            if i.consume_key(M::COMMAND | M::SHIFT | M::ALT, Key::C) {
+                fired.push("content-aware-scale");
+            }
             // Select and Mask (Alt+Cmd+R) holds the rulers chord.
             if i.consume_key(M::COMMAND | M::ALT, Key::R) {
                 fired.push("select-mask");
@@ -1466,6 +1475,11 @@ impl App {
         }
         if self.puppet.is_some() {
             self.puppet_ui(ctx);
+            self.debug_screenshot(ctx);
+            return;
+        }
+        if self.cas.is_some() {
+            self.cas_ui(ctx);
             self.debug_screenshot(ctx);
             return;
         }
