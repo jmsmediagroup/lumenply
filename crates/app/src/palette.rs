@@ -350,6 +350,8 @@ impl App {
                     ),
                     ("Select word / line / all", "2 / 3 / 4 clicks"),
                     ("Size of the selection", "Cmd+Shift+>  /  <"),
+                    ("Bold / italic / underline / strike", "Cmd+Shift+B / I / U / /"),
+                    ("Align left / centre / right / justify", "Cmd+Shift+L / C / R / J"),
                     ("Move the text", "Cmd + drag"),
                 ] {
                     row(ui, what, keys);
@@ -361,6 +363,17 @@ impl App {
 }
 
 /// The id of the destructive filter dialog for a filter kind.
+/// A tool's palette entry, with the words a Photoshop user searches for
+/// ("type", "rectangle", "ellipse") where our name differs.
+fn tool_palette_label(t: Tool) -> String {
+    match t {
+        Tool::Text => "Text tool (type)".into(),
+        Tool::Shape => "Shape tool (rectangle, ellipse, polygon, line, custom shape)".into(),
+        Tool::Pen => "Pen tool (path)".into(),
+        t => format!("{} tool", t.name()),
+    }
+}
+
 pub(crate) fn filter_id(f: &Filter) -> &'static str {
     match f {
         Filter::GaussianBlur { .. } => "filter-gauss",
@@ -407,7 +420,7 @@ impl App {
                 egui::Modifiers::NONE
             };
             v.push(Entry {
-                label: format!("{} tool", t.name()),
+                label: tool_palette_label(t),
                 keys: Key::from_name(t.key()).map_or(String::new(), |k| shortcut_text(ctx, m, k)),
                 block: None,
                 id: PaletteAct::Tool(t),
@@ -1095,6 +1108,21 @@ mod tests {
         // "100" finds Actual pixels in the palette.
         assert!(ACTIONS.contains(&("Actual pixels (100%)", "actual")));
         assert!(ACTIONS.contains(&("Show or hide the Histogram", "histogram-panel")));
+    }
+
+    #[test]
+    fn photoshop_words_find_the_text_shape_and_pen_tools() {
+        let find = |q: &str| -> Vec<String> {
+            TOOLS
+                .iter()
+                .map(|t| tool_palette_label(*t))
+                .filter(|l| l.to_lowercase().contains(q))
+                .collect()
+        };
+        assert_eq!(find("type"), vec!["Text tool (type)"]);
+        assert_eq!(find("rectangle").len(), 1);
+        assert!(find("ellipse")[0].starts_with("Shape tool"));
+        assert_eq!(find("clone"), vec!["Clone Stamp tool"]);
     }
 
     #[test]

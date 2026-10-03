@@ -114,6 +114,12 @@ fn bar_value(
     .inner
 }
 
+/// A colour swatch's spoken name: what it colours, then its value
+/// ("Fill colour #3D85EB"), so the fill and stroke wells differ.
+fn colour_name(r: &egui::Response, what: &str, srgb: [f32; 3]) {
+    a11y_name(r, &format!("{what} {}", crate::color_picker::format_hex(srgb)));
+}
+
 /// A drag's two constrained ends (document space).
 type DragEnds = ((f32, f32), (f32, f32));
 
@@ -335,6 +341,9 @@ impl App {
         let r = egui::ComboBox::from_id_salt("shape-kind")
             .selected_text(kind_label(&st.params))
             .width(if tier == Tier::Wide { 150.0 } else { 120.0 })
+            // Tall enough for every kind: egui's default cuts the list
+            // after seven rows and hides the last custom shapes.
+            .height(400.0)
             .show_ui(ui, |ui| {
                 popup_style(ui);
                 for (i, (k, c, label)) in kind_entries().into_iter().enumerate() {
@@ -405,12 +414,14 @@ impl App {
         a11y_name(&r, "Shape fill");
         r.on_hover_text("Gradients run from the fill colour to the background colour");
         if st.fill != FillMode::None {
-            crate::color_picker::color_edit_button_rgb(ui, &mut st.fill_rgb);
+            let r = crate::color_picker::color_edit_button_rgb(ui, &mut st.fill_rgb);
+            colour_name(&r, "Fill colour", st.fill_rgb);
         }
         ui.separator();
         check(ui, &mut st.stroke_on, "Stroke").on_hover_text("Outline the shape");
         if st.stroke_on {
-            crate::color_picker::color_edit_button_rgb(ui, &mut st.stroke_rgb);
+            let r = crate::color_picker::color_edit_button_rgb(ui, &mut st.stroke_rgb);
+            colour_name(&r, "Stroke colour", st.stroke_rgb);
             bar_value(ui, tier, "Width", &mut st.stroke_width, 0.5..=100.0, " px", true);
         }
         // A tight bar leaves the alignment to Properties.
@@ -436,11 +447,12 @@ impl App {
     pub(crate) fn shape_properties(&mut self, ui: &mut egui::Ui, id: LayerId, mut shape: ShapeLayer) {
         let before = shape.clone();
         let mut finished = false;
-        let color_row = |ui: &mut egui::Ui, label: &str, color: &mut [f32; 3], finished: &mut bool| {
+        let color_row = |ui: &mut egui::Ui, what: &str, color: &mut [f32; 3], finished: &mut bool| {
             ui.horizontal(|ui| {
-                row_label(ui, label, LABEL_W);
+                row_label(ui, "Color", LABEL_W);
                 let mut srgb = color.map(linear_to_srgb_f);
                 let r = crate::color_picker::color_edit_button_rgb(ui, &mut srgb);
+                colour_name(&r, what, srgb);
                 if r.changed() {
                     *color = srgb.map(srgb_to_linear_f);
                 }
@@ -492,7 +504,7 @@ impl App {
             }
         });
         match &mut shape.fill {
-            Some(Fill::Solid { color }) => color_row(ui, "Color", color, &mut finished),
+            Some(Fill::Solid { color }) => color_row(ui, "Fill colour", color, &mut finished),
             Some(Fill::Gradient {
                 gradient,
                 style,
@@ -541,7 +553,7 @@ impl App {
             finished = true;
         }
         if let Some(s) = shape.stroke.as_mut() {
-            color_row(ui, "Color", &mut s.color, &mut finished);
+            color_row(ui, "Stroke colour", &mut s.color, &mut finished);
             finished |= slider_row_log(ui, "Width", &mut s.width, 0.5..=200.0, " px");
             ui.horizontal(|ui| {
                 row_label(ui, "Align", LABEL_W);
@@ -787,9 +799,142 @@ impl App {
     }
 }
 
+/// Whole-app frames with real pointer and key events, for tests of the
+/// Shape, Pen and Text tools' controls: find a control by its spoken name
+/// and click it, or click a document point on the canvas.
+#[cfg(test)]
+pub(crate) mod test_frames {
+    use super::*;
+
+    pub(crate) const SCREEN: egui::Vec2 = egui::vec2(1440.0, 900.0);
+
+    /// A `w` × `h` document with `tool` up, settled for a few frames.
+    pub(crate) fn app_with(w: u32, h: u32, tool: Tool) -> (App, egui::Context) {
+        let mut app = crate::a11y_tests::launch(&[]);
+        app.open_in_new_tab(blank(w, h), None);
+        app.tool = tool;
+        let ctx = crate::a11y_tests::ctx();
+        for _ in 0..3 {
+            frame(&mut app, &ctx, Vec::new(), egui::Modifiers::NONE);
+        }
+        (app, ctx)
+    }
+
+    /// One frame; returns every named node and its screen rectangle.
+    pub(crate) fn frame(
+        app: &mut App,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+    ) -> Vec<(String, egui::Rect)> {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, SCREEN)),
+            events,
+            modifiers,
+            ..Default::default()
+        };
+        let out = ctx.run(raw, |ctx| app.frame(ctx));
+        let update = out
+            .platform_output
+            .accesskit_update
+            .expect("accesskit is enabled");
+        update
+            .nodes
+            .iter()
+            .filter_map(|(_, n)| {
+                let b = n.bounds()?;
+                let r = egui::Rect::from_min_max(
+                    egui::pos2(b.x0 as f32, b.y0 as f32),
+                    egui::pos2(b.x1 as f32, b.y1 as f32),
+                );
+                Some((n.name()?.to_string(), r))
+            })
+            .collect()
+    }
+
+    /// Settle, then the rectangle of the control called `name` (or whose
+    /// name starts with `name` when it ends in `*`).
+    pub(crate) fn find(app: &mut App, ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
+        let nodes = frame(app, ctx, Vec::new(), egui::Modifiers::NONE);
+        let hit = |n: &str| match name.strip_suffix('*') {
+            Some(prefix) => n.starts_with(prefix),
+            None => n == name,
+        };
+        nodes
+            .into_iter()
+            .filter(|(n, _)| hit(n))
+            .map(|(_, r)| r)
+            .next_back()
+    }
+
+    /// Move to `p`, press and release, then settle.
+    pub(crate) fn click_at(app: &mut App, ctx: &egui::Context, p: Pos2, modifiers: egui::Modifiers) {
+        let button = |pressed| egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers,
+        };
+        frame(app, ctx, vec![egui::Event::PointerMoved(p)], modifiers);
+        frame(app, ctx, vec![button(true)], modifiers);
+        frame(app, ctx, vec![button(false)], modifiers);
+        for _ in 0..2 {
+            frame(app, ctx, Vec::new(), egui::Modifiers::NONE);
+        }
+    }
+
+    /// Click the control called `name`; false when it is not on screen.
+    pub(crate) fn click(app: &mut App, ctx: &egui::Context, name: &str) -> bool {
+        let Some(r) = find(app, ctx, name) else {
+            return false;
+        };
+        click_at(app, ctx, r.center(), egui::Modifiers::NONE);
+        true
+    }
+
+    /// Where document point (x, y) is on screen.
+    pub(crate) fn doc_point(app: &mut App, ctx: &egui::Context, x: f32, y: f32) -> Pos2 {
+        let canvas = find(app, ctx, "Canvas").expect("a canvas on screen");
+        canvas.min + app.pan + egui::vec2(x, y) * app.zoom
+    }
+
+    /// Press and release `key` with `modifiers`.
+    pub(crate) fn key(app: &mut App, ctx: &egui::Context, key: Key, modifiers: egui::Modifiers) {
+        let ev = |pressed| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers,
+        };
+        frame(app, ctx, vec![ev(true)], modifiers);
+        frame(app, ctx, vec![ev(false)], egui::Modifiers::NONE);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_frames::{app_with, click, find};
     use super::*;
+
+    #[test]
+    fn the_last_custom_shapes_can_be_picked_and_colour_wells_say_what_they_colour() {
+        let (mut app, ctx) = app_with(200, 150, Tool::Shape);
+        app.shape.stroke_on = true;
+        // The two wells in the bar: named for what they colour.
+        assert!(find(&mut app, &ctx, "Fill colour #3D85EB").is_some());
+        assert!(find(&mut app, &ctx, "Stroke colour #000000").is_some());
+        // The kind list shows all nine kinds: the last one is clickable.
+        assert!(click(&mut app, &ctx, "Shape kind"));
+        assert!(click(&mut app, &ctx, "Speech Bubble"));
+        assert_eq!(
+            (app.shape.params.kind, app.shape.params.custom),
+            (ShapeKind::Custom, CustomShape::Bubble)
+        );
+        assert!(click(&mut app, &ctx, "Shape kind"));
+        assert!(click(&mut app, &ctx, "Heart"));
+        assert_eq!(app.shape.params.custom, CustomShape::Heart);
+    }
 
     #[test]
     fn the_tool_builds_shapes_from_drags() {

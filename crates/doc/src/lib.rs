@@ -715,6 +715,17 @@ impl Mask {
     }
 }
 
+/// The name a text layer gets from its text, as in Photoshop: the first
+/// line, at most 24 characters, or "Text" while it is empty.
+pub fn text_layer_name(text: &str) -> String {
+    let name: String = text.lines().next().unwrap_or("").chars().take(24).collect();
+    if name.is_empty() {
+        "Text".into()
+    } else {
+        name
+    }
+}
+
 /// Editable text. The glyphs are rasterised into `cache` by `lumenply-render`
 /// whenever the text changes; the cache is never saved to disk.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -930,12 +941,8 @@ impl Layer {
     }
 
     pub fn text(id: LayerId, t: TextLayer) -> Self {
-        let name: String = t.text.lines().next().unwrap_or("Text").chars().take(24).collect();
-        Layer::with_content(
-            id,
-            if name.is_empty() { "Text".into() } else { name },
-            LayerContent::Text(t),
-        )
+        let name = text_layer_name(&t.text);
+        Layer::with_content(id, name, LayerContent::Text(t))
     }
 
     pub fn text_layer(&self) -> Option<&TextLayer> {

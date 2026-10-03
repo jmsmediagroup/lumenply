@@ -435,6 +435,60 @@ mod tests {
         assert_eq!(lines[0].last(), Some(&(600.0, 0.0)));
     }
 
+    /// The work path's anchors per subpath, rounded to whole pixels, and
+    /// whether each is closed.
+    fn anchors(app: &App) -> Vec<(Vec<(f32, f32)>, bool)> {
+        let Some(p) = &app.editor.doc().work_path else {
+            return Vec::new();
+        };
+        p.subpaths
+            .iter()
+            .map(|sp| {
+                let pts = sp
+                    .nodes
+                    .iter()
+                    .map(|n| (n.point.0.round(), n.point.1.round()))
+                    .collect();
+                (pts, sp.closed)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_pen_click_is_its_own_undo_step_and_esc_keeps_the_path() {
+        use crate::shape_tool::test_frames::{app_with, click_at, doc_point, key};
+        let (mut app, ctx) = app_with(400, 300, Tool::Pen);
+        let steps = app.editor.history().len();
+        let pen_click = |app: &mut App, x: f32, y: f32| {
+            let p = doc_point(app, &ctx, x, y);
+            click_at(app, &ctx, p, egui::Modifiers::NONE);
+        };
+        pen_click(&mut app, 50.0, 50.0);
+        pen_click(&mut app, 200.0, 50.0);
+        pen_click(&mut app, 200.0, 200.0);
+        assert_eq!(
+            anchors(&app),
+            vec![(vec![(50.0, 50.0), (200.0, 50.0), (200.0, 200.0)], false)]
+        );
+        assert_eq!(app.editor.history().len(), steps + 3, "one step per anchor");
+        assert_eq!(app.editor.history().last().copied(), Some("Add anchor"));
+        // Undo takes back the last anchor only.
+        assert!(app.editor.undo().is_some());
+        assert_eq!(anchors(&app), vec![(vec![(50.0, 50.0), (200.0, 50.0)], false)]);
+        // Drawing goes on from there; Esc then finishes the path and keeps it.
+        pen_click(&mut app, 120.0, 250.0);
+        key(&mut app, &ctx, Key::Escape, egui::Modifiers::NONE);
+        assert!(!app.pen_open);
+        assert_eq!(
+            anchors(&app),
+            vec![(vec![(50.0, 50.0), (200.0, 50.0), (120.0, 250.0)], false)]
+        );
+        // The next click starts a second subpath.
+        pen_click(&mut app, 300.0, 100.0);
+        assert_eq!(anchors(&app).len(), 2);
+        assert_eq!(anchors(&app)[1], (vec![(300.0, 100.0)], false));
+    }
+
     #[test]
     fn the_paths_panel_saves_fills_and_names_every_control() {
         let mut app = crate::a11y_tests::launch(&[]);

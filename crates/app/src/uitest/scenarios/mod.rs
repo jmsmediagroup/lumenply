@@ -14,6 +14,7 @@ mod basics;
 mod c_selections;
 mod d_painting;
 mod e_transform;
+mod g_text_shapes;
 mod h_workspace;
 mod i_ai_actions;
 mod selection;
@@ -29,4 +30,5 @@ pub(crate) const AREAS: &[&[Scenario]] = &[
     e_transform::SCENARIOS,
     h_workspace::SCENARIOS,
     i_ai_actions::SCENARIOS,
+    g_text_shapes::SCENARIOS,
 ];
