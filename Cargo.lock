@@ -2489,6 +2489,7 @@ dependencies = [
  "image-webp",
  "lumenply-core",
  "lumenply-doc",
+ "lumenply-graph",
  "lumenply-io",
  "lumenply-render",
  "lumenply-tiles",
