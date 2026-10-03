@@ -7,6 +7,7 @@ members = [
     "crates/graph",
     "crates/io",
     "crates/core",
+    "crates/ai",
     "crates/cli",
     "crates/app",
 ]
@@ -26,6 +27,7 @@ lumenply-render = { path = "crates/render" }
 lumenply-graph = { path = "crates/graph" }
 lumenply-io = { path = "crates/io" }
 lumenply-core = { path = "crates/core" }
+lumenply-ai = { path = "crates/ai" }
 
 rayon = "1.10"
 thiserror = "1.0"

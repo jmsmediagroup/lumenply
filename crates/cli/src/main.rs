@@ -4,6 +4,8 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+#[cfg(feature = "ai")]
+mod ai;
 mod batch;
 
 use anyhow::{bail, Context, Result};
@@ -116,6 +118,21 @@ enum Cmd {
     /// List the supported blend modes (name, then Photoshop's label), in
     /// Photoshop's menu order with a blank line between its groups.
     Blends,
+    /// Local AI selection and masking (ADR 0028): list and download the
+    /// models, select an object, remove a background.
+    #[cfg(feature = "ai")]
+    ///
+    /// e.g. `lumenply ai select photo.jpg --point 300,600 -o mask.png`
+    Ai {
+        /// Model folder (default: ~/.lumenply/models, the app's).
+        #[arg(long, global = true)]
+        models: Option<PathBuf>,
+        /// Run the models on the CPU only.
+        #[arg(long, global = true)]
+        cpu: bool,
+        #[command(subcommand)]
+        cmd: ai::AiCmd,
+    },
     /// Convert many files at once (Photoshop's Image Processor): images,
     /// camera RAW, PSD and projects in; PNG, JPEG, WebP, GIF or PDF out.
     ///
@@ -279,6 +296,8 @@ fn main() -> Result<()> {
             graph: Some(side),
             budget_mb,
         } => bench_graph(size, layers, runs, normal, &side, budget_mb),
+        #[cfg(feature = "ai")]
+        Cmd::Ai { models, cpu, cmd } => ai::run(cmd, models, cpu),
         Cmd::Blends => {
             for (i, group) in BlendMode::GROUPS.iter().enumerate() {
                 if i > 0 {

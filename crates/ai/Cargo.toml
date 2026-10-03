@@ -1,0 +1,43 @@
+[package]
+name = "lumenply-ai"
+description = "Local AI selection and masking: ONNX models through ONNX Runtime (ADR 0028)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+# Link the ONNX Runtime build that carries the CUDA execution provider
+# (Linux and Windows; a much larger download at build time). Without it
+# CUDA is never tried.
+cuda = ["ort/cuda"]
+
+[dependencies]
+lumenply-tiles.workspace = true
+lumenply-core.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+blake3.workspace = true
+sha2 = "0.10"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+# ONNX Runtime 1.28, prebuilt by pyke and linked statically at build time.
+# The pinned release candidate keeps the downloaded binaries reproducible.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = [
+    "std",
+    "download-binaries",
+    "tls-rustls",
+    "copy-dylibs",
+    "api-27",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["coreml"] }
+
+[target.'cfg(windows)'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["directml"] }
+
+[dev-dependencies]
+# tests/real_models.rs: the demo photo, loaded as the app loads images.
+lumenply-io.workspace = true

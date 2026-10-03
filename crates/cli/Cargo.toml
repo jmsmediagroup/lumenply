@@ -12,6 +12,12 @@ authors.workspace = true
 name = "lumenply"
 path = "src/main.rs"
 
+[features]
+# `lumenply ai`: local AI selection and masking, which links ONNX Runtime
+# (ADR 0028). Build with --no-default-features to leave it out.
+default = ["ai"]
+ai = ["dep:lumenply-ai", "dep:image"]
+
 [dependencies]
 lumenply-tiles.workspace = true
 lumenply-doc.workspace = true
@@ -19,9 +25,13 @@ lumenply-render.workspace = true
 lumenply-graph.workspace = true
 lumenply-io.workspace = true
 lumenply-core.workspace = true
+lumenply-ai = { workspace = true, optional = true }
 anyhow.workspace = true
 clap.workspace = true
 serde_json.workspace = true
+# `lumenply ai select` writes greyscale masks.
+image = { workspace = true, optional = true }
 
 [dev-dependencies]
 image.workspace = true
+
