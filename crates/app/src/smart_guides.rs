@@ -1,13 +1,15 @@
 //! Smart Guides (View ▸ Show smart guides, on by default as in Photoshop):
-//! while the Move tool drags a layer, magenta lines show where its left,
-//! centre or right edge (and top, middle or bottom) lines up with another
-//! visible layer's bounds or with the canvas, drawn across both objects,
-//! and the drag snaps there. A pill by the pointer reads the move offset.
-//! Holding Cmd (Ctrl elsewhere) while dragging turns all snapping off.
+//! while the Move tool drags a layer (or free transform moves its box),
+//! magenta lines show where its left, centre or right edge (and top,
+//! middle or bottom) lines up with another visible layer's bounds or with
+//! the canvas, drawn across both objects, and the drag snaps there. A pill
+//! by the pointer reads the move offset. Holding Cmd (Ctrl elsewhere)
+//! while dragging turns all snapping off.
 //!
 //! The maths is the pure [`smart_snap`]; the `App` glue only collects the
 //! targets once per drag and adjusts the offset before the drag's single
-//! `MoveLayer` command, so nothing here edits the document.
+//! `MoveLayer` command (or the transform's preview), so nothing here edits
+//! the document.
 
 use super::*;
 
@@ -171,17 +173,50 @@ pub(crate) struct SmartGuides {
 }
 
 impl App {
-    /// Move drag starts: collect what the layer can line up with.
-    pub(crate) fn begin_smart_guides(&mut self) {
-        let skip: Vec<LayerId> = self.active.into_iter().collect();
+    /// A drag of the `skip` layers starts: collect what they can line up with.
+    pub(crate) fn begin_smart_guides(&mut self, skip: &[LayerId]) {
         let on = self.prefs.smart_guides;
         let s = &mut self.aids.smart;
         *s = SmartGuides::default();
-        s.targets = on.then(|| layer_boxes(self.editor.doc(), &skip));
+        s.targets = on.then(|| layer_boxes(self.editor.doc(), skip));
     }
 
     pub(crate) fn end_smart_guides(&mut self) {
         self.aids.smart = SmartGuides::default();
+    }
+
+    fn canvas_box(&self) -> Bx {
+        let d = self.editor.doc();
+        Bx::new(0.0, 0.0, d.width as f32, d.height as f32)
+    }
+
+    /// The nudge Smart Guides give a box at `moved`: none on the `held`
+    /// axes (View ▸ Snap took them), and only exact matches when `free`.
+    fn smart_nudge(&self, moved: Bx, held: [bool; 2], free: bool) -> (f32, f32) {
+        let Some(targets) = &self.aids.smart.targets else {
+            return (0.0, 0.0);
+        };
+        let tol = if free {
+            0.0
+        } else {
+            guides::SNAP_PX / self.zoom.max(1e-4)
+        };
+        let (dx, dy, _) = smart_snap(moved, targets, self.canvas_box(), tol);
+        (if held[0] { 0.0 } else { dx }, if held[1] { 0.0 } else { dy })
+    }
+
+    /// Note where the box landed: the lines it shows and the readout.
+    fn show_smart(&mut self, at: Bx, offset: (i32, i32)) {
+        let Some(targets) = &self.aids.smart.targets else {
+            return;
+        };
+        let all: Vec<Bx> = std::iter::once(self.canvas_box())
+            .chain(targets.iter().copied())
+            .collect();
+        let s = &mut self.aids.smart;
+        s.lines = aligned_lines(at, &all, ALIGNED);
+        s.moving = Some(at);
+        s.offset = Some(offset);
     }
 
     /// Smart-snap the Move tool's offset `off` (already snapped by View ▸
@@ -189,28 +224,29 @@ impl App {
     /// took keep its result. `free` (Cmd held) snaps nothing but still
     /// shows exact alignments.
     pub(crate) fn smart_move_offset(&mut self, off: (i32, i32), held: [bool; 2], free: bool) -> (i32, i32) {
-        let (Some(b), Some(targets)) = (self.aids.move_bounds, &self.aids.smart.targets) else {
+        let Some(b) = self.aids.move_bounds else {
             return off;
         };
-        let d = self.editor.doc();
-        let canvas = Bx::new(0.0, 0.0, d.width as f32, d.height as f32);
         let at = |o: (i32, i32)| Bx::from_rect(b).shifted(o.0 as f32, o.1 as f32);
-        let tol = if free {
-            0.0
-        } else {
-            guides::SNAP_PX / self.zoom.max(1e-4)
-        };
-        let (dx, dy, _) = smart_snap(at(off), targets, canvas, tol);
-        let out = (
-            off.0 + if held[0] { 0 } else { dx.round() as i32 },
-            off.1 + if held[1] { 0 } else { dy.round() as i32 },
-        );
-        let all: Vec<Bx> = std::iter::once(canvas).chain(targets.iter().copied()).collect();
-        let s = &mut self.aids.smart;
-        s.moving = Some(at(out));
-        s.lines = aligned_lines(at(out), &all, ALIGNED);
-        s.offset = Some(out);
+        let (dx, dy) = self.smart_nudge(at(off), held, free);
+        let out = (off.0 + dx.round() as i32, off.1 + dy.round() as i32);
+        self.show_smart(at(out), out);
         out
+    }
+
+    /// Free transform, moving the box: the Smart Guide nudge for its
+    /// bounds `b` (document pixels), `moved` so far since the drag began.
+    pub(crate) fn smart_xform_nudge(
+        &mut self,
+        b: Bx,
+        moved: (f32, f32),
+        held: [bool; 2],
+        free: bool,
+    ) -> (f32, f32) {
+        let (dx, dy) = self.smart_nudge(b, held, free);
+        let total = ((moved.0 + dx).round() as i32, (moved.1 + dy).round() as i32);
+        self.show_smart(b.shifted(dx, dy), total);
+        (dx, dy)
     }
 
     /// The magenta lines and the offset pill over the canvas.
@@ -579,5 +615,38 @@ mod input_tests {
         assert!(!app.view_aid_on("smart-guides"));
         app.run_menu_action("smart-guides");
         assert!(app.prefs.smart_guides);
+    }
+
+    #[test]
+    fn free_transform_moves_snap_by_smart_guides_alone() {
+        let (mut app, ctx) = launch();
+        app.run_menu_action("xform");
+        assert!(app.xform.is_some());
+        frame(&mut app, &ctx, vec![], egui::Modifiers::NONE);
+        // View ▸ Snap is off: only a Smart Guide can bring it home.
+        let pts = out_and_back(&app);
+        drag(&mut app, &ctx, &pts, egui::Modifiers::NONE, false);
+        assert_eq!(app.xform.as_ref().unwrap().dx, 0.0, "snapped home");
+        let mut xs: Vec<f32> = app
+            .aids
+            .smart
+            .lines
+            .iter()
+            .filter(|l| l.vertical)
+            .map(|l| l.at)
+            .collect();
+        xs.sort_by(f32::total_cmp);
+        assert_eq!(xs, vec![0.0, 900.0, 1800.0]);
+        assert_eq!(app.aids.smart.offset, Some((0, 0)));
+        // The release ends the guides.
+        frame(
+            &mut app,
+            &ctx,
+            vec![press(pts[2], false, egui::Modifiers::NONE)],
+            egui::Modifiers::NONE,
+        );
+        frame(&mut app, &ctx, vec![], egui::Modifiers::NONE);
+        assert!(app.aids.smart.targets.is_none());
+        assert_eq!(app.xform.as_ref().unwrap().dx, 0.0);
     }
 }

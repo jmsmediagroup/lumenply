@@ -117,6 +117,11 @@ impl App {
         self.aids.hint = [None, None];
     }
 
+    /// Which axes (x, y) the last snap landed on a line.
+    pub(crate) fn snap_held(&self) -> [bool; 2] {
+        [self.aids.hint[0].is_some(), self.aids.hint[1].is_some()]
+    }
+
     fn snap_tol(&self) -> f32 {
         SNAP_PX / self.zoom.max(1e-4)
     }
@@ -152,7 +157,7 @@ impl App {
             .active_layer()
             .and_then(|l| l.raster_store())
             .and_then(snap::painted_bounds);
-        self.begin_smart_guides();
+        self.begin_smart_guides(&skip);
     }
 
     /// Move tool: the whole-pixel offset after snapping the moved bounds
@@ -170,7 +175,7 @@ impl App {
             let (dx, dy) = self.snap_rect_delta(x0, y0, x0 + b.w as f32, y0 + b.h as f32);
             (off.0 + dx.round() as i32, off.1 + dy.round() as i32)
         };
-        let held = [self.aids.hint[0].is_some(), self.aids.hint[1].is_some()];
+        let held = self.snap_held();
         self.smart_move_offset(off, held, free)
     }
 
