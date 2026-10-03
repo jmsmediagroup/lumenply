@@ -28,7 +28,7 @@ lumenply-core = { path = "crates/core" }
 rayon = "1.10"
 thiserror = "1.0"
 anyhow = "1.0"
-image = { version = "0.24", default-features = false, features = ["png", "jpeg", "tiff", "webp"] }
+image = { version = "0.24", default-features = false, features = ["png", "jpeg", "tiff", "webp", "gif", "bmp", "ico", "tga", "pnm", "qoi"] }
 exr = "1.72"
 qcms = "0.3"
 fontdb = "0.16"

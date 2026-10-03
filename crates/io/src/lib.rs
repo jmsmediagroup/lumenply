@@ -308,6 +308,75 @@ pub fn encode_webp(raster: &Raster, transparency: bool) -> Result<Vec<u8>, IoErr
     Ok(out)
 }
 
+/// A GIF: 256 colours chosen for the image (NeuQuant), one transparent
+/// index for pixels under half opacity when `transparency` is on (GIF has
+/// no partial alpha), else on white.
+pub fn encode_gif(raster: &Raster, transparency: bool) -> Result<Vec<u8>, IoError> {
+    let rgba = rgba8(raster, !transparency);
+    let n = (raster.width * raster.height) as usize;
+    let clear: Vec<bool> = rgba.chunks_exact(4).map(|p| p[3] < 128).collect();
+    let any_clear = clear.iter().any(|&c| c);
+    // Quantise the visible pixels only; index 255 is kept for transparency.
+    let opaque: Vec<u8> = rgba
+        .chunks_exact(4)
+        .zip(&clear)
+        .filter(|(_, c)| !**c)
+        .flat_map(|(p, _)| [p[0], p[1], p[2], 255])
+        .collect();
+    let colours = if any_clear { 255 } else { 256 };
+    // Few colours (graphics, pixel art): an exact palette. Photos: NeuQuant.
+    let mut exact: std::collections::HashMap<[u8; 3], u8> = std::collections::HashMap::new();
+    for p in opaque.chunks_exact(4) {
+        let key = [p[0], p[1], p[2]];
+        let next = exact.len();
+        if next >= colours {
+            exact.clear();
+            break;
+        }
+        exact.entry(key).or_insert(next as u8);
+    }
+    let mut palette = vec![0u8; 256 * 3];
+    let mut indices = Vec::with_capacity(n);
+    if !exact.is_empty() || opaque.is_empty() {
+        for (key, &i) in &exact {
+            palette[i as usize * 3..i as usize * 3 + 3].copy_from_slice(key);
+        }
+        for (p, &c) in rgba.chunks_exact(4).zip(&clear) {
+            indices.push(if c { 255 } else { exact[&[p[0], p[1], p[2]]] });
+        }
+    } else {
+        let nq = color_quant::NeuQuant::new(10, colours, &opaque);
+        let map = nq.color_map_rgb();
+        palette[..map.len()].copy_from_slice(&map);
+        for (p, &c) in rgba.chunks_exact(4).zip(&clear) {
+            indices.push(if c {
+                255
+            } else {
+                nq.index_of(&[p[0], p[1], p[2], 255]) as u8
+            });
+        }
+    }
+    let (w, h) = (
+        u16::try_from(raster.width).map_err(|_| IoError::Codec("GIF is limited to 65535 px".into()))?,
+        u16::try_from(raster.height).map_err(|_| IoError::Codec("GIF is limited to 65535 px".into()))?,
+    );
+    let mut out = Vec::new();
+    {
+        let mut enc =
+            gif::Encoder::new(&mut out, w, h, &palette).map_err(|e| IoError::Codec(e.to_string()))?;
+        let frame = gif::Frame {
+            width: w,
+            height: h,
+            buffer: std::borrow::Cow::Owned(indices),
+            transparent: any_clear.then_some(255),
+            ..Default::default()
+        };
+        enc.write_frame(&frame)
+            .map_err(|e| IoError::Codec(e.to_string()))?;
+    }
+    Ok(out)
+}
+
 /// Splice an ICC profile into a JPEG stream as an APP2 segment, placed
 /// after any APP0 (JFIF) marker so the segment order stays conventional.
 fn jpeg_with_icc(jpeg: &[u8], icc: &[u8]) -> Vec<u8> {
@@ -408,6 +477,49 @@ mod encode_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn gif_export_keeps_its_few_colours_and_hard_transparency() {
+        let mut r = Raster::new(4, 2);
+        r.pixels[0] = Rgba::from_straight(1.0, 0.0, 0.0, 1.0);
+        r.pixels[1] = Rgba::from_straight(0.0, 0.0, 1.0, 1.0);
+        r.pixels[2] = Rgba::TRANSPARENT;
+        r.pixels[3] = Rgba::from_straight(0.0, 1.0, 0.0, 0.3);
+        for p in &mut r.pixels[4..] {
+            *p = Rgba::from_straight(1.0, 1.0, 1.0, 1.0);
+        }
+        let bytes = encode_gif(&r, true).unwrap();
+        assert_eq!(&bytes[..3], b"GIF");
+        let back = image::load_from_memory(&bytes).unwrap().to_rgba8();
+        let px = |x, y| back.get_pixel(x, y).0;
+        assert_eq!(px(0, 0), [255, 0, 0, 255]);
+        assert_eq!(px(1, 0), [0, 0, 255, 255]);
+        assert_eq!(px(2, 0)[3], 0, "transparent stays transparent");
+        assert_eq!(px(3, 0)[3], 0, "under half opacity becomes transparent");
+        assert_eq!(px(0, 1), [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn bmp_tga_and_gif_files_open() {
+        let dir = std::env::temp_dir().join(format!("lumenply-fmt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = image::RgbaImage::from_fn(3, 2, |x, _| {
+            image::Rgba([if x == 0 { 255 } else { 0 }, 128, 0, 255])
+        });
+        for ext in ["bmp", "tga", "gif"] {
+            let path = dir.join(format!("t.{ext}"));
+            image::DynamicImage::ImageRgba8(img.clone()).save(&path).unwrap();
+            let r = load(&path).unwrap();
+            assert_eq!((r.width, r.height), (3, 2), "{ext}");
+            let p = r.get(0, 1).to_straight();
+            assert!(
+                (p[0] - 1.0).abs() < 0.01 && (p[1] - srgb_to_linear(128)).abs() < 0.02,
+                "{ext}: {p:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     #[test]

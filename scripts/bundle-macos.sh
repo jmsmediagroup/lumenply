@@ -54,7 +54,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 $(doc_type "Lumenply project" Editor Owner lumen nge)
 $(doc_type "Photoshop document" Editor Alternate psd psb)
 $(doc_type "OpenRaster image" Editor Alternate ora)
-$(doc_type "Image" Editor Alternate png jpg jpeg tif tiff webp exr heic heif hif avif)
+$(doc_type "Image" Editor Alternate png jpg jpeg tif tiff webp exr gif bmp tga ico qoi heic heif hif avif)
 $(doc_type "Camera RAW" Viewer Alternate dng cr2 cr3 crw nef nrw arw srf sr2 raf orf rw2 pef srw rwl 3fr fff iiq mos mef mrw erf kdc dcr raw)
   </array>
 </dict>

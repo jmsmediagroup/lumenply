@@ -48,10 +48,14 @@ pub(crate) const ORA_EXT: &[&str] = &["ora"];
 /// HEIC/HEIF/AVIF open through the macOS system decoder.
 #[cfg(target_os = "macos")]
 pub(crate) const IMAGE_EXT: &[&str] = &[
-    "png", "jpg", "jpeg", "tif", "tiff", "webp", "exr", "heic", "heif", "hif", "avif",
+    "png", "jpg", "jpeg", "tif", "tiff", "webp", "exr", "gif", "bmp", "tga", "ico", "qoi", "ppm", "pgm",
+    "pbm", "pnm", "heic", "heif", "hif", "avif",
 ];
 #[cfg(not(target_os = "macos"))]
-pub(crate) const IMAGE_EXT: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "webp", "exr"];
+pub(crate) const IMAGE_EXT: &[&str] = &[
+    "png", "jpg", "jpeg", "tif", "tiff", "webp", "exr", "gif", "bmp", "tga", "ico", "qoi", "ppm", "pgm",
+    "pbm", "pnm",
+];
 
 /// Where a file dialog starts: the live document's folder, else the folder
 /// of the most recently used file that still exists (None = the OS default).

@@ -172,6 +172,9 @@ None of these could be tested in the container.
       resampling in linear light (render::resample), a preview of the encoded
       result (JPEG decoded back, so artefacts show) and its real file size,
       encoded on a worker thread
+- [x] GIF, BMP, TGA, ICO, QOI and PNM open; GIF export (Export As, batch):
+      an exact palette for up to 256 colours, NeuQuant above, hard
+      transparency
 - [~] HEIC / HEIF / AVIF import on macOS through ImageIO (orientation and
       colour profile applied, decoded straight into linear-light float;
       tested against HEICs written by the system's sips). Still open:

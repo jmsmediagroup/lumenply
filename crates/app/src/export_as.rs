@@ -16,6 +16,7 @@ pub(crate) enum ExportFormat {
     Png,
     Jpeg,
     Webp,
+    Gif,
 }
 
 impl ExportFormat {
@@ -24,6 +25,7 @@ impl ExportFormat {
             ExportFormat::Png => "png",
             ExportFormat::Jpeg => "jpg",
             ExportFormat::Webp => "webp",
+            ExportFormat::Gif => "gif",
         }
     }
 
@@ -32,6 +34,7 @@ impl ExportFormat {
             ExportFormat::Png => "PNG image",
             ExportFormat::Jpeg => "JPEG image",
             ExportFormat::Webp => "WebP image (lossless)",
+            ExportFormat::Gif => "GIF image (256 colours)",
         }
     }
 
@@ -75,19 +78,20 @@ fn encode(flat: &Raster, s: ExportSettings) -> Encoded {
         ExportFormat::Png => lumenply_io::encode_png(&out, s.transparency),
         ExportFormat::Jpeg => lumenply_io::encode_jpeg(&out, s.quality),
         ExportFormat::Webp => lumenply_io::encode_webp(&out, s.transparency),
+        ExportFormat::Gif => lumenply_io::encode_gif(&out, s.transparency),
     }
     .map_err(|e| e.to_string());
     let shown = match (&bytes, s.format) {
-        (Ok(b), ExportFormat::Jpeg) => image::load_from_memory(b)
+        (Ok(b), ExportFormat::Jpeg | ExportFormat::Gif) => image::load_from_memory(b)
             .map(|img| {
                 let img = img.to_rgba8();
                 let mut r = Raster::new(img.width(), img.height());
                 for (p, q) in r.pixels.iter_mut().zip(img.pixels()) {
-                    *p = lumenply_tiles::Rgba::new(
+                    *p = lumenply_tiles::Rgba::from_straight(
                         lumenply_io::srgb_to_linear(q[0]),
                         lumenply_io::srgb_to_linear(q[1]),
                         lumenply_io::srgb_to_linear(q[2]),
-                        1.0,
+                        q[3] as f32 / 255.0,
                     );
                 }
                 r
@@ -292,6 +296,7 @@ impl App {
                         (ExportFormat::Png, "PNG"),
                         (ExportFormat::Jpeg, "JPEG"),
                         (ExportFormat::Webp, "WebP"),
+                        (ExportFormat::Gif, "GIF"),
                     ],
                 );
                 ui.add_space(4.0);
@@ -436,11 +441,12 @@ impl App {
         let (verb, arg) = rest.split_once('=').unwrap_or((rest, ""));
         match verb {
             "open" => {}
-            "jpeg" | "webp" | "png" => {
+            "jpeg" | "webp" | "png" | "gif" => {
                 if let Some(st) = self.export_as.as_mut() {
                     st.settings.format = match verb {
                         "jpeg" => ExportFormat::Jpeg,
                         "webp" => ExportFormat::Webp,
+                        "gif" => ExportFormat::Gif,
                         _ => ExportFormat::Png,
                     };
                     if let Ok(q) = arg.parse() {

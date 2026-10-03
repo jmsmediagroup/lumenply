@@ -102,7 +102,8 @@ fn encode(r: &Raster, o: &Options) -> Result<(Vec<u8>, &'static str)> {
         "png" => (lumenply_io::encode_png(r, !o.flatten)?, "png"),
         "jpg" | "jpeg" => (lumenply_io::encode_jpeg(r, o.quality)?, "jpg"),
         "webp" => (lumenply_io::encode_webp(r, !o.flatten)?, "webp"),
-        other => bail!("unknown format '{other}' (png, jpeg or webp)"),
+        "gif" => (lumenply_io::encode_gif(r, !o.flatten)?, "gif"),
+        other => bail!("unknown format '{other}' (png, jpeg, webp or gif)"),
     })
 }
 

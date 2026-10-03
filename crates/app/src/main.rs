@@ -265,9 +265,12 @@ fn window_size(args: &[String]) -> [f32; 2] {
 
 fn is_image_path(p: &str) -> bool {
     let lower = p.to_ascii_lowercase();
-    [".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".exr"]
-        .iter()
-        .any(|e| lower.ends_with(e))
+    [
+        ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".exr", ".gif", ".bmp", ".tga", ".ico", ".qoi",
+        ".ppm", ".pgm", ".pbm", ".pnm",
+    ]
+    .iter()
+    .any(|e| lower.ends_with(e))
         || lumenply_io::raw::is_raw(p)
         || (cfg!(target_os = "macos") && lumenply_io::system_image::is_system_format(std::path::Path::new(p)))
 }

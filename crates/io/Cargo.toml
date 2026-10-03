@@ -23,6 +23,8 @@ exr.workspace = true
 qcms.workspace = true
 rawler = "0.7.0"
 image-webp = "0.2"
+gif = "0.13"
+color_quant = "1.1"
 
 lumenply-render.workspace = true
 
