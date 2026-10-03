@@ -446,4 +446,51 @@ mod pick_tests {
         assert_eq!(app.brush_rgb, [1.0, 0.0, 0.0], "{}", app.status);
         assert_eq!(app.editor.history().len(), steps, "no stroke");
     }
+
+    fn click(app: &mut App, ctx: &egui::Context, p: Pos2, m: egui::Modifiers) {
+        let raw = |events| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+            events,
+            modifiers: m,
+            ..Default::default()
+        };
+        let _ = ctx.run(raw(vec![egui::Event::PointerMoved(p)]), |ctx| app.frame(ctx));
+        for pressed in [true, false] {
+            let ev = egui::Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: m,
+            };
+            let _ = ctx.run(raw(vec![ev]), |ctx| app.frame(ctx));
+        }
+    }
+
+    #[test]
+    fn shift_click_paints_a_straight_line_from_the_last_stroke() {
+        let mut doc = Document::new(200, 120);
+        let id = doc.add_pixel_layer("ink");
+        let mut app = App::launch(&[]);
+        app.open_in_new_tab(Editor::new(doc), None);
+        app.dialog = None;
+        app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
+        app.set_active(Some(id));
+        app.tool = Tool::Brush;
+        app.brush.radius = 2.0;
+        let ctx = crate::a11y_tests::ctx();
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![], false);
+        }
+        let (a, b) = (egui::pos2(560.0, 450.0), egui::pos2(680.0, 450.0));
+        click(&mut app, &ctx, a, egui::Modifiers::NONE);
+        let (ax, ay) = app.cursor_doc.unwrap();
+        click(&mut app, &ctx, b, egui::Modifiers::SHIFT);
+        let (bx, _) = app.cursor_doc.unwrap();
+        assert!(bx > ax + 10, "the clicks are apart: {ax} {bx}");
+        let px = app.editor.doc().layer(id).unwrap().pixels().unwrap();
+        for x in [ax, (ax + bx) / 2, bx] {
+            assert!(px.get_pixel(x, ay).a > 0.5, "painted at x = {x}");
+        }
+        assert_eq!(px.get_pixel((ax + bx) / 2, ay + 8).a, 0.0, "a line, not a band");
+    }
 }

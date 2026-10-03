@@ -1357,8 +1357,10 @@ impl App {
                     if let Some(layer) = self.active {
                         if !self.stroke.is_empty() {
                             let pts = std::mem::take(&mut self.stroke);
+                            let end = pts.last().map(|p| (self.doc_key, p.x, p.y));
                             let cmd = self.stroke_command(layer, pts);
                             self.run(cmd.as_ref());
+                            self.last_stroke_end = end;
                         }
                     }
                 } else if resp.clicked_by(primary) && lock_why.is_some() {
@@ -1374,8 +1376,19 @@ impl App {
                                 self.clone_offset = ((sx - x).round() as i32, (sy - y).round() as i32);
                             }
                         }
-                        let cmd = self.stroke_command(layer, vec![self.pen_point(ctx, x, y)]);
+                        // Shift-click: a straight line from where the last
+                        // stroke ended on this document.
+                        let from = self
+                            .last_stroke_end
+                            .filter(|(key, ..)| *key == self.doc_key && ctx.input(|i| i.modifiers.shift));
+                        let mut points = Vec::with_capacity(2);
+                        if let Some((_, fx, fy)) = from {
+                            points.push(self.pen_point(ctx, fx, fy));
+                        }
+                        points.push(self.pen_point(ctx, x, y));
+                        let cmd = self.stroke_command(layer, points);
                         self.run(cmd.as_ref());
+                        self.last_stroke_end = Some((self.doc_key, x, y));
                     }
                 }
             }

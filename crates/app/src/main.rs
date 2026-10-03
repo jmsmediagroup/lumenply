@@ -439,6 +439,9 @@ struct App {
     brushes: brush_panel::BrushLibrary,
     /// On-canvas text editing with the Text tool (text_edit.rs).
     typer: text_edit::TypeTool,
+    /// Where the last brush stroke ended (document key, x, y): a
+    /// Shift-click paints a straight line from there, as in Photoshop.
+    last_stroke_end: Option<(u64, f32, f32)>,
     /// Channels / Paths / Navigator / Info display state (panels.rs).
     panels: panels::PanelState,
     /// Pattern library and picker (pattern_ui.rs).
@@ -611,6 +614,7 @@ impl App {
             gradient: Default::default(),
             brushes: brush_panel::BrushLibrary::load(),
             typer: text_edit::TypeTool::default(),
+            last_stroke_end: None,
             panels: Default::default(),
             patterns: Default::default(),
         };

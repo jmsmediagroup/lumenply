@@ -401,7 +401,9 @@ None of these could be tested in the container.
       Send to Back (Shift+Cmd+] / [), Image ▸ Duplicate; arrow keys nudge
       the layer (Move tool) or the selection outline (selection tools) by 1
       px, Shift by 10, a burst as one undo step; Alt-drag with the Move tool
-      moves a copy
+      moves a copy; Alt-click with the Brush picks a colour; Shift-click
+      paints a straight line from the last stroke; Alt+Backspace /
+      Cmd+Backspace fill with the foreground / background colour
 - [x] Merge selected layers (Cmd+E with several layers selected, "Merge
       layers"): the selected visible siblings composite into the topmost
       one's slot and name; hidden ones stay; picture unchanged (tested)
