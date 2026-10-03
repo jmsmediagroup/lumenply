@@ -19,7 +19,7 @@ const GUIDE_REACH: f32 = 4.0;
 pub(crate) const GUIDE_INK: Color32 = Color32::from_rgb(0x4D, 0xC8, 0xF0);
 
 /// The View-menu actions this module runs (see palette.rs).
-pub(crate) const VIEW_ACTIONS: [&str; 7] = [
+pub(crate) const VIEW_ACTIONS: [&str; 8] = [
     "rulers",
     "guides",
     "lock-guides",
@@ -27,6 +27,7 @@ pub(crate) const VIEW_ACTIONS: [&str; 7] = [
     "new-guide",
     "grid",
     "snap",
+    "smart-guides",
 ];
 
 /// Transient state of the view aids (the switches are in `Prefs`).
@@ -41,11 +42,13 @@ pub(crate) struct ViewAids {
     /// A guide being dragged: out of a ruler (`index` None) or an existing one.
     guide_drag: Option<GuideDrag>,
     /// Painted bounds of the layer the Move tool is dragging.
-    move_bounds: Option<Rect>,
+    pub(crate) move_bounds: Option<Rect>,
     /// The marquee's snapped corners (document space) while dragging.
     marquee: Option<((f32, f32), (f32, f32))>,
     /// The canvas area on screen last frame (tests and debug tokens).
     pub(crate) view: Option<egui::Rect>,
+    /// Smart Guides for the Move drag under way (smart_guides.rs).
+    pub(crate) smart: crate::smart_guides::SmartGuides,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -107,6 +110,7 @@ impl App {
         self.aids.hint = [None, None];
         self.aids.move_bounds = None;
         self.aids.marquee = None;
+        self.end_smart_guides();
     }
 
     pub(crate) fn clear_snap_hint(&mut self) {
@@ -148,16 +152,26 @@ impl App {
             .active_layer()
             .and_then(|l| l.raster_store())
             .and_then(snap::painted_bounds);
+        self.begin_smart_guides();
     }
 
-    /// Move tool: the whole-pixel offset after snapping the moved bounds.
-    pub(crate) fn snap_move_offset(&mut self, off: (i32, i32)) -> (i32, i32) {
+    /// Move tool: the whole-pixel offset after snapping the moved bounds
+    /// (View ▸ Snap first, then Smart Guides on the axes it left free).
+    /// `free` (Cmd held) turns both off for this frame.
+    pub(crate) fn snap_move_offset(&mut self, off: (i32, i32), free: bool) -> (i32, i32) {
         let Some(b) = self.aids.move_bounds else {
             return off;
         };
-        let (x0, y0) = ((b.x + off.0) as f32, (b.y + off.1) as f32);
-        let (dx, dy) = self.snap_rect_delta(x0, y0, x0 + b.w as f32, y0 + b.h as f32);
-        (off.0 + dx.round() as i32, off.1 + dy.round() as i32)
+        let off = if free {
+            self.clear_snap_hint();
+            off
+        } else {
+            let (x0, y0) = ((b.x + off.0) as f32, (b.y + off.1) as f32);
+            let (dx, dy) = self.snap_rect_delta(x0, y0, x0 + b.w as f32, y0 + b.h as f32);
+            (off.0 + dx.round() as i32, off.1 + dy.round() as i32)
+        };
+        let held = [self.aids.hint[0].is_some(), self.aids.hint[1].is_some()];
+        self.smart_move_offset(off, held, free)
     }
 
     /// Marquee: snap both corners of the drag (document space) and keep
@@ -248,10 +262,11 @@ impl App {
         }
         let (origin, zoom) = (doc_rect.min, self.zoom);
         let st = Stroke::new(1.0, ACCENT);
-        if let Some(x) = self.aids.hint[0] {
+        let smart = &self.aids.smart;
+        if let Some(x) = self.aids.hint[0].filter(|x| !smart.shows(true, *x)) {
             painter.vline((origin.x + x * zoom).round() + 0.5, clip.y_range(), st);
         }
-        if let Some(y) = self.aids.hint[1] {
+        if let Some(y) = self.aids.hint[1].filter(|y| !smart.shows(false, *y)) {
             painter.hline(clip.x_range(), (origin.y + y * zoom).round() + 0.5, st);
         }
     }
@@ -586,6 +601,7 @@ impl App {
             "lock-guides" => (&mut p.lock_guides, "Guide lock"),
             "grid" => (&mut p.show_grid, "Grid"),
             "snap" => (&mut p.snap, "Snapping"),
+            "smart-guides" => (&mut p.smart_guides, "Smart guides"),
             "clear-guides" => return self.run(&ClearGuides),
             "new-guide" => {
                 let d = self.editor.doc();
@@ -607,6 +623,7 @@ impl App {
             "lock-guides" => self.prefs.lock_guides,
             "grid" => self.prefs.show_grid,
             "snap" => self.prefs.snap,
+            "smart-guides" => self.prefs.smart_guides,
             _ => false,
         }
     }

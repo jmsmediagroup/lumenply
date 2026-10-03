@@ -514,6 +514,7 @@ impl App {
                     self.paint_tool_overlay(ctx, &painter, &resp);
                 }
                 self.paint_snap_hint(&painter, rect, doc_rect);
+                self.paint_smart_guides(&painter, rect, doc_rect);
                 self.rulers_ui(ui, rect);
                 self.selection_action_bar(ctx, rect, origin, zoom);
                 self.zoom_pill(ctx, rect);
@@ -1214,7 +1215,10 @@ impl App {
                 if self.drag == Some(DragKind::Move) && resp.dragged_by(primary) {
                     if let (Some(a), Some(b)) = (self.drag_start, resp.interact_pointer_pos()) {
                         let d = (b - a) / self.zoom;
-                        let off = self.snap_move_offset((d.x.round() as i32, d.y.round() as i32));
+                        // Cmd (Ctrl) held: no snapping, as in Photoshop.
+                        let free = ctx.input(|i| i.modifiers.command);
+                        self.aids.smart.pointer = Some(b);
+                        let off = self.snap_move_offset((d.x.round() as i32, d.y.round() as i32), free);
                         if off != self.move_offset {
                             let prev = self.move_offset;
                             self.move_offset = off;

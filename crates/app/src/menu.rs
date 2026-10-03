@@ -665,6 +665,7 @@ impl App {
             ("Lock guides", "lock-guides"),
             ("Show grid", "grid"),
             ("Snap", "snap"),
+            ("Show smart guides", "smart-guides"),
         ] {
             let on = self.view_aid_on(id);
             self.act_check(ui, label, id, on);

@@ -34,6 +34,7 @@ impl App {
             || self.debug_pcrop(tok)
             || self.debug_adjx(ctx, tok)
             || self.debug_actions(tok)
+            || self.debug_smart_guides(ctx, tok)
     }
 
     /// Selections and what acts on them (`select:...`):
