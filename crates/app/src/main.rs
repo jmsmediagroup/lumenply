@@ -2,8 +2,9 @@
 //!
 //! A thin layer over `lumenply_core::Editor`: every edit is a `Command`, so undo,
 //! history and (later) scripting behave exactly as in the headless CLI.
-//! Compositing is still the CPU reference renderer; redraws are limited to
-//! the area a command reports as affected, which keeps brushing responsive.
+//! The canvas renders the editor's edit graph (ADR 0025) through its tile
+//! cache; redraws are limited to the area a command reports as affected,
+//! which keeps brushing responsive.
 
 use std::collections::HashMap;
 use std::ops::RangeInclusive;

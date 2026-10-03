@@ -292,11 +292,13 @@ impl Bench {
             median(comp),
             median(old),
         ));
-        self.time(&format!("{name}: commit"), 1, |app, _| {
+        // The stroke, then four more like it a little lower: a median.
+        self.time(&format!("{name}: commit"), 5, |app, i| {
+            let dy = i as f32 * 24.0;
             app.run(&PaintStroke {
                 layer,
                 brush: brush.clone(),
-                points: pts.clone(),
+                points: pts.iter().map(|p| StrokePoint::new(p.x, p.y + dy, 1.0)).collect(),
             })
         });
     }
@@ -432,4 +434,81 @@ fn render_bench() {
         );
         scenarios("30 layers, 4000 × 3000", ed, mid, mid);
     }
+    if which.is_empty() || which == "strokes" {
+        long_history();
+    }
+}
+
+/// A layer painted with hundreds of strokes, each a node on its content
+/// chain: what a render costs before it computes anything (content keys
+/// and preparation walk the whole graph), and a stroke and an undo on it.
+fn long_history() {
+    let mut doc = Document::new(2000, 1500);
+    let bg = doc.add_pixel_layer("Background");
+    *doc.layer_mut(bg).unwrap().pixels_mut().unwrap() =
+        TileStore::from_raster(&texture(2000, 1500, 7, 1.0), 0, 0);
+    let paint = doc.add_pixel_layer("Paint");
+    let mut b = Bench::new(Editor::new(doc));
+    b.app.active = Some(paint);
+    let n = std::env::var("LUMENPLY_BENCH_STROKES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400);
+    let t = Instant::now();
+    for i in 0..n {
+        let (x, y) = ((i * 37 % 1900) as f32, (i * 53 % 1400) as f32);
+        b.app.run(&PaintStroke {
+            layer: paint,
+            brush: Brush {
+                radius: 12.0,
+                color: [0.2, 0.4, 0.8, 1.0],
+                ..Brush::default()
+            },
+            points: vec![
+                StrokePoint::new(x, y, 1.0),
+                StrokePoint::new(x + 60.0, y + 30.0, 1.0),
+            ],
+        });
+        b.app.refresh(&b.ctx);
+    }
+    let per = ms(t.elapsed()) / n as f64;
+    let graph = b.app.editor.graph().len();
+    // An unchanged graph over one tile: nothing to compute, only the walk.
+    let ed = &b.app.editor;
+    let one = Rect::new(0, 0, 256, 256);
+    let mut walks = Vec::new();
+    for _ in 0..20 {
+        let t = Instant::now();
+        ed.renderer().render(ed.graph(), ed.blobs(), one);
+        walks.push(ms(t.elapsed()));
+    }
+    let keys = {
+        let t = Instant::now();
+        for _ in 0..20 {
+            ed.renderer().keys(ed.graph(), ed.graph().output.unwrap());
+        }
+        ms(t.elapsed()) / 20.0
+    };
+    b.rows
+        .push((format!("{n} strokes (edit + redraw each)"), 0.0, per, 0.0, 0.0));
+    b.rows
+        .push(("cached render of one tile".into(), 0.0, median(walks), keys, 0.0));
+    b.time("one more stroke", 1, |app, _| {
+        app.run(&PaintStroke {
+            layer: paint,
+            brush: Brush {
+                radius: 30.0,
+                ..Brush::default()
+            },
+            points: vec![
+                StrokePoint::new(500.0, 500.0, 1.0),
+                StrokePoint::new(900.0, 700.0, 1.0),
+            ],
+        })
+    });
+    b.time("undo it", 1, |app, _| app.undo());
+    b.time("redo it", 1, |app, _| app.redo());
+    b.report(&format!(
+        "long history: {graph} nodes, 2000 × 1500 (the cached render row's graph ms column is the content keys alone)"
+    ));
 }
