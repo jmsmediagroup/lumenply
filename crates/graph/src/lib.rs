@@ -13,24 +13,28 @@ pub mod blob;
 pub mod cache;
 pub mod eval;
 pub mod gpu;
+pub mod hints;
 pub mod history;
 pub mod key;
 pub mod lower;
 pub mod model;
 pub mod ops;
 pub mod ops_content;
+mod ops_paint;
 pub mod whole;
 
-pub use blob::{BlobId, BlobStore, Hash, TileHasher};
+pub use blob::{blob_refs, BlobId, BlobStore, Hash, TileHasher};
 pub use cache::{CacheStats, TileCache};
 pub use eval::{Ctx, Renderer};
 pub use gpu::{GpuImage, GpuRenderer, GpuStats, GpuTile};
+pub use hints::RenderHints;
 pub use history::History;
 pub use key::{Key, KeyMemo};
 pub use lower::{lower, Lowered};
 pub use model::{Graph, GraphError, Node, NodeId, FORMAT};
 pub use ops::{ClipMember, LayerProps, Op};
 pub use ops_content::PatternPixels;
+pub use ops_paint::StrokeBrush;
 pub use whole::WholeCache;
 
 #[cfg(test)]

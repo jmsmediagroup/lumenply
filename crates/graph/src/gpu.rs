@@ -1,4 +1,4 @@
-//! The edit graph on the GPU (ADR 0025 stage 4, ADR 0026).
+//! The edit graph on the GPU (ADR 0025 stage 4, ADR 0027).
 //!
 //! [`GpuRenderer`] evaluates a [`Graph`] with wgpu compute kernels and keeps
 //! every node's tiles resident in GPU memory under the same content keys the
@@ -18,7 +18,7 @@
 //! **Honest fallback**: every other op or parameter combination — layer
 //! effects, Dissolve, live filters, clip groups, per-pixel adjustments,
 //! the content ops computed in one piece (text, fills, shapes, transforms,
-//! smart filters), and any op added later — runs per node on this
+//! smart filters), brush strokes, and any op added later — runs per node on this
 //! renderer's own CPU [`Renderer`], and the result is uploaded; the GPU
 //! continues downstream. Before that, the inputs the CPU op reads
 //! ([`crate::ops::input_needs`]) are computed on the GPU, read back and put
@@ -772,6 +772,21 @@ impl GpuRenderer {
     }
 }
 
+fn is_stroke(node: &Node) -> bool {
+    matches!(node.op, Op::Stroke { .. })
+}
+
+/// The first node down a chain of strokes from `id` that isn't a stroke.
+fn below_strokes(ctx: &Ctx, mut id: NodeId) -> NodeId {
+    while let Some(node) = ctx.graph.node(id).filter(|n| is_stroke(n)) {
+        match node.input(0) {
+            Some(i) => id = i,
+            None => break,
+        }
+    }
+    id
+}
+
 fn adjustment_hash(a: &Adjustment) -> Hash {
     let json = serde_json::to_vec(a).expect("adjustments always serialise");
     Hash(*blake3::hash(&json).as_bytes())
@@ -1028,6 +1043,10 @@ impl Core {
                         // inputs itself, on the CPU).
                         Kind::Cpu => {
                             for (i, area) in crate::ops::input_needs(ctx, node, c) {
+                                // A chain of strokes is one walk for the
+                                // CPU (`ops_paint::tile`): what it needs is
+                                // the chain's base.
+                                let i = if is_stroke(node) { below_strokes(ctx, i) } else { i };
                                 for t in area.tiles() {
                                     stack.push((i, t, Side::Cpu));
                                 }
@@ -1117,6 +1136,10 @@ impl Core {
         // made once, with the pieces it reads, before its tiles are served.
         if crate::ops_content::is_whole(&node.op) {
             crate::ops_content::prepare(ctx, n);
+        }
+        // Smudge, blur and sharpen strokes paint a region in one piece.
+        if is_stroke(node) {
+            crate::ops_paint::prepare(ctx, n);
         }
         let tiles: Vec<(TileCoord, Option<Arc<Tile>>)> =
             want.par_iter().map(|&c| (c, ctx.tile(Some(n), c))).collect();

@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 use lumenply_core::commands::AddPixelLayer;
 use lumenply_core::Editor;
 use lumenply_doc::{BlendMode, Document, Layer, LayerContent};
-use lumenply_io::project;
+use lumenply_io::{graph_project, project};
 use lumenply_tiles::{Raster, Rgba};
 
 #[derive(Parser)]
@@ -52,23 +52,35 @@ enum Cmd {
         #[arg(long)]
         save: Option<PathBuf>,
     },
-    /// Render a .lumen project to PNG.
+    /// Render a .lumen project (layer tree or graph) to PNG.
     Render {
         project: PathBuf,
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// Print the layer tree of a .lumen project.
+    /// Print the layer tree of a .lumen project, or the node counts and
+    /// settings of a graph project.
     Info { project: PathBuf },
-    /// Lower a project or PSD to its edit graph (ADR 0025): print a
-    /// summary, write the graph's JSON with --out, and with --check render
-    /// it both ways and compare.
+    /// Lower a project or PSD to its edit graph (ADR 0025), or open a graph
+    /// project (format 3): print a summary, write the graph's JSON with
+    /// --out, and with --check render it and compare (with the layer tree,
+    /// and with the file --save wrote once loaded back; for a graph
+    /// project, with and without its render hints).
     Graph {
         project: PathBuf,
         #[arg(short, long)]
         out: Option<PathBuf>,
         #[arg(long)]
         check: bool,
+        /// Write the graph as a .lumen graph project (format 3, ADR 0026).
+        #[arg(long)]
+        save: Option<PathBuf>,
+        /// With --save: include render hints for the output node.
+        #[arg(long)]
+        hints: bool,
+        /// Store tiles 16-bit before lowering, as the editor keeps them at rest.
+        #[arg(long)]
+        compact: bool,
         /// Also render the graph on the GPU and compare it with the CPU
         /// evaluator (implies --check; skipped without a GPU adapter).
         #[arg(long)]
@@ -197,6 +209,9 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Render { project, out } => {
+            if is_graph_project(&project) {
+                return render_graph_project(&project, &out);
+            }
             let doc = load_any(&project)?;
             let t = Instant::now();
             let flat = lumenply_render::composite_raster(&doc);
@@ -213,9 +228,29 @@ fn main() -> Result<()> {
             project,
             out,
             check,
+            save,
+            hints,
+            compact,
             gpu,
-        } => graph_cmd(&project, out.as_ref(), check || gpu, gpu),
+        } => {
+            let opts = GraphOpts {
+                out,
+                check: check || gpu,
+                save,
+                hints,
+                compact,
+                gpu,
+            };
+            if is_graph_project(&project) {
+                graph_project_cmd(&project, &opts)
+            } else {
+                graph_cmd(&project, &opts)
+            }
+        }
         Cmd::Info { project } => {
+            if is_graph_project(&project) {
+                return graph_project_info(&project);
+            }
             let doc = load_any(&project)?;
             let (w_in, h_in) = doc.print_size_inches();
             println!(
@@ -258,57 +293,121 @@ fn main() -> Result<()> {
     }
 }
 
-/// Open a .lumen project or a .psd/.psb file.
-fn graph_cmd(path: &PathBuf, out: Option<&PathBuf>, check: bool, gpu: bool) -> Result<()> {
-    use std::time::Instant;
-    let mut doc = load_any(path)?;
-    lumenply_render::fill::refresh_stale(&mut doc);
-    let renderer = lumenply_graph::Renderer::new();
-    let mut blobs = lumenply_graph::BlobStore::new();
-    let t = Instant::now();
-    let lowered = lumenply_graph::lower(&doc, &mut blobs, &renderer.hasher);
-    let graph = lowered.graph;
-    let lower_ms = t.elapsed().as_secs_f64() * 1e3;
-    let json = graph.to_json();
+struct GraphOpts {
+    out: Option<PathBuf>,
+    check: bool,
+    save: Option<PathBuf>,
+    hints: bool,
+    compact: bool,
+    gpu: bool,
+}
+
+fn is_graph_project(path: &std::path::Path) -> bool {
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    (lower.ends_with(".lumen") || lower.ends_with(".nge")) && graph_project::is_graph_project(path)
+}
+
+/// A render's identity: the content hash of its tiles (format and bits).
+fn digest(store: &lumenply_tiles::TileStore) -> String {
+    lumenply_graph::TileHasher::default().store(store).to_hex()
+}
+
+/// Whether two renders are the same bit for bit over `canvas`.
+fn same_bits(
+    a: &lumenply_tiles::TileStore,
+    b: &lumenply_tiles::TileStore,
+    canvas: lumenply_tiles::Rect,
+) -> bool {
+    canvas.tiles().iter().all(|c| match (a.tile(*c), b.tile(*c)) {
+        (None, None) => true,
+        (Some(p), Some(q)) => p.raw_bytes() == q.raw_bytes(),
+        _ => false,
+    })
+}
+
+fn node_counts(graph: &lumenply_graph::Graph) -> String {
     let mut by_type: std::collections::BTreeMap<&str, usize> = Default::default();
     for (_, n) in graph.nodes() {
         *by_type.entry(n.op.type_name()).or_default() += 1;
     }
     let types: Vec<String> = by_type.iter().map(|(t, n)| format!("{n} {t}")).collect();
+    types.join(", ")
+}
+
+fn ms(t: Instant) -> f64 {
+    t.elapsed().as_secs_f64() * 1e3
+}
+
+/// Hints for a graph's output node.
+fn output_hints(
+    r: &lumenply_graph::Renderer,
+    g: &lumenply_graph::Graph,
+    blobs: &lumenply_graph::BlobStore,
+) -> lumenply_graph::RenderHints {
+    let out: Vec<_> = g.output.into_iter().collect();
+    lumenply_graph::RenderHints::capture(r, g, blobs, &out)
+}
+
+fn print_saved(path: &std::path::Path, stats: &graph_project::SaveStats, t: Instant) {
+    println!(
+        "saved {}: {:.1} KB, {} blobs ({} tiles), {} hint tiles, in {:.1} ms",
+        path.display(),
+        stats.bytes as f64 / 1024.0,
+        stats.blobs,
+        stats.blob_tiles,
+        stats.hint_tiles,
+        ms(t)
+    );
+}
+
+/// Lower a project or PSD to a graph: print it, check it, save it.
+fn graph_cmd(path: &PathBuf, o: &GraphOpts) -> Result<()> {
+    let mut doc = load_any(path)?;
+    lumenply_render::fill::refresh_stale(&mut doc);
+    if o.compact {
+        lumenply_core::compact_storage(&mut doc);
+    }
+    let renderer = lumenply_graph::Renderer::new();
+    let t = Instant::now();
+    let project = graph_project::document_to_graph(&doc, project::FORMAT_VERSION);
+    let lower_ms = ms(t);
+    let (graph, blobs) = (&project.graph, &project.blobs);
+    let json = graph.to_json();
     println!(
         "{}x{} px: {} nodes ({}), {} blobs, JSON {:.1} KB, lowered in {lower_ms:.1} ms",
         graph.width,
         graph.height,
         graph.len(),
-        types.join(", "),
+        node_counts(graph),
         blobs.len(),
         json.len() as f64 / 1024.0,
     );
-    if let Some(out) = out {
+    if let Some(out) = &o.out {
         std::fs::write(out, &json)?;
         println!("wrote {}", out.display());
     }
-    if check {
-        let canvas = doc.canvas();
+    let canvas = doc.canvas();
+    let mut cold = None;
+    if o.check {
         let t = Instant::now();
         let reference = lumenply_render::composite(&doc);
-        let tree_ms = t.elapsed().as_secs_f64() * 1e3;
+        let tree_ms = ms(t);
         let t = Instant::now();
-        let cold = renderer.render_canvas(&graph, &blobs);
-        let cold_ms = t.elapsed().as_secs_f64() * 1e3;
+        let first = renderer.render_canvas(graph, blobs);
+        let cold_ms = ms(t);
         let t = Instant::now();
-        let warm = renderer.render_canvas(&graph, &blobs);
-        let warm_ms = t.elapsed().as_secs_f64() * 1e3;
+        let warm = renderer.render_canvas(graph, blobs);
+        let warm_ms = ms(t);
         let mut worst = 0f32;
         for y in canvas.y..canvas.bottom() {
             for x in canvas.x..canvas.right() {
-                let (p, q) = (reference.get_pixel(x, y), cold.get_pixel(x, y));
+                let (p, q) = (reference.get_pixel(x, y), first.get_pixel(x, y));
                 for (a, b) in [(p.r, q.r), (p.g, q.g), (p.b, q.b), (p.a, q.a)] {
                     worst = worst.max((a - b).abs());
                 }
             }
         }
-        let same_warm = canvas.tiles().iter().all(|c| warm.tile(*c) == cold.tile(*c));
+        let same_warm = same_bits(&warm, &first, canvas);
         let stats = renderer.cache.stats();
         println!(
             "layer tree {tree_ms:.1} ms; graph cold {cold_ms:.1} ms, warm {warm_ms:.2} ms; max difference {worst:.2e}; \
@@ -317,11 +416,36 @@ fn graph_cmd(path: &PathBuf, out: Option<&PathBuf>, check: bool, gpu: bool) -> R
             stats.bytes as f64 / 1048576.0,
             stats.duplicates
         );
+        println!("render digest {}", digest(&first));
         if worst > 1e-5 || !same_warm {
             anyhow::bail!("the graph renders differently from the layer tree (max difference {worst})");
         }
-        if gpu {
-            gpu_check(&graph, &blobs, &cold)?;
+        if o.gpu {
+            gpu_check(graph, blobs, &first)?;
+        }
+        cold = Some(first);
+    }
+    if let Some(save) = &o.save {
+        let hints = o.hints.then(|| output_hints(&renderer, graph, blobs));
+        let t = Instant::now();
+        let stats = graph_project::save_graph_project(save, graph, blobs, &project.meta, hints.as_ref())?;
+        print_saved(save, &stats, t);
+        if let Some(cold) = &cold {
+            let t = Instant::now();
+            let back = graph_project::load_graph_project(save)?;
+            let load_ms = ms(t);
+            if !back.warnings.is_empty() || back.graph != *graph {
+                bail!(
+                    "{} did not load back as saved: {:?}",
+                    save.display(),
+                    back.warnings
+                );
+            }
+            let again = lumenply_graph::Renderer::new().render_canvas(&back.graph, &back.blobs);
+            if !same_bits(&again, cold, canvas) {
+                bail!("{} renders differently once loaded back", save.display());
+            }
+            println!("loaded back in {load_ms:.1} ms: renders identically");
         }
     }
     Ok(())
@@ -397,8 +521,155 @@ fn gpu_check(
     Ok(())
 }
 
+/// A graph project: print it, check it (with and without its hints), save it again.
+fn graph_project_cmd(path: &PathBuf, o: &GraphOpts) -> Result<()> {
+    let t = Instant::now();
+    let p = graph_project::load_graph_project(path)?;
+    let load_ms = ms(t);
+    for w in &p.warnings {
+        eprintln!("warning: {w}");
+    }
+    let json = p.graph.to_json();
+    println!(
+        "{}x{} px graph project: {} nodes ({}), {} blobs, {} hint tiles, JSON {:.1} KB, loaded in {load_ms:.1} ms",
+        p.graph.width,
+        p.graph.height,
+        p.graph.len(),
+        node_counts(&p.graph),
+        p.blobs.len(),
+        p.hints.len(),
+        json.len() as f64 / 1024.0,
+    );
+    if let Some(out) = &o.out {
+        std::fs::write(out, &json)?;
+        println!("wrote {}", out.display());
+    }
+    if o.check {
+        let canvas = p.graph.canvas();
+        let fresh = lumenply_graph::Renderer::new();
+        let t = Instant::now();
+        let cold = fresh.render_canvas(&p.graph, &p.blobs);
+        println!("graph cold {:.1} ms", ms(t));
+        if !p.hints.is_empty() {
+            let hinted = lumenply_graph::Renderer::new();
+            p.hints.seed(&hinted.cache);
+            let t = Instant::now();
+            let first = hinted.render_canvas(&p.graph, &p.blobs);
+            let s = hinted.cache.stats();
+            println!("with hints {:.2} ms: {} hits, {} misses", ms(t), s.hits, s.misses);
+            if !same_bits(&first, &cold, canvas) {
+                bail!("the render hints differ from a fresh render");
+            }
+        }
+        println!("render digest {}", digest(&cold));
+        if !p.warnings.is_empty() {
+            bail!("{} warnings while loading", p.warnings.len());
+        }
+        if o.gpu {
+            gpu_check(&p.graph, &p.blobs, &cold)?;
+        }
+    }
+    if let Some(save) = &o.save {
+        let hints = o.hints.then(|| {
+            let r = lumenply_graph::Renderer::new();
+            p.hints.seed(&r.cache);
+            output_hints(&r, &p.graph, &p.blobs)
+        });
+        let t = Instant::now();
+        let stats = graph_project::save_graph_project(save, &p.graph, &p.blobs, &p.meta, hints.as_ref())?;
+        print_saved(save, &stats, t);
+    }
+    Ok(())
+}
+
+/// The print resolution a graph project's meta records (72 when none).
+fn meta_resolution(meta: &serde_json::Value) -> f32 {
+    meta.get("resolution")
+        .and_then(serde_json::Value::as_f64)
+        .map(|r| r as f32)
+        .filter(|r| lumenply_doc::RESOLUTION_RANGE.contains(r))
+        .unwrap_or(lumenply_doc::DEFAULT_RESOLUTION)
+}
+
+fn render_graph_project(path: &PathBuf, out: &PathBuf) -> Result<()> {
+    let p = graph_project::load_graph_project(path)?;
+    for w in &p.warnings {
+        eprintln!("warning: {w}");
+    }
+    let renderer = lumenply_graph::Renderer::new();
+    let hinted = p.hints.seed(&renderer.cache);
+    let t = Instant::now();
+    let flat = renderer
+        .render_canvas(&p.graph, &p.blobs)
+        .to_raster(p.graph.canvas());
+    eprintln!(
+        "rendered {} nodes in {:.1} ms ({hinted} tiles seeded from render hints, {} computed)",
+        p.graph.len(),
+        ms(t),
+        renderer.cache.stats().misses
+    );
+    lumenply_io::resolution::save_png(out, &flat, meta_resolution(&p.meta))?;
+    println!("wrote {}", out.display());
+    Ok(())
+}
+
+fn graph_project_info(path: &PathBuf) -> Result<()> {
+    let p = graph_project::load_graph_project(path)?;
+    for w in &p.warnings {
+        eprintln!("warning: {w}");
+    }
+    let g = &p.graph;
+    println!(
+        "{}x{} px, graph project (format {}): {} nodes ({})",
+        g.width,
+        g.height,
+        p.source_version,
+        g.len(),
+        node_counts(g)
+    );
+    let tiles: usize = p
+        .blobs
+        .ids()
+        .filter_map(|id| p.blobs.get(id))
+        .map(|s| s.len())
+        .sum();
+    println!(
+        "output {}; {} blobs ({tiles} tiles); {} render hint tiles",
+        g.output.map_or("none".into(), |o| o.to_string()),
+        p.blobs.len(),
+        p.hints.len()
+    );
+    let keys: Vec<&str> = p
+        .meta
+        .as_object()
+        .map(|m| m.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    println!(
+        "meta: {}",
+        if keys.is_empty() {
+            "(none)".to_string()
+        } else {
+            keys.join(", ")
+        }
+    );
+    let ppi = meta_resolution(&p.meta);
+    println!(
+        "resolution {ppi} ppi ({:.2} x {:.2} in)",
+        g.width as f32 / ppi,
+        g.height as f32 / ppi
+    );
+    Ok(())
+}
+
+/// Open a .lumen layer-tree project or a .psd/.psb file as a document.
 fn load_any(path: &PathBuf) -> Result<Document> {
     let lower = path.to_string_lossy().to_ascii_lowercase();
+    if is_graph_project(path) {
+        bail!(
+            "{} is a graph project (format 3): `lumenply render`, `info` and `graph` read it",
+            path.display()
+        );
+    }
     if lower.ends_with(".psd") || lower.ends_with(".psb") {
         let rep = lumenply_io::psd::load(path)?;
         for w in &rep.warnings {

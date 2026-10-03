@@ -460,6 +460,31 @@ impl Tile {
         }
     }
 
+    /// The inverse of [`Tile::raw_bytes`]: a tile in the storage format
+    /// `format` names (0: f32, 1: 16-bit) from its bytes in native
+    /// endianness. `None` for an unknown format or a wrong length.
+    pub fn from_raw_bytes(format: u8, bytes: &[u8]) -> Option<Tile> {
+        let data = match format {
+            0 if bytes.len() == TILE_PIXELS * 16 => TileData::F32(
+                bytes
+                    .chunks_exact(16)
+                    .map(|c| {
+                        let f = |i: usize| f32::from_ne_bytes([c[i], c[i + 1], c[i + 2], c[i + 3]]);
+                        Rgba::new(f(0), f(4), f(8), f(12))
+                    })
+                    .collect(),
+            ),
+            1 if bytes.len() == TILE_PIXELS * 8 => TileData::U16(
+                bytes
+                    .chunks_exact(8)
+                    .map(|c| std::array::from_fn(|i| u16::from_ne_bytes([c[2 * i], c[2 * i + 1]])))
+                    .collect(),
+            ),
+            _ => return None,
+        };
+        Some(Tile { data })
+    }
+
     /// True when every pixel is fully transparent.
     pub fn is_blank(&self) -> bool {
         match &self.data {
@@ -757,6 +782,32 @@ mod tests {
         a.set_pixel(10, 10, Rgba::BLACK);
         assert_eq!(a.get_pixel(10, 10), Rgba::BLACK);
         assert_eq!(snapshot.get_pixel(10, 10), Rgba::WHITE);
+    }
+
+    #[test]
+    fn raw_bytes_round_trip_in_both_storage_formats() {
+        let mut t = Tile::new();
+        t.set(3, 4, Rgba::new(0.25, 0.5, 2.5, 1.0));
+        let (f, bytes) = t.raw_bytes();
+        assert_eq!((f, bytes.len()), (0, TILE_PIXELS * 16));
+        let back = Tile::from_raw_bytes(f, bytes).unwrap();
+        assert!(!back.is_compact());
+        assert_eq!(back.get(3, 4), Rgba::new(0.25, 0.5, 2.5, 1.0), "HDR survives f32");
+        assert_eq!(back.raw_bytes(), t.raw_bytes());
+
+        t.compact();
+        let (f, bytes) = t.raw_bytes();
+        assert_eq!((f, bytes.len()), (1, TILE_PIXELS * 8));
+        let back = Tile::from_raw_bytes(f, bytes).unwrap();
+        assert!(back.is_compact());
+        assert_eq!(
+            back.get(3, 4),
+            Rgba::new(16384.0 / 65535.0, 32768.0 / 65535.0, 1.0, 1.0)
+        );
+        assert_eq!(back.raw_bytes(), t.raw_bytes());
+
+        assert!(Tile::from_raw_bytes(1, &bytes[1..]).is_none(), "wrong length");
+        assert!(Tile::from_raw_bytes(2, bytes).is_none(), "unknown format");
     }
 
     #[test]

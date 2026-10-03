@@ -38,6 +38,13 @@ pub enum ProjectError {
     NotAProject(String),
     #[error("project format version {0} is newer than this build supports ({FORMAT_VERSION})")]
     TooNew(u32),
+    #[error(
+        "project format version {0} is newer than this build supports ({})",
+        crate::graph_project::GRAPH_FORMAT_VERSION
+    )]
+    GraphTooNew(u32),
+    #[error("bad graph: {0}")]
+    Graph(#[from] lumenply_graph::GraphError),
     #[error("corrupt project: {0}")]
     Corrupt(String),
     #[error("zip error: {0}")]
@@ -195,15 +202,35 @@ enum ContentRecord {
 /// place once it is complete and flushed, so a failure partway through
 /// (disk full, say) never destroys an existing project.
 pub fn save(path: impl AsRef<Path>, doc: &Document) -> Result<(), ProjectError> {
-    let path = path.as_ref();
+    save_atomically(path.as_ref(), |tmp| write_archive(tmp, doc))
+}
+
+/// Run `write` on a sibling temporary file of `path` and rename it into
+/// place once it succeeded; on failure remove the temporary file and leave
+/// any existing `path` untouched.
+pub(crate) fn save_atomically<T>(
+    path: &Path,
+    write: impl FnOnce(&Path) -> Result<T, ProjectError>,
+) -> Result<T, ProjectError> {
     let mut tmp_name = path.as_os_str().to_owned();
     tmp_name.push(".tmp");
     let tmp = std::path::PathBuf::from(tmp_name);
-    let result = write_archive(&tmp, doc).and_then(|()| Ok(std::fs::rename(&tmp, path)?));
+    let result = write(&tmp).and_then(|v| {
+        std::fs::rename(&tmp, path)?;
+        Ok(v)
+    });
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
     result
+}
+
+/// Finish an archive and make sure it reached the disk.
+pub(crate) fn finish_zip(mut zip: ZipWriter<BufWriter<File>>) -> Result<(), ProjectError> {
+    let mut writer = zip.finish()?;
+    writer.flush()?;
+    writer.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+    Ok(())
 }
 
 fn write_archive(path: &Path, doc: &Document) -> Result<(), ProjectError> {
@@ -267,10 +294,7 @@ fn write_archive(path: &Path, doc: &Document) -> Result<(), ProjectError> {
     };
     zip.start_file("manifest.json", stored)?;
     zip.write_all(&serde_json::to_vec_pretty(&manifest)?)?;
-    let mut writer = zip.finish()?;
-    writer.flush()?;
-    writer.into_inner().map_err(|e| e.into_error())?.sync_all()?;
-    Ok(())
+    finish_zip(zip)
 }
 
 fn write_layer<W: Write + std::io::Seek>(
@@ -363,9 +387,9 @@ fn write_layer<W: Write + std::io::Seek>(
 }
 
 /// Largest canvas side a manifest may declare.
-const MAX_CANVAS: u32 = 1_000_000;
+pub(crate) const MAX_CANVAS: u32 = 1_000_000;
 /// Largest manifest the loader will read (decompressed).
-const MAX_MANIFEST: u64 = 64 << 20;
+pub(crate) const MAX_MANIFEST: u64 = 64 << 20;
 /// Tile coordinates must survive `x * 256` pixel arithmetic.
 const MAX_TILE_COORD: i32 = i32::MAX / 256;
 
@@ -473,7 +497,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Document, ProjectError> {
     Ok(doc)
 }
 
-fn checked_coord(x: i32, y: i32) -> Result<TileCoord, ProjectError> {
+pub(crate) fn checked_coord(x: i32, y: i32) -> Result<TileCoord, ProjectError> {
     if x.abs() > MAX_TILE_COORD || y.abs() > MAX_TILE_COORD {
         return Err(ProjectError::Corrupt(format!(
             "tile coordinate ({x}, {y}) is out of range"
@@ -585,16 +609,24 @@ fn read_layer<R: Read + std::io::Seek>(
 }
 
 fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<Vec<u8>, ProjectError> {
-    // The largest legitimate entry is a pixel tile. The declared size and
-    // the decompressed stream are both attacker-controlled, so cap the
-    // allocation and the read rather than trusting either.
-    const MAX_ENTRY: usize = TILE_PIXELS * 16;
+    // The largest legitimate entry is a pixel tile.
+    read_entry_max(zip, name, TILE_PIXELS * 16)
+}
+
+/// The decompressed bytes of entry `name`, at most `max` of them. The
+/// declared size and the decompressed stream are both attacker-controlled,
+/// so the allocation and the read are capped rather than trusting either.
+pub(crate) fn read_entry_max<R: Read + std::io::Seek>(
+    zip: &mut ZipArchive<R>,
+    name: &str,
+    max: usize,
+) -> Result<Vec<u8>, ProjectError> {
     let f = zip
         .by_name(name)
         .map_err(|_| ProjectError::Corrupt(format!("manifest references missing entry {name}")))?;
-    let mut buf = Vec::with_capacity((f.size() as usize).min(MAX_ENTRY));
-    f.take(MAX_ENTRY as u64 + 1).read_to_end(&mut buf)?;
-    if buf.len() > MAX_ENTRY {
+    let mut buf = Vec::with_capacity((f.size() as usize).min(max));
+    f.take(max as u64 + 1).read_to_end(&mut buf)?;
+    if buf.len() > max {
         return Err(ProjectError::Corrupt(format!(
             "entry {name} is implausibly large"
         )));
@@ -602,7 +634,7 @@ fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> R
     Ok(buf)
 }
 
-fn sorted(store: &TileStore) -> Vec<TileCoord> {
+pub(crate) fn sorted(store: &TileStore) -> Vec<TileCoord> {
     let mut v: Vec<TileCoord> = store.coords().collect();
     v.sort();
     v

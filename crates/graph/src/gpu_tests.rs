@@ -9,7 +9,7 @@ use lumenply_tiles::{Raster, Rect, Rgba, TileCoord, TileStore};
 
 use super::*;
 use crate::tests::{busy_document, half_mask, painted};
-use crate::{lower, History};
+use crate::{lower, History, LayerProps};
 
 fn gpu() -> Option<GpuRenderer> {
     let g = GpuRenderer::new();
@@ -611,4 +611,106 @@ fn content_ops_run_on_the_cpu_under_gpu_layers() {
     }
     assert!(s.dispatches > 0, "the layers above ran on the GPU: {s:?}");
     assert_eq!(gpu.cpu.cache.stats().duplicates, 0, "no tile computed twice");
+}
+
+/// eframe keeps paint-callback resources in a `Send + Sync` map, and the
+/// images are handed to its render thread.
+#[test]
+fn the_renderer_and_its_images_can_live_in_eframes_callback_resources() {
+    fn send_sync<T: Send + Sync>() {}
+    send_sync::<GpuRenderer>();
+    send_sync::<GpuImage>();
+}
+
+/// Brush strokes (paint, smudge, blur) have no kernel: the CPU walks the
+/// chain and its tiles are uploaded for the GPU layer above. A changed
+/// stroke uploads only the tiles that changed.
+#[test]
+fn stroke_chains_run_on_the_cpu_under_gpu_layers() {
+    use lumenply_render::paint::{Brush, BrushMode, StrokePoint};
+    let Some(mut gpu) = gpu() else { return };
+    let mut doc = Document::new(768, 512);
+    let bg = sweep(&mut doc);
+    let LayerContent::Pixel(backdrop) = bg.content else {
+        unreachable!()
+    };
+    let mut stripes = TileStore::new();
+    for y in 0..512 {
+        for x in 0..768 {
+            let v = if (x / 7 + y / 11) % 2 == 0 { 0.9 } else { 0.1 };
+            stripes.set_pixel(x, y, Rgba::from_straight(v, 0.5, 1.0 - v, 0.8));
+        }
+    }
+    let line = |x0: f32, y0: f32, x1: f32, y1: f32| -> Vec<StrokePoint> {
+        (0..6)
+            .map(|i| {
+                let t = i as f32 / 5.0;
+                StrokePoint::new(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, 1.0)
+            })
+            .collect()
+    };
+    let brush = |mode: BrushMode| Brush {
+        radius: 9.0,
+        color: [0.2, 0.6, 0.9, 0.8],
+        mode,
+        ..Brush::default()
+    };
+    let r = Renderer::new();
+    let mut blobs = BlobStore::new();
+    let mut g = Graph::new(768, 512);
+    let back = g.add(Node::new(
+        Op::Image {
+            blob: blobs.insert(&r.hasher, backdrop),
+        },
+        vec![],
+    ));
+    let mut content = g.add(Node::new(
+        Op::Image {
+            blob: blobs.insert(&r.hasher, stripes),
+        },
+        vec![],
+    ));
+    let strokes = [
+        (BrushMode::Paint, line(60.0, 60.0, 160.0, 90.0)),
+        (BrushMode::Smudge, line(150.0, 100.0, 330.0, 120.0)),
+        (BrushMode::Blur, line(550.0, 350.0, 710.0, 360.0)),
+    ];
+    let mut ids = Vec::new();
+    for (mode, points) in &strokes {
+        content = g.add(Node::new(
+            Op::stroke(&brush(*mode), points.clone(), &mut blobs),
+            vec![Some(content), None],
+        ));
+        ids.push(content);
+    }
+    let layer = g.add(Node::new(
+        Op::Layer {
+            props: LayerProps {
+                blend: BlendMode::Multiply,
+                opacity: 0.8,
+                ..LayerProps::default()
+            },
+        },
+        vec![Some(back), Some(content), None],
+    ));
+    g.output = Some(layer);
+    assert_gpu_matches(&mut gpu, &g, &blobs, "strokes");
+    let s = gpu.stats();
+    assert!(s.fallback_tiles.contains_key("stroke"), "{s:?}");
+    assert!(s.dispatches > 0, "{s:?}");
+
+    // Move the paint stroke: only the tiles strokes change upload again.
+    g.update(ids[0], |n| {
+        n.op = Op::stroke(
+            &brush(BrushMode::Paint),
+            line(70.0, 300.0, 200.0, 330.0),
+            &mut blobs,
+        )
+    })
+    .unwrap();
+    gpu.reset_stats();
+    assert_gpu_matches(&mut gpu, &g, &blobs, "an edited stroke");
+    let tiles = g.canvas().tiles().len() as u64;
+    let up = gpu.stats().uploaded_tiles;
+    assert!(up > 0 && up < tiles, "{up} of {tiles} tiles uploaded");
 }

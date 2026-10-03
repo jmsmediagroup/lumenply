@@ -22,6 +22,7 @@ pub struct Ctx<'a> {
     pub wholes: &'a WholeCache,
     pub canvas: Rect,
     extents: Mutex<HashMap<NodeId, Option<Rect>>>,
+    pub(crate) paint: &'a crate::ops_paint::PaintMemo,
 }
 
 impl Ctx<'_> {
@@ -41,6 +42,10 @@ impl Ctx<'_> {
     pub fn tile(&self, node: Option<NodeId>, coord: TileCoord) -> Option<Arc<Tile>> {
         let id = node?;
         let n = self.graph.node(id)?;
+        // Strokes cache their tiles under tile keys (see `ops_paint`).
+        if let crate::ops::Op::Stroke { .. } = n.op {
+            return crate::ops_paint::tile(self, id, coord);
+        }
         let key = *self.keys.get(&id)?;
         self.cache
             .get_or_compute(key, coord, || crate::ops::eval_tile(self, id, n, coord))
@@ -162,6 +167,7 @@ pub struct Renderer {
     /// and 30-50% faster cold renders).
     pub plan: bool,
     keys: KeyMemo,
+    pub(crate) paint: crate::ops_paint::PaintMemo,
 }
 
 impl Renderer {
@@ -191,6 +197,7 @@ impl Renderer {
             wholes: &self.wholes,
             canvas: graph.canvas(),
             extents: Mutex::new(HashMap::new()),
+            paint: &self.paint,
         }
     }
 
@@ -200,6 +207,7 @@ impl Renderer {
     pub fn render_node(&self, graph: &Graph, blobs: &BlobStore, node: NodeId, rect: Rect) -> TileStore {
         let ctx = self.ctx(graph, blobs, node);
         crate::ops_content::prepare(&ctx, node);
+        crate::ops_paint::prepare(&ctx, node);
         if self.plan {
             ctx.schedule(node, rect);
         }
@@ -224,5 +232,6 @@ impl Renderer {
     pub fn prune(&self) {
         self.keys.prune();
         self.hasher.prune();
+        self.paint.prune();
     }
 }
