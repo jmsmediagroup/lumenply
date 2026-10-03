@@ -305,7 +305,8 @@ pub(super) enum Val {
     Unit([u8; 4], f64),
     Obj(Desc),
     List(Vec<Val>),
-    /// Raw data (`tdta`), e.g. an embedded LUT file.
+    /// Raw data (`tdta`), e.g. a type layer's EngineData or an embedded
+    /// LUT file.
     Raw(Vec<u8>),
 }
 
@@ -517,6 +518,15 @@ pub(super) fn parse_descriptor(data: &[u8]) -> Option<Desc> {
         return None;
     }
     read_desc(&mut d, 0)
+}
+
+/// Read a version-16 descriptor at the reader's position, leaving it just
+/// past the descriptor (for blocks that carry more after it).
+pub(super) fn read_descriptor(d: &mut Rd) -> Option<Desc> {
+    if d.u32().ok()? != 16 {
+        return None;
+    }
+    read_desc(d, 0)
 }
 
 /// An `RGBC` colour object (0..255 doubles) from straight linear RGB.

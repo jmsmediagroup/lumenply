@@ -1,75 +1,20 @@
 //! Camera Raw–style "Basic" develop: white balance shift, exposure,
-//! highlights/shadows (local), whites/blacks, contrast, a camera tone
-//! curve, vibrance and saturation. Input and output are linear,
-//! premultiplied pixels; tone decisions are made on perceptual
-//! (sRGB-encoded) luminance and applied as a luminance ratio, so hues hold.
+//! dehaze, highlights/shadows, texture and clarity (local), whites/blacks,
+//! contrast, a camera tone curve, vibrance, saturation and a post-crop
+//! vignette. Input and output are linear, premultiplied pixels; tone
+//! decisions are made on perceptual (sRGB-encoded) luminance and applied as
+//! a luminance ratio, so hues hold.
+//!
+//! The same code develops a camera RAW file ([`develop`]) and runs the
+//! Camera Raw Filter on a layer ([`develop_in`]): the local controls read a
+//! coverage-weighted blur whose windows are clipped at the raster's edge, so
+//! a raster padded by [`Develop::reach`] gives exact results in its
+//! interior, tile by tile.
 
+use lumenply_doc::develop::frame_size;
+pub use lumenply_doc::Develop;
 use lumenply_tiles::{Raster, Rgba};
 use rayon::prelude::*;
-
-/// The Basic panel. Every slider is -100..=100 except `exposure` (EV,
-/// -5..=5); all zero (and no tone curve) leaves pixels untouched.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Develop {
-    pub temperature: f32,
-    pub tint: f32,
-    pub exposure: f32,
-    pub contrast: f32,
-    pub highlights: f32,
-    pub shadows: f32,
-    pub whites: f32,
-    pub blacks: f32,
-    pub vibrance: f32,
-    pub saturation: f32,
-    /// A gentle film-like S curve, as raw converters apply by default so a
-    /// linear develop doesn't look flat.
-    pub tone_curve: bool,
-}
-
-impl Default for Develop {
-    /// What opening a raw file starts with: neutral sliders, tone curve on.
-    fn default() -> Self {
-        Develop {
-            tone_curve: true,
-            ..Develop::NEUTRAL
-        }
-    }
-}
-
-impl Develop {
-    /// Every control at rest: the identity.
-    pub const NEUTRAL: Develop = Develop {
-        temperature: 0.0,
-        tint: 0.0,
-        exposure: 0.0,
-        contrast: 0.0,
-        highlights: 0.0,
-        shadows: 0.0,
-        whites: 0.0,
-        blacks: 0.0,
-        vibrance: 0.0,
-        saturation: 0.0,
-        tone_curve: false,
-    };
-
-    /// White balance and exposure as per-channel linear gains. The
-    /// temperature/tint shift keeps a neutral grey's luminance.
-    fn gains(&self) -> [f32; 3] {
-        let t = self.temperature / 100.0;
-        let g = self.tint / 100.0;
-        let mut k = [(0.45 * t).exp2(), (-0.3 * g).exp2(), (-0.45 * t).exp2()];
-        let y = 0.2126 * k[0] + 0.7152 * k[1] + 0.0722 * k[2];
-        let e = self.exposure.exp2();
-        for c in &mut k {
-            *c = *c / y * e;
-        }
-        k
-    }
-
-    fn is_local(&self) -> bool {
-        self.highlights != 0.0 || self.shadows != 0.0
-    }
-}
 
 fn luma(c: [f32; 3]) -> f32 {
     0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
@@ -122,135 +67,185 @@ fn tone(x: f32, d: &Develop) -> f32 {
     x
 }
 
-/// Base (large-scale) log luminance for highlights/shadows: the image's
-/// log2 luminance box-blurred three times (≈ Gaussian) at radius `r`.
-fn base_layer(lum: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
-    let mut v: Vec<f32> = lum.iter().map(|&y| (y.max(1e-5)).log2()).collect();
+/// `v` box-blurred three times at radius `r` (≈ a Gaussian), every pixel
+/// weighted by its coverage `a`, so transparent pixels don't drag the mean.
+/// Windows are clipped at the raster's edge and each pass renormalises, so
+/// only pixels within `3·r` of the edge see a partial neighbourhood.
+fn blur3(v: &[f32], a: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+    let (mut v, mut a) = (v.to_vec(), a.to_vec());
     for _ in 0..3 {
-        v = box_blur(&v, w, h, r);
+        rows_pass(&mut v, &mut a, w, r);
     }
-    v
+    let (mut vt, mut at) = (transpose(&v, w, h), transpose(&a, w, h));
+    for _ in 0..3 {
+        rows_pass(&mut vt, &mut at, h, r);
+    }
+    transpose(&vt, h, w)
 }
 
-fn box_blur(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
-    let mut tmp = vec![0.0f32; w * h];
-    tmp.par_chunks_mut(w).enumerate().for_each(|(y, out)| {
-        let row = &v[y * w..(y + 1) * w];
-        let mut acc: f32 = row[..=r.min(w - 1)].iter().sum();
-        for (x, o) in out.iter_mut().enumerate() {
-            let lo = x.saturating_sub(r);
-            let hi = (x + r).min(w - 1);
-            *o = acc / (hi - lo + 1) as f32;
-            if x + r + 1 < w {
-                acc += row[x + r + 1];
+/// One clipped, coverage-weighted box pass along every row of width `w`:
+/// `v` becomes the weighted mean over the window, `a` the mean coverage.
+/// Window sums come from f64 prefix sums, so a pixel's result doesn't
+/// depend on where its row starts (tiles agree with the whole image).
+fn rows_pass(v: &mut [f32], a: &mut [f32], w: usize, r: usize) {
+    v.par_chunks_mut(w).zip(a.par_chunks_mut(w)).for_each_init(
+        || (Vec::with_capacity(w + 1), Vec::with_capacity(w + 1)),
+        |(pv, pa): &mut (Vec<f64>, Vec<f64>), (vr, ar)| {
+            pv.clear();
+            pa.clear();
+            let (mut sv, mut sa) = (0.0f64, 0.0f64);
+            pv.push(0.0);
+            pa.push(0.0);
+            for (&x, &k) in vr.iter().zip(ar.iter()) {
+                sv += (x * k) as f64;
+                sa += k as f64;
+                pv.push(sv);
+                pa.push(sa);
             }
-            if x >= r {
-                acc -= row[x - r];
+            for (x, (o, oa)) in vr.iter_mut().zip(ar.iter_mut()).enumerate() {
+                let lo = x.saturating_sub(r);
+                let hi = (x + r).min(w - 1);
+                let wa = pa[hi + 1] - pa[lo];
+                *o = if wa > 1e-12 {
+                    ((pv[hi + 1] - pv[lo]) / wa) as f32
+                } else {
+                    0.0
+                };
+                *oa = (wa / (hi - lo + 1) as f64) as f32;
             }
+        },
+    );
+}
+
+fn transpose(v: &[f32], w: usize, h: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; w * h];
+    out.par_chunks_mut(h).enumerate().for_each(|(x, col)| {
+        for (y, o) in col.iter_mut().enumerate() {
+            *o = v[y * w + x];
         }
     });
-    let mut out = vec![0.0f32; w * h];
-    let cols: Vec<Vec<f32>> = (0..w)
-        .into_par_iter()
-        .map(|x| {
-            let mut col = vec![0.0f32; h];
-            let mut acc: f32 = (0..=r.min(h - 1)).map(|y| tmp[y * w + x]).sum();
-            for (y, c) in col.iter_mut().enumerate() {
-                let lo = y.saturating_sub(r);
-                let hi = (y + r).min(h - 1);
-                *c = acc / (hi - lo + 1) as f32;
-                if y + r + 1 < h {
-                    acc += tmp[(y + r + 1) * w + x];
-                }
-                if y >= r {
-                    acc -= tmp[(y - r) * w + x];
-                }
-            }
-            col
-        })
-        .collect();
-    for (x, col) in cols.into_iter().enumerate() {
-        for (y, c) in col.into_iter().enumerate() {
-            out[y * w + x] = c;
-        }
-    }
     out
 }
 
-/// Develops `src` (linear, premultiplied, opaque or not) with `d`.
+/// Develops `src` (linear, premultiplied, opaque or not) with `d`, as
+/// opening a RAW file does: the local controls and the vignette are
+/// measured on the raster itself.
 pub fn develop(src: &Raster, d: &Develop) -> Raster {
+    develop_in(src, d, (0, 0), [0, 0, src.width as i32, src.height as i32])
+}
+
+/// Develops `src`, whose top-left pixel sits at canvas position `origin`,
+/// measuring the local controls' radii and the vignette on the canvas
+/// rectangle `frame` (`[x, y, w, h]`). Pixels at least
+/// `d.reach(frame_size(frame))` px inside the raster's edge are exact, so
+/// the Camera Raw Filter renders seamlessly from padded tiles.
+pub fn develop_in(src: &Raster, d: &Develop, origin: (i32, i32), frame: [i32; 4]) -> Raster {
     let (w, h) = (src.width as usize, src.height as usize);
-    if *d == Develop::NEUTRAL || w == 0 || h == 0 {
+    let d = &d.sane();
+    if d.is_neutral() || w == 0 || h == 0 {
         return src.clone();
     }
     let gains = d.gains();
     // White balance + exposure, straight colour.
-    let mut rgb: Vec<[f32; 3]> = src
+    let (rgb, alpha): (Vec<[f32; 3]>, Vec<f32>) = src
         .pixels
         .par_iter()
         .map(|p| {
-            let [r, g, b, _] = p.to_straight();
-            [r * gains[0], g * gains[1], b * gains[2]]
+            let [r, g, b, a] = p.to_straight();
+            ([r * gains[0], g * gains[1], b * gains[2]], a)
         })
-        .collect();
-    // Highlights / shadows: compress or lift the large-scale luminance
-    // (log2 base), keeping local detail.
-    if d.is_local() {
-        let lum: Vec<f32> = rgb.iter().map(|&c| luma(c)).collect();
-        let radius = ((w.max(h) as f32) * 0.02).round().max(1.0) as usize;
-        let base = base_layer(&lum, w, h, radius);
-        let (hi, sh) = (d.highlights / 100.0, d.shadows / 100.0);
-        rgb.par_iter_mut()
-            .zip(base.par_iter())
-            .zip(lum.par_iter())
-            .for_each(|((c, &b), &y)| {
-                if y <= 0.0 {
-                    return;
-                }
-                // Weight by how bright / dark the neighbourhood is (in stops
-                // below white): highlights act above ~-2.5 EV, shadows below.
-                let bright = ((b + 2.5) / 2.5).clamp(0.0, 1.0);
-                let dark = ((-b - 2.0) / 4.0).clamp(0.0, 1.0);
-                let shift = hi * 1.5 * bright + sh * 2.0 * dark;
-                let k = shift.exp2();
-                for v in c.iter_mut() {
-                    *v *= k;
-                }
-            });
-    }
-    // Tone (global curve on perceptual luminance, applied as a ratio) and
-    // colour (vibrance, saturation in perceptual space).
-    let (vib, sat) = (d.vibrance / 100.0, d.saturation / 100.0);
+        .unzip();
+    let lum: Vec<f32> = rgb.par_iter().map(|&c| luma(c)).collect();
+    let radii = Develop::radii(frame_size(frame));
+    let needs_log = d.is_local() || d.clarity != 0.0 || d.texture != 0.0;
+    let log: Vec<f32> = if needs_log {
+        lum.par_iter().map(|&y| y.max(1e-5).log2()).collect()
+    } else {
+        Vec::new()
+    };
+    // Large-scale log luminance (highlights / shadows), the clarity and
+    // texture bases, and the haze estimate: the blurred darkest channel.
+    let base = d.is_local().then(|| blur3(&log, &alpha, w, h, radii.tone));
+    let clarity = (d.clarity != 0.0).then(|| blur3(&log, &alpha, w, h, radii.clarity));
+    let texture = (d.texture != 0.0).then(|| blur3(&log, &alpha, w, h, radii.texture));
+    let haze = (d.dehaze != 0.0).then(|| {
+        let mins: Vec<f32> = rgb
+            .par_iter()
+            .map(|c| c[0].min(c[1]).min(c[2]).max(0.0))
+            .collect();
+        blur3(&mins, &alpha, w, h, radii.tone)
+    });
+
+    let (hi, sh) = (d.highlights / 100.0, d.shadows / 100.0);
+    let dz = d.dehaze / 100.0;
+    let vib = d.vibrance / 100.0;
+    // Dehaze also lifts saturation a little.
+    let sat = (1.0 + d.saturation / 100.0) * (1.0 + 0.25 * dz.max(0.0)) - 1.0;
+    let vignette = Vignette::new(d, frame);
     let mut out = Raster::new(src.width, src.height);
-    out.pixels
-        .par_iter_mut()
-        .zip(rgb.par_iter())
-        .zip(src.pixels.par_iter())
-        .for_each(|((o, c), s)| {
-            let y = luma(*c);
-            let mut c = *c;
-            if y > 0.0 {
-                let pe = encode(y);
-                let pt = tone(pe, d);
-                let k = decode(pt.max(0.0)) / y;
-                for v in &mut c {
-                    *v *= k;
+    out.pixels.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        for (x, o) in row.iter_mut().enumerate() {
+            let i = y * w + x;
+            let a = alpha[i];
+            if a <= 0.0 {
+                *o = Rgba::TRANSPARENT;
+                continue;
+            }
+            let mut c = rgb[i];
+            // Dehaze: lift (or lay) a veil as bright as the neighbourhood's
+            // darkest channel, never more than this pixel's own.
+            if let Some(hz) = &haze {
+                let mn = c[0].min(c[1]).min(c[2]).max(0.0);
+                if dz > 0.0 {
+                    let v = (dz * 0.6 * hz[i].min(mn)).clamp(0.0, 0.95);
+                    for ch in &mut c {
+                        *ch = ((*ch - v) / (1.0 - v)).max(0.0);
+                    }
+                } else {
+                    let v = -dz * 0.5;
+                    for ch in &mut c {
+                        *ch = *ch * (1.0 - v) + 0.6 * v;
+                    }
                 }
             }
-            if vib != 0.0 || sat != 0.0 {
-                let e = [
-                    encode(c[0].max(0.0)),
-                    encode(c[1].max(0.0)),
-                    encode(c[2].max(0.0)),
-                ];
-                let l = luma(e);
-                let mx = e[0].max(e[1]).max(e[2]);
-                let mn = e[0].min(e[1]).min(e[2]);
-                let chroma = mx - mn;
-                // Vibrance favours the muted colours.
-                let amount = (1.0 + sat) * (1.0 + vib * (1.0 - chroma).clamp(0.0, 1.0));
-                for (ci, ev) in c.iter_mut().zip(e) {
-                    *ci = decode((l + (ev - l) * amount).max(0.0));
+            // Highlights / shadows compress or lift the large-scale
+            // luminance; texture and clarity scale the detail around their
+            // bases (all in stops, applied as one gain so hues hold).
+            if needs_log && lum[i] > 0.0 {
+                let l = log[i];
+                let mut shift = 0.0;
+                if let Some(b) = &base {
+                    // Weight by how bright / dark the neighbourhood is (in
+                    // stops below white): highlights act above ~-2.5 EV,
+                    // shadows below.
+                    let b = b[i];
+                    let bright = ((b + 2.5) / 2.5).clamp(0.0, 1.0);
+                    let dark = ((-b - 2.0) / 4.0).clamp(0.0, 1.0);
+                    shift += hi * 1.5 * bright + sh * 2.0 * dark;
+                }
+                if clarity.is_some() || texture.is_some() {
+                    // Mid-tones get the most; black and white keep theirs.
+                    let e = encode(l.exp2().min(1.0));
+                    let mid = (4.0 * e * (1.0 - e)).clamp(0.0, 1.0);
+                    if let Some(bc) = &clarity {
+                        shift += d.clarity / 100.0 * 0.6 * mid * (l - bc[i]).clamp(-3.0, 3.0);
+                    }
+                    if let Some(bt) = &texture {
+                        shift += d.texture / 100.0 * 0.8 * mid * (l - bt[i]).clamp(-2.0, 2.0);
+                    }
+                }
+                if shift != 0.0 {
+                    let k = shift.exp2();
+                    for v in &mut c {
+                        *v *= k;
+                    }
+                }
+            }
+            c = finish(c, d, vib, sat);
+            if let Some(v) = &vignette {
+                let k = v.gain(origin.0 + x as i32, origin.1 + y as i32);
+                for ch in &mut c {
+                    *ch *= k;
                 }
             }
             // Over-range channels roll towards white instead of shifting
@@ -263,9 +258,76 @@ pub fn develop(src: &Raster, d: &Develop) -> Raster {
                     *v = (*v / m) * (1.0 - t) + y * t;
                 }
             }
-            *o = Rgba::from_straight(c[0].max(0.0), c[1].max(0.0), c[2].max(0.0), s.a);
-        });
+            *o = Rgba::from_straight(c[0].max(0.0), c[1].max(0.0), c[2].max(0.0), a);
+        }
+    });
     out
+}
+
+/// Tone (global curve on perceptual luminance, applied as a ratio) and
+/// colour (vibrance, saturation in perceptual space) of one straight pixel.
+fn finish(mut c: [f32; 3], d: &Develop, vib: f32, sat: f32) -> [f32; 3] {
+    let y = luma(c);
+    if y > 0.0 {
+        let pe = encode(y);
+        let pt = tone(pe, d);
+        let k = decode(pt.max(0.0)) / y;
+        for v in &mut c {
+            *v *= k;
+        }
+    }
+    if vib != 0.0 || sat != 0.0 {
+        let e = [
+            encode(c[0].max(0.0)),
+            encode(c[1].max(0.0)),
+            encode(c[2].max(0.0)),
+        ];
+        let l = luma(e);
+        let mx = e[0].max(e[1]).max(e[2]);
+        let mn = e[0].min(e[1]).min(e[2]);
+        let chroma = mx - mn;
+        // Vibrance favours the muted colours.
+        let amount = (1.0 + sat) * (1.0 + vib * (1.0 - chroma).clamp(0.0, 1.0));
+        for (ci, ev) in c.iter_mut().zip(e) {
+            *ci = decode((l + (ev - l) * amount).max(0.0));
+        }
+    }
+    c
+}
+
+/// The post-crop vignette: an exposure falloff towards the corners of the
+/// frame, starting at a distance set by the midpoint.
+struct Vignette {
+    centre: (f32, f32),
+    half: (f32, f32),
+    start: f32,
+    stops: f32,
+}
+
+impl Vignette {
+    fn new(d: &Develop, frame: [i32; 4]) -> Option<Vignette> {
+        if d.vignette == 0.0 {
+            return None;
+        }
+        let (fw, fh) = (frame[2].max(1) as f32, frame[3].max(1) as f32);
+        Some(Vignette {
+            centre: (frame[0] as f32 + fw / 2.0, frame[1] as f32 + fh / 2.0),
+            half: (fw / 2.0, fh / 2.0),
+            start: d.vignette_midpoint / 100.0 * 0.8,
+            stops: d.vignette / 100.0 * 2.0,
+        })
+    }
+
+    /// Linear gain at canvas pixel `(x, y)`: 1 inside the midpoint, up to
+    /// 2 stops darker (or lighter) at the frame's corners.
+    fn gain(&self, x: i32, y: i32) -> f32 {
+        let nx = (x as f32 + 0.5 - self.centre.0) / self.half.0;
+        let ny = (y as f32 + 0.5 - self.centre.1) / self.half.1;
+        let dist = (nx * nx + ny * ny).sqrt() / std::f32::consts::SQRT_2;
+        let t = ((dist - self.start) / (1.0 - self.start)).clamp(0.0, 1.0);
+        let t = t * t * (3.0 - 2.0 * t);
+        (self.stops * t).exp2()
+    }
 }
 
 /// A one-click exposure / whites / blacks suggestion (Camera Raw's Auto):
@@ -482,5 +544,147 @@ mod tests {
         let d = auto_develop(&r);
         assert!(d.exposure > 1.0, "{d:?}");
         assert!(d.tone_curve);
+    }
+
+    /// A 100×20 grey step: 0.05 left of x = 50, 0.2 from there. On a
+    /// 100 px frame clarity and texture blur at radius 1, whose triple box
+    /// puts 17/27 of its weight on the near side of a step: the first
+    /// bright pixel's base is (10·log2 0.05 + 17·log2 0.2) / 27.
+    fn step() -> Raster {
+        let mut r = Raster::new(100, 20);
+        for y in 0..20 {
+            for x in 0..100 {
+                let v = if x < 50 { 0.05 } else { 0.2 };
+                r.set(x, y, Rgba::new(v, v, v, 1.0));
+            }
+        }
+        r
+    }
+
+    #[test]
+    fn clarity_steepens_edges_and_leaves_flat_areas() {
+        let d = Develop {
+            clarity: 100.0,
+            ..Develop::NEUTRAL
+        };
+        let out = develop(&step(), &d);
+        // Detail 10/27 · 2 stops, mid-tone weight 0.99904 at 0.2:
+        // 0.2 · 2^(0.6 · 0.99904 · 0.74074) = 0.27208.
+        assert!(close(out.get(50, 10).r, 0.27208, 2e-4), "{:?}", out.get(50, 10));
+        // The dark side of the edge goes darker: 0.05 · 2^(−0.6 · 0.6127 · 0.74074).
+        assert!(close(out.get(49, 10).r, 0.03974, 2e-4), "{:?}", out.get(49, 10));
+        // Away from the edge nothing changes.
+        assert!(close(out.get(10, 10).r, 0.05, 1e-4), "{:?}", out.get(10, 10));
+        assert!(close(out.get(90, 10).r, 0.2, 1e-4), "{:?}", out.get(90, 10));
+        let flat_out = develop(&flat([0.2, 0.2, 0.2], 40, 40), &d);
+        assert!(close(flat_out.get(20, 20).r, 0.2, 1e-4));
+    }
+
+    #[test]
+    fn negative_texture_softens_edges() {
+        let d = Develop {
+            texture: -100.0,
+            ..Develop::NEUTRAL
+        };
+        let out = develop(&step(), &d);
+        // 0.2 · 2^(−0.8 · 0.99904 · 0.74074) = 0.13268.
+        assert!(close(out.get(50, 10).r, 0.13268, 2e-4), "{:?}", out.get(50, 10));
+        assert!(close(out.get(90, 10).r, 0.2, 1e-4));
+    }
+
+    #[test]
+    fn dehaze_lifts_or_lays_a_veil() {
+        let grey = flat([0.2, 0.2, 0.2], 40, 40);
+        let clear = develop(
+            &grey,
+            &Develop {
+                dehaze: 100.0,
+                ..Develop::NEUTRAL
+            },
+        );
+        // Veil 0.6 · 0.2 = 0.12 removed: (0.2 − 0.12) / (1 − 0.12).
+        assert!(
+            close(clear.get(20, 20).r, 0.090909, 1e-4),
+            "{:?}",
+            clear.get(20, 20)
+        );
+        let hazy = develop(
+            &grey,
+            &Develop {
+                dehaze: -100.0,
+                ..Develop::NEUTRAL
+            },
+        );
+        // Half the way to a 0.6 veil.
+        assert!(close(hazy.get(20, 20).r, 0.4, 1e-4), "{:?}", hazy.get(20, 20));
+        // Colour gets more saturated as the veil comes off.
+        let c = flat([0.4, 0.25, 0.15], 40, 40);
+        let p = develop(
+            &c,
+            &Develop {
+                dehaze: 50.0,
+                ..Develop::NEUTRAL
+            },
+        )
+        .get(20, 20);
+        assert!(p.r / p.b > 0.4 / 0.15 + 0.5, "{p:?}");
+    }
+
+    #[test]
+    fn vignette_darkens_the_corners_from_the_midpoint() {
+        let grey = flat([0.5, 0.5, 0.5], 100, 100);
+        let d = Develop {
+            vignette: -100.0,
+            ..Develop::NEUTRAL
+        };
+        let out = develop(&grey, &d);
+        assert!(close(out.get(49, 49).r, 0.5, 1e-4), "centre untouched");
+        // Corner pixel: distance 0.99, past the 0.4 start by 0.59 / 0.6,
+        // smoothstep 0.99918, two stops down: 0.5 · 2^(−1.99835) = 0.12514.
+        assert!(close(out.get(0, 0).r, 0.12514, 1e-4), "{:?}", out.get(0, 0));
+        assert!(close(out.get(99, 99).r, 0.12514, 1e-4));
+        // Inside the midpoint (distance 0.3 < 0.4) nothing changes.
+        assert!(close(out.get(29, 49).r, 0.5, 1e-4), "{:?}", out.get(29, 49));
+        // The filter measures on its frame: the same frame placed 100 px to
+        // the right puts the same corner at canvas x = 100.
+        let moved = develop_in(&grey, &d, (100, 0), [100, 0, 100, 100]);
+        assert_eq!(moved.get(0, 0), out.get(0, 0));
+    }
+
+    #[test]
+    fn neutral_filter_settings_leave_pixels_unchanged() {
+        let mut r = Raster::new(64, 48);
+        for (i, p) in r.pixels.iter_mut().enumerate() {
+            let a = if i % 7 == 0 {
+                0.0
+            } else {
+                0.3 + (i % 5) as f32 * 0.15
+            };
+            *p = Rgba::from_straight(
+                (i % 13) as f32 / 13.0,
+                (i % 17) as f32 / 17.0,
+                (i % 3) as f32 / 3.0,
+                a,
+            );
+        }
+        let out = develop_in(&r, &Develop::NEUTRAL, (10, 20), [0, 0, 800, 600]);
+        for (a, b) in out.pixels.iter().zip(&r.pixels) {
+            assert!(
+                (a.r - b.r).abs() < 1e-4 && (a.g - b.g).abs() < 1e-4 && (a.b - b.b).abs() < 1e-4,
+                "{a:?} vs {b:?}"
+            );
+            assert!((a.a - b.a).abs() < 1e-6);
+        }
+        // A develop that does change pixels keeps transparent ones empty.
+        let lifted = develop_in(
+            &r,
+            &Develop {
+                shadows: 50.0,
+                ..Develop::NEUTRAL
+            },
+            (0, 0),
+            [0, 0, 64, 48],
+        );
+        assert_eq!(lifted.pixels[0], Rgba::TRANSPARENT);
     }
 }

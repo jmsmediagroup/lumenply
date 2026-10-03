@@ -181,9 +181,16 @@ None of these could be tested in the container.
       path with path operations (combine/subtract/intersect/exclude),
       mask density and feather, both masks multiplied; shape outlines an
       even-odd shape can't hold keep Photoshop's pixels (corpus:
-      intersect-group 113.9 → 0, layer_mask_data 46.6 → 26.0). Still
-      open: PSB export, text layers as editable PSD text, live filters as
-      smart filters
+      intersect-group 113.9 → 0, layer_mask_data 46.6 → 26.0). Layer
+      styles both ways (lfx2/lmfx/lfxs: drop/inner shadow, outer/inner glow,
+      colour/gradient overlay with full gradients, stroke inside/centre/
+      outside, bevel; blend modes, spread/choke, global light, shadow
+      knockout; psd-tools-verified; layer_effects 108.6 → 5.1) and Fill
+      opacity (iOpa) both ways. Artboards come in as groups clipped to
+      their rectangle over an editable background fill (artboard-bgcolor
+      66.8 → 0.02). Still open: PSB export, live filters as
+      smart filters, knockout, satin, pattern overlay, gradient/pattern
+      strokes
 - [x] PSD import of every colour mode and depth: Grayscale (embedded gray
       profile via qcms), Duotone (as gray), 32-bit RGB/Gray (linear float,
       opens in float mode), CMYK 8/16 (embedded profile via qcms, else a
@@ -242,6 +249,10 @@ None of these could be tested in the container.
 - [x] Layer styles: drop shadow, outer glow and stroke as non-destructive
       per-layer effects (EFFECTS section in Properties, tile-seam-safe,
       saved in .nge; PSD/ORA warn instead of silently dropping)
+- [x] Fill opacity (Photoshop's Fill): fades a layer's content but not its
+      effects, incl. clip-chain bases and pass-through groups; Fill slider
+      under Opacity; SetFillOpacity; .lumen, PSD iOpa, ORA folds it into
+      opacity; GPU falls back to CPU below 100%
 - [~] More styles: inner shadow and inner glow (blurred inverse coverage,
       clipped to the layer, rendered over it); colour and gradient overlays
       (gradient spans the content bounds at any angle); bevel (emboss from
@@ -281,6 +292,14 @@ None of these could be tested in the container.
       preview dialogs; Select > Grow and Similar (wand tolerance)
 - [x] Content-Aware Fill (multi-scale PatchMatch + EM voting, seeded; Edit menu,
       Shift+Backspace Fill dialog, selection bar): 500×400 hole in 2400×1600 in ~0.2 s
+- [x] Puppet Warp (Edit menu, palette): full-window workspace; a mesh over
+      the layer's opaque area that hugs the outline (Density, Expansion);
+      click to pin, drag to warp live with as-rigid-as-possible deformation
+      (Igarashi 2005 two-step, banded Cholesky per pin set; Rigid/Normal/
+      Distort); Alt-click/Delete removes; pin depth for folds; OK bakes one
+      PuppetWarp step (masks follow; smart objects refused); 1800×1205
+      bake ~8 ms (ADR 0018). Still open: pin rotation, multi-select, as a
+      smart filter
 - [x] Liquify (Filter menu, Shift+Cmd+X): modal workspace with Forward warp,
       Reconstruct, Smooth, Twirl, Pucker, Bloat; advected displacement field,
       per-stroke undo, mesh view; bakes 12 MP in ~20 ms as one undo step
@@ -338,7 +357,18 @@ None of these could be tested in the container.
       Load selection (New/Add/Subtract/Intersect, Invert, Delete), undoable,
       saved in .lumen (channels/ tiles) and PSD (named alpha channels after
       RGB + transparency, resources 1006/1045; psd-tools-verified both
-      depths). Still open: a Channels panel
+      depths)
+- [x] Dock tabs Layers | Channels | Paths (persisted) and a Window menu.
+      Channels panel: RGB/R/G/B with thumbnails, view one channel as
+      grayscale (Cmd+2..5), alpha channels (view, red overlay, Cmd-click
+      load with Shift/Alt, rename, save, delete), load a colour channel or
+      luminosity as a selection (luminosity masks). Paths panel: work path
+      and saved paths with thumbnails, show on canvas, fill/stroke/select
+      any path in one undo step, make work path from selection (traced,
+      straight segments), save/duplicate/rename/delete. Navigator (drag to
+      pan, zoom slider and field) and Info (RGB/HSB, X/Y, exact selection
+      and document size) float over the canvas. Still open: Pen editing of
+      saved paths, curve fitting when tracing, painting into one channel
 - [x] Edit ▸ Cut / Copy / Copy merged / Paste / Paste in place (Cmd+X/C/
       Shift+Cmd+C/V/Shift+Cmd+V): the selection's pixels (soft edges kept) or
       the layer, pasted as a new layer above the active one in place; copies
@@ -351,6 +381,11 @@ None of these could be tested in the container.
       Rotate by angle (canvas grows to fit, transparent corners) — all through
       CropCanvas, so masks, guides, paths and smart objects follow. Text
       layers stay upright when the canvas turns (as in a straightened crop)
+- [x] Everyday edits: Layer via Cut (Shift+Cmd+J), Reselect (Shift+Cmd+D),
+      Edit ▸ Stroke (inside/centre/outside, width, opacity, foreground
+      colour), Cmd-click a layer thumbnail to load its pixels as the
+      selection (Shift adds, Alt subtracts, both intersect), Bring to Front /
+      Send to Back (Shift+Cmd+] / [), Image ▸ Duplicate
 - [x] Merge selected layers (Cmd+E with several layers selected, "Merge
       layers"): the selected visible siblings composite into the topmost
       one's slot and name; hidden ones stay; picture unchanged (tested)
@@ -373,8 +408,13 @@ None of these could be tested in the container.
       overflow marker, Point⇄Paragraph. Character options: leading,
       baseline shift, all caps, metrics kerning, underline, strikethrough;
       per-character colour/size/bold/italic/underline/strike (ADR 0013).
-      Still open: editable PSD text (TySh), IME pre-edit display,
-      per-character fonts
+      PSD text layers are editable type both ways (TySh + EngineData:
+      text, PostScript fonts, size, colour, tracking, leading, shift, caps,
+      kerning, underline/strike, faux styles, alignment, style runs,
+      point/box; ADR 0017); rotated/warped/on-path type keeps Photoshop's
+      pixels with a warning; psd-tools-verified, not yet opened in
+      Photoshop itself. Still open: IME pre-edit display, per-character
+      fonts, rotated text, paragraph spacing/indents
 - [x] Animated marching ants (boundary dashes march; huge outlines fall back
       to the static texture)
 - [x] Select by colour range (Select menu + palette: fuzziness slider with live
@@ -405,7 +445,8 @@ None of these could be tested in the container.
 - [x] Multiple open documents: tab strip in the top bar (switch, close with
       per-tab unsaved confirm, + for new; opening an already-open file
       focuses its tab; per-document zoom/pan/active layer; quitting checks
-      every tab). Autosave still covers the active document only
+      every tab). Autosave backs up every unsaved tab (one slot each,
+      stale slots dropped) and crash recovery reopens them all
 - [x] Command palette (Ctrl+K) searching every menu action
 - [x] New layer from selection (`NewLayerFromSelection` command; selection
       action bar "New layer" and palette "Layer via copy")

@@ -19,13 +19,16 @@ use lumenply_tiles::{Raster, Rect, TileStore};
 
 use crate::{linear_to_srgb, IoError};
 
+mod artboards;
 mod color_lookup;
 mod color_modes;
 mod effects;
+mod engine_data;
 mod extra;
 mod lut_profile;
 mod masks;
 mod shape;
+mod text;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PsdError {
@@ -1185,12 +1188,8 @@ fn collect_records(
                     }
                     LayerContent::Pixel(s) => s,
                     LayerContent::Text(t) => {
-                        warnings.push(format!(
-                            "text layer '{}' was exported as pixels (font: {}, {} px)",
-                            l.name,
-                            lumenply_render::text::font_label(t),
-                            t.size.round()
-                        ));
+                        // Photoshop's editable type, beside the rendered pixels.
+                        blocks.push(additional_block(b"TySh", &text::tysh_block(t, 0)));
                         owned_store = t
                             .cache
                             .clone()
@@ -1514,10 +1513,14 @@ struct RawLayer {
     adjustment: Option<Adjustment>,
     /// From the `lspf` block; unlocked when absent.
     locks: LayerLocks,
+    /// A type layer our text model can draw (`TySh`).
+    text: Option<lumenply_doc::TextLayer>,
     /// A Solid Color or Gradient fill layer's settings.
     fill: Option<lumenply_doc::Fill>,
     /// A shape layer: a fill with a readable vector mask (and stroke).
     shape: Option<lumenply_doc::ShapeLayer>,
+    /// A group that is a Photoshop artboard.
+    artboard: Option<artboards::Artboard>,
     /// Colour planes of a 32-bit file, as floats (`channels` keeps the
     /// transparency).
     float_channels: Vec<(i16, Vec<f32>)>,
@@ -1664,12 +1667,14 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 let mut is_adjustment = false;
                 let mut adjustment = None;
                 let mut locks = LayerLocks::NONE;
+                let mut artboard = None;
                 let mut fill = None;
                 let (mut vector_mask, mut pattern) = (false, false);
                 let (mut vmsk, mut vstk): (Option<Vec<u8>>, Option<Vec<u8>>) = (None, None);
                 // `lmfx` (several effects per kind) supersedes `lfx2`.
                 let (mut lfx2, mut lmfx): (Option<Vec<u8>>, Option<Vec<u8>>) = (None, None);
                 let mut fill_opacity = 1.0f32;
+                let mut tysh: Option<&[u8]> = None;
                 while rd.pos + 12 <= extra_end {
                     let sig = rd.bytes(4)?;
                     if sig != b"8BIM" && sig != b"8B64" {
@@ -1719,6 +1724,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                                 key = data[8..12].to_vec();
                             }
                         }
+                        b"artb" | b"artd" | b"abdd" => artboard = artboards::parse(data),
                         b"lspf" => {
                             let mut d = Rd::new(data);
                             locks = locks_from_flags(d.u32()?);
@@ -1742,6 +1748,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         b"iOpa" => fill_opacity = effects::parse_fill_opacity(data).unwrap_or(1.0),
                         // Shape content in newer files: pixels come clipped.
                         b"vscg" => layer_masks.shaped = true,
+                        b"TySh" => tysh = Some(data),
                         // Pattern fills keep their rendered pixels.
                         b"PtFl" => {
                             pattern = true;
@@ -1767,6 +1774,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                     }
                 }
                 rd.pos = extra_end;
+                // Type layers re-render from their text unless our model
+                // cannot place them; then they keep Photoshop's pixels.
+                let text_layer = tysh.and_then(|d| text::import(d, &name, &mut warnings));
                 // Shape layers (a fill clipped by vector paths) and pattern
                 // fills come in as the pixels Photoshop rendered for them.
                 let mut shape_layer = None;
@@ -1827,8 +1837,10 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         is_adjustment,
                         adjustment,
                         locks,
+                        text: text_layer,
                         fill,
                         shape: shape_layer,
+                        artboard,
                         float_channels: Vec::new(),
                         effects: fx,
                         fill_opacity,
@@ -1942,6 +1954,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                 g.mask = build_mask(&rl, width, height);
                 g.locks = rl.locks;
                 rl.style(&mut g);
+                if let Some(a) = &rl.artboard {
+                    artboards::apply(&mut g, a, &mut doc);
+                }
                 if !rl.blend_known {
                     warnings.push(format!(
                         "group '{}': unsupported blend mode, using normal",
@@ -1971,6 +1986,48 @@ pub fn load(path: impl AsRef<Path>) -> Result<Report<Document>, PsdError> {
                         )),
                     }
                     continue;
+                }
+                if let Some(t) = rl.text.clone().map(|mut t| {
+                    lumenply_render::text::refresh_cache(&mut t);
+                    t
+                }) {
+                    let overlap = text::overlap_with_photoshop(&t, rl.bounds);
+                    if overlap.is_some_and(|o| o < text::MIN_OVERLAP) {
+                        warnings.push(format!(
+                            "text layer '{}' was imported as pixels (Photoshop draws it where our text \
+                             engine cannot, e.g. type on a path)",
+                            rl.name
+                        ));
+                    } else {
+                        // Photoshop's own rendering stands in until the
+                        // text is edited (as Photoshop shows it): exact
+                        // even when a font is missing here. Our engine
+                        // renders it on the first edit.
+                        let mut t = t;
+                        let b = rl.bounds;
+                        if b.w > 0 && b.h > 0 && rl.channels.iter().any(|(id, _)| *id >= 0) {
+                            let raster = cm.layer_raster(&rl.channels, &rl.float_channels, b.w, b.h);
+                            t.cache = Some(TileStore::from_raster(&raster, b.x, b.y));
+                        }
+                        let id = doc.alloc_id();
+                        let mut l = Layer::text(id, t);
+                        l.name = rl.name.clone();
+                        l.blend = rl.blend;
+                        l.clip = rl.clip;
+                        l.opacity = rl.opacity;
+                        l.visible = rl.visible;
+                        l.mask = build_mask(&rl, width, height);
+                        l.locks = rl.locks;
+                        rl.style(&mut l);
+                        if !rl.blend_known {
+                            warnings.push(format!(
+                                "layer '{}': unsupported blend mode, using normal",
+                                rl.name
+                            ));
+                        }
+                        stack.last_mut().expect("root").push(l);
+                        continue;
+                    }
                 }
                 if let Some(sh) = rl.shape.clone() {
                     // Rendered below with the fills, once every layer is in.
@@ -2249,6 +2306,34 @@ mod tests {
             doc.warnings
         );
         assert!(doc.value.layers()[0].pixels().is_some());
+    }
+
+    #[test]
+    fn imported_text_shows_photoshops_pixels_until_edited() {
+        // A black "I" whose stored pixels (Photoshop's rendering) are the
+        // record's 2×2 opaque red: the cache shows those, not our render.
+        let t = lumenply_doc::TextLayer::new("I", 0.0, 2.0, 3.0, [0.0, 0.0, 0.0, 1.0]);
+        let (rec, chans) = record_with_blocks(&[(b"TySh", text::tysh_block(&t, 0))]);
+        let doc = load_bytes("text-pixels.psd", &craft_psd(3, 4, 4, &rec, &chans)).unwrap();
+        let l = &doc.value.layers()[0];
+        let LayerContent::Text(back) = &l.content else {
+            panic!("an editable text layer: {:?}", doc.warnings);
+        };
+        assert_eq!(back.text, "I");
+        let shown = back.cache.as_ref().expect("a cache");
+        for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let p = shown.get_pixel(x, y);
+            assert!(p.r > 0.99 && p.g < 0.01 && p.a == 1.0, "({x}, {y}): {p:?}");
+        }
+        // An edit renders it with our engine: black, not red.
+        let mut edited = back.clone();
+        lumenply_render::text::refresh_cache(&mut edited);
+        let ours = edited.cache.unwrap();
+        let reds = (0..4)
+            .flat_map(|y| (0..4).map(move |x| (x, y)))
+            .filter(|&(x, y)| ours.get_pixel(x, y).r > 0.5)
+            .count();
+        assert_eq!(reds, 0);
     }
 
     #[test]

@@ -232,6 +232,7 @@ impl FromStr for BlendMode {
 
 pub mod adjust;
 pub mod channels;
+pub mod develop;
 pub mod fill;
 pub mod gradient;
 pub mod guides;
@@ -245,6 +246,7 @@ pub mod text_runs;
 
 pub use adjust::{Adjustment, CompiledAdjustment, LevelsChannel};
 pub use channels::SavedSelection;
+pub use develop::Develop;
 pub use fill::{Fill, FillLayer, GradientStyle};
 pub use gradient::{Gradient, GradientStop};
 pub use guides::{Guide, Orientation};
@@ -323,6 +325,14 @@ pub enum Filter {
         radius: f32,
         threshold: f32,
     },
+    /// Filter ▸ Camera Raw Filter: the Camera Raw develop controls on any
+    /// layer. `frame` is the canvas rectangle `[x, y, w, h]` the local
+    /// controls' radii and the vignette are measured on, fixed when the
+    /// filter is made.
+    Develop {
+        settings: Develop,
+        frame: [i32; 4],
+    },
 }
 
 impl Filter {
@@ -341,6 +351,7 @@ impl Filter {
             Filter::SurfaceBlur { .. } => "Surface Blur",
             Filter::LensBlur { .. } => "Lens Blur",
             Filter::DustScratches { .. } => "Dust & Scratches",
+            Filter::Develop { .. } => "Camera Raw Filter",
         }
     }
 
@@ -386,6 +397,7 @@ impl Filter {
             Filter::SurfaceBlur { radius, .. } => Filter::surface_radius(*radius),
             Filter::LensBlur { radius, .. } => Filter::lens_radius(*radius),
             Filter::DustScratches { radius, .. } => Filter::median_radius(*radius),
+            Filter::Develop { settings, frame } => settings.reach(develop::frame_size(*frame)),
         }
     }
 }
@@ -1067,6 +1079,9 @@ pub struct Document {
     /// Saved selections (alpha channels); covered by undo, saved with
     /// projects.
     pub saved_selections: Vec<SavedSelection>,
+    /// The selection most recently cleared, for Select ▸ Reselect; covered
+    /// by undo, never saved.
+    pub last_selection: Option<Selection>,
     /// Bottom-to-top.
     layers: Vec<Layer>,
     next_id: LayerId,
@@ -1166,6 +1181,7 @@ impl Document {
             float_mode: false,
             guides: Vec::new(),
             saved_selections: Vec::new(),
+            last_selection: None,
             layers: Vec::new(),
             next_id: 1,
         }
@@ -1182,6 +1198,7 @@ impl Document {
             float_mode: false,
             guides: Vec::new(),
             saved_selections: Vec::new(),
+            last_selection: None,
             layers,
             next_id,
         }

@@ -1,6 +1,6 @@
 //! Text layers through the file formats: `.lumen` keeps every text
 //! property (font, bold, italic, alignment, tracking) and re-renders the
-//! same pixels; PSD export rasterises text and names the font it used.
+//! same pixels; PSD keeps it as editable Photoshop type (`TySh`).
 
 use std::path::PathBuf;
 
@@ -79,33 +79,62 @@ fn lumen_round_trip_keeps_font_bold_italic_and_layout() {
 }
 
 #[test]
-fn psd_export_names_the_font_of_rasterised_text() {
+fn psd_text_layers_round_trip_as_editable_type() {
     let mut doc = Document::new(200, 100);
-    add_text(
-        &mut doc,
-        TextLayer {
-            bold: true,
-            italic: true,
-            ..TextLayer::new("Title", 10.0, 60.0, 36.4, [0.0, 0.0, 0.0, 1.0])
+    let title = TextLayer {
+        bold: true,
+        italic: true,
+        align: TextAlign::Center,
+        tracking: 40.0,
+        kerning: true,
+        ..TextLayer::new("Title", 100.0, 40.0, 36.0, [0.0, 0.0, 0.0, 1.0])
+    };
+    let mut body = TextLayer {
+        font: "NoSuchFontXYZ-Regular".into(),
+        box_size: Some([180.0, 30.0]),
+        align: TextAlign::Justify,
+        line_height: 1.5,
+        underline: true,
+        ..TextLayer::new("Body text that wraps", 10.0, 55.0, 18.0, [0.2, 0.4, 0.6, 1.0])
+    };
+    body.apply_style(
+        5,
+        9,
+        lumenply_doc::text_runs::CharStyle {
+            bold: Some(true),
+            size: Some(24.0),
+            ..Default::default()
         },
     );
-    add_text(
-        &mut doc,
-        TextLayer {
-            font: "Georgia".into(),
-            ..TextLayer::new("Body", 10.0, 90.0, 18.0, [0.0, 0.0, 0.0, 1.0])
-        },
-    );
+    let a = add_text(&mut doc, title.clone());
+    let b = add_text(&mut doc, body.clone());
     let path = temp("text.psd");
     let rep = lumenply_io::psd::save(&path, &doc).expect("export");
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let back = lumenply_io::psd::load(&path).expect("import");
     let _ = std::fs::remove_file(&path);
-    assert_eq!(
-        rep.warnings,
-        vec![
-            "text layer 'Title' was exported as pixels (font: DejaVu Sans Bold Italic, 36 px)".to_string(),
-            "text layer 'Body' was exported as pixels (font: Georgia, 18 px)".to_string(),
-        ]
-    );
+    assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+    let layers = back.value.layers();
+    assert_eq!(layers.len(), 2);
+    let same = |got: &TextLayer, want: &TextLayer| {
+        // Colours pass through 0-1 sRGB with five decimals.
+        for (g, w) in got.color.iter().zip(want.color) {
+            assert!((g - w).abs() < 1e-4, "{:?} vs {:?}", got.color, want.color);
+        }
+        let mut got = got.clone();
+        got.color = want.color;
+        assert_eq!(&got, want);
+    };
+    let ta = layers[0].text_layer().expect("Title is text again");
+    assert_eq!(layers[0].name, doc.layer(a).unwrap().name);
+    same(ta, &title);
+    let tb = layers[1].text_layer().expect("Body is text again");
+    assert_eq!(layers[1].name, doc.layer(b).unwrap().name);
+    same(tb, &body);
+    assert_eq!(tb.runs.len(), 1);
+    assert_eq!((tb.runs[0].start, tb.runs[0].end), (5, 9));
+    // Re-rendered on import.
+    assert!(ta.cache.as_ref().and_then(|c| c.content_bounds()).is_some());
 }
 
 #[test]

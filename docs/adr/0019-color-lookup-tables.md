@@ -1,4 +1,4 @@
-# ADR 0016: Color Lookup tables (3D LUTs)
+# ADR 0019: Color Lookup tables (3D LUTs)
 
 Date: 2026-10-03. Status: accepted.
 

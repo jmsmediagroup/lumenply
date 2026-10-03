@@ -53,7 +53,8 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
 - `Command::affected()` should return the changed canvas area when cheap to compute;
   the app uses it to redraw only that region.
 - Text layers keep a raster cache (`TextLayer::cache`) that is derived state: never
-  saved, rebuilt on load and on every edit.
+  saved, rebuilt on load and on every edit. A PSD import seeds it with Photoshop's
+  own pixels (exact even with missing fonts) until the first edit re-renders it.
 - PSD writer changes must be validated with the independent reader:
   `pip install psd-tools` and open the written file (see ADR 0003).
 - Every behaviour change gets a numeric test with explicit expected values.
@@ -72,7 +73,8 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
   `shape:kind=star`, `shape:draw=X0:Y0:X1:Y1`, `gradient:open|style=…|draw=…`,
   `brush:panel|tip=Name|set=key:value|stroke=X0:Y0:X1:Y1|import=PATH`,
   `text:box=X:Y:W:H|edit|select=A:B|caret=I|commit`, `refine:…` (Select and
-  Mask), `retouch:…`, `export-as:…`; drags as
+  Mask), `retouch:…`, `export-as:…`, `panels:tab=channels|view=red|navigator|info`,
+  `puppet:open|pin=X:Y|drag=I:X:Y|ok`; drags as
   `popups:press=X:Y,popups:move=X:Y,popups:release=X:Y`, typing as
   `popups:type=…`/`popups:key=Shift+W`; tokens that toggle
   view prefs such as `rulers`/`grid` save prefs — another reason for a scratch

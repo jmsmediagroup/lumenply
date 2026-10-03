@@ -161,23 +161,31 @@ impl App {
     /// welcome screen it becomes the first one), marked unsaved, with the
     /// path it came from so Save goes back to the original file.
     pub(crate) fn recover_autosave(&mut self) {
-        let Some(file) = session::autosave_file() else {
-            return;
-        };
-        let source = session::autosave_source();
-        match project::load(&file) {
-            Ok(doc) => {
-                let had_path = source.is_some();
-                self.open_in_new_tab(Editor::new(doc), source);
-                if !had_path {
-                    self.untitled = "Recovered".into();
+        let backups = session::autosave_backups();
+        let (mut ok, mut failed) = (0, Vec::new());
+        for (file, source) in backups {
+            match project::load(&file) {
+                Ok(doc) => {
+                    let had_path = source.is_some();
+                    self.open_in_new_tab(Editor::new(doc), source);
+                    if !had_path {
+                        self.untitled = "Recovered".into();
+                    }
+                    // Recovered work is unsaved by definition.
+                    self.saved_rev = usize::MAX;
+                    ok += 1;
                 }
-                // Recovered work is unsaved by definition.
-                self.saved_rev = usize::MAX;
-                self.status = "Recovered the autosaved document".into();
+                Err(e) => failed.push(e.to_string()),
             }
-            Err(e) => self.status = format!("Could not recover the backup: {e}"),
         }
+        self.status = match (ok, failed.is_empty()) {
+            (1, true) => "Recovered the autosaved document".into(),
+            (n, true) => format!("Recovered {n} autosaved documents"),
+            (n, false) => format!(
+                "Recovered {n} documents; could not recover: {}",
+                failed.join("; ")
+            ),
+        };
     }
 
     /// Open the photo demo in a new tab.
@@ -919,6 +927,46 @@ mod tests {
         assert_eq!(app.tab_infos().len(), 1);
         session::remove_autosave();
         assert!(!file.exists());
+    }
+
+    #[test]
+    fn every_unsaved_tab_is_backed_up_and_recovered() {
+        let _g = app_lock();
+        session::remove_autosave();
+        let mut app = App::launch(&[]);
+        app.dialog = None;
+        app.last_autosave = std::time::Instant::now() + std::time::Duration::from_secs(24 * 3600);
+        // Two unsaved documents (one from a file) and one saved one.
+        app.open_in_new_tab(blank(40, 30), Some(PathBuf::from("/work/a.lumen")));
+        app.saved_rev = usize::MAX;
+        app.open_in_new_tab(blank(20, 10), None);
+        app.saved_rev = usize::MAX;
+        app.open_in_new_tab(blank(8, 8), None);
+        let docs = app.unsaved_docs();
+        assert_eq!(docs.len(), 2, "the saved tab needs no backup");
+        session::write_backups(&docs);
+        let found = session::autosave_backups();
+        assert_eq!(found.len(), 2);
+        // A smaller set later drops the stale slot.
+        session::write_backups(&docs[..1]);
+        assert_eq!(session::autosave_backups().len(), 1);
+        session::write_backups(&docs);
+
+        let mut app = App::launch(&[]);
+        assert!(matches!(app.dialog, Some(Dialog::Recover)));
+        app.recover_autosave();
+        let sizes: Vec<(u32, u32)> = std::iter::once(app.editor.doc())
+            .chain(app.tabs.iter().map(|t| t.editor.doc()))
+            .map(|d| (d.width, d.height))
+            .collect();
+        assert_eq!(sizes.len(), 2, "{sizes:?}");
+        assert!(
+            sizes.contains(&(40, 30)) && sizes.contains(&(20, 10)),
+            "{sizes:?}"
+        );
+        assert!(app.any_unsaved());
+        session::remove_autosave();
+        assert!(session::autosave_backups().is_empty());
     }
 
     #[test]

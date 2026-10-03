@@ -36,6 +36,8 @@ pub(crate) enum Dialog {
     SaveSelection(String),
     /// Select ▸ Load Selection: (saved selection, how it combines, invert).
     LoadSelection(usize, CombineOp, bool),
+    /// Edit ▸ Stroke: (width px, location, opacity %).
+    Stroke(f32, lumenply_core::everyday::StrokeLocation, f32),
 }
 
 /// Extensions the open dialogs offer, by kind. The first of each list is
@@ -302,8 +304,11 @@ impl App {
                     self.status = if n == 0 {
                         format!("Imported {path}")
                     } else {
-                        format!("Imported {path} ({n} items skipped: {})", rep.warnings.join("; "))
+                        let notes = if n == 1 { "1 note" } else { "notes" };
+                        format!("Imported {path} ({notes}: {})", rep.warnings.join("; "))
                     };
+                    // Photoshop type layers name their fonts too.
+                    self.note_missing_fonts();
                 }
                 Err(e) => self.status = format!("Could not import {path}: {e}"),
             }
@@ -383,7 +388,15 @@ impl App {
                 self.path = Some(PathBuf::from(path));
                 self.saved_rev = self.editor.history().len();
                 self.recent = session::push_recent(path);
-                session::remove_autosave();
+                if self.any_unsaved() {
+                    // Other documents still need their backups: rewrite
+                    // the set now, without this one.
+                    self.last_autosave = std::time::Instant::now()
+                        .checked_sub(self.prefs.autosave_every())
+                        .unwrap_or(self.last_autosave);
+                } else {
+                    session::remove_autosave();
+                }
                 self.status = format!("Saved {path}");
             }
             Err(e) => self.status = format!("Could not save: {e}"),
@@ -445,6 +458,7 @@ impl App {
             Dialog::Shortcuts => "Keyboard shortcuts",
             Dialog::SaveSelection(..) => "Save selection",
             Dialog::LoadSelection(..) => "Load selection",
+            Dialog::Stroke(..) => "Stroke",
             Dialog::About => "About",
             Dialog::Filter(f) => f.name(),
             Dialog::CanvasSize(..) => "Canvas size",
@@ -462,6 +476,7 @@ impl App {
             Dialog::NewGuide(..) => "Add",
             Dialog::SaveSelection(..) => "Save",
             Dialog::LoadSelection(..) => "Load",
+            Dialog::Stroke(..) => "Stroke",
             Dialog::Trim(..) => "Trim",
             Dialog::RotateBy(..) => "Rotate",
             Dialog::Shortcuts => "Close",
@@ -636,6 +651,9 @@ impl App {
                                 segmented(ui, clockwise, &[(true, "Clockwise"), (false, "Counter-clockwise")]);
                             });
                             note(ui, "The canvas grows to fit; the new corners are transparent.");
+                        }
+                        Dialog::Stroke(width, location, opacity) => {
+                            App::stroke_dialog_ui(ui, width, location, opacity);
                         }
                         Dialog::SaveSelection(name) => {
                             ui.horizontal(|ui| {
@@ -879,10 +897,15 @@ impl App {
                             a11y_scroll(ui.ctx(), &scroll_out, "Shortcuts");
                         }
                         Dialog::Recover => {
-                            note(
-                                ui,
-                                "The previous session left an autosaved backup, probably after a crash.",
-                            );
+                            let n = session::autosave_backups().len();
+                            let text = if n > 1 {
+                                format!(
+                                    "The previous session left autosaved backups of {n} documents, probably after a crash."
+                                )
+                            } else {
+                                "The previous session left an autosaved backup, probably after a crash.".to_string()
+                            };
+                            note(ui, &text);
                             footer(ui, |ui| {
                                 if ui.add(primary_button("Recover")).clicked() || enter {
                                     self.recover_autosave();
@@ -1046,6 +1069,8 @@ impl App {
                                     filter_changed |= row(ui, "Radius", radius, 1.0..=8.0, " px", o);
                                     filter_changed |= row(ui, "Threshold", threshold, 0.0..=255.0, " levels", o);
                                 }
+                                // Edited in its own workspace (camera_raw_filter.rs).
+                                Filter::Develop { .. } => {}
                             }
                             note(
                                 ui,
@@ -1095,7 +1120,7 @@ impl App {
                                 ui.add_space(LABEL_W + ui.spacing().item_spacing.x);
                                 check(ui, lock, "Keep aspect ratio");
                             });
-                            note(ui, "Resamples every layer bilinearly.");
+                            note(ui, "Resamples every layer: bilinear when enlarging, averaged when shrinking.");
                         }
                     }
                     if !primary.is_empty() {
@@ -1167,6 +1192,9 @@ impl App {
                 }
                 Dialog::SaveSelection(name) => {
                     self.run(&lumenply_core::channels::SaveSelection { name: name.clone() })
+                }
+                Dialog::Stroke(width, location, opacity) => {
+                    self.stroke_selection(*width, *location, *opacity)
                 }
                 Dialog::LoadSelection(index, op, invert) => {
                     self.run(&lumenply_core::channels::LoadSelection {

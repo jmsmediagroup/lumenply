@@ -4,6 +4,9 @@ impl App {
     /// The status bar: document facts on the left (numbers in mono), the
     /// last message on the right, elided rather than run under the facts.
     pub(crate) fn status_bar(&mut self, ctx: &egui::Context) {
+        // Pixel-tight, rescanned only when the document changed (the
+        // sparse tiles alone would round it up to whole 256 px tiles).
+        let sel_rect = self.info_selection(ctx);
         egui::TopBottomPanel::bottom("status")
             .exact_height(28.0)
             .frame(bar_frame())
@@ -36,9 +39,8 @@ impl App {
                             .on_hover_text(format!("Colour under the pointer: #{r:02X}{g:02X}{b:02X}"));
                     }
                     ui.separator();
-                    match &doc.selection {
-                        Some(s) => {
-                            let b = s.bounds_within(doc.canvas());
+                    match doc.selection.as_ref().map(|_| sel_rect.unwrap_or_default()) {
+                        Some(b) => {
                             ui.label(RichText::new("Selection").color(MUTED));
                             ui.label(mono(format!("{} × {}", b.w, b.h)))
                                 .on_hover_text(format!("Selection bounds at {}, {}", b.x, b.y));

@@ -134,14 +134,43 @@ fn resample_tile(src: &TileStore, inv: &Affine, coord: TileCoord, src_bounds: Re
         return None;
     }
 
+    // Shrinking: one destination pixel covers several source pixels, and a
+    // single bilinear sample would alias (moiré, jagged edges). Average a
+    // grid of samples across the pixel's footprint instead — a box filter
+    // the footprint's size. Rotations and enlargements keep one sample.
+    let taps = |len: f32| {
+        if len <= 1.001 {
+            1
+        } else {
+            (len.ceil() as usize).min(8)
+        }
+    };
+    let (nx, ny) = (taps(inv.a.hypot(inv.b)), taps(inv.c.hypot(inv.d)));
+    let weight = 1.0 / (nx * ny) as f32;
     let mut tile = Tile::new();
     let mut any = false;
     for row in 0..TILE_SIZE {
         let py = oy + row as i32;
         for col in 0..TILE_SIZE {
             let px = ox + col as i32;
-            let (sx, sy) = inv.apply(px as f32 + 0.5, py as f32 + 0.5);
-            let p = sample_bilinear(src, sx - 0.5, sy - 0.5);
+            let p = if nx == 1 && ny == 1 {
+                let (sx, sy) = inv.apply(px as f32 + 0.5, py as f32 + 0.5);
+                sample_bilinear(src, sx - 0.5, sy - 0.5)
+            } else {
+                let mut acc = [0f32; 4];
+                for j in 0..ny {
+                    for i in 0..nx {
+                        let (fx, fy) = ((i as f32 + 0.5) / nx as f32, (j as f32 + 0.5) / ny as f32);
+                        let (sx, sy) = inv.apply(px as f32 + fx, py as f32 + fy);
+                        let q = sample_bilinear(src, sx - 0.5, sy - 0.5);
+                        acc[0] += q.r;
+                        acc[1] += q.g;
+                        acc[2] += q.b;
+                        acc[3] += q.a;
+                    }
+                }
+                Rgba::new(acc[0] * weight, acc[1] * weight, acc[2] * weight, acc[3] * weight)
+            };
             if p.a > 0.0 {
                 any = true;
                 tile.set(col, row, p);
@@ -600,6 +629,41 @@ mod tests {
     use super::*;
     use lumenply_doc::Mask;
     use lumenply_tiles::Raster;
+
+    #[test]
+    fn shrinking_averages_instead_of_aliasing() {
+        // One-pixel black/white stripes: any single sample per output pixel
+        // lands on one stripe or between two; the true average is 0.5.
+        let mut r = Raster::new(64, 64);
+        for (i, p) in r.pixels.iter_mut().enumerate() {
+            let v = if (i % 64) % 2 == 0 { 1.0 } else { 0.0 };
+            *p = Rgba::new(v, v, v, 1.0);
+        }
+        let src = TileStore::from_raster(&r, 0, 0);
+        for k in [2.0f32, 4.0] {
+            let out = transform_store(&src, &Affine::scale(1.0 / k, 1.0 / k));
+            for x in 1..(64 / k as i32 - 1) {
+                let p = out.get_pixel(x, 2);
+                assert!((p.r - 0.5).abs() < 0.02, "1/{k} at x = {x}: {}", p.r);
+                assert!((p.a - 1.0).abs() < 1e-4);
+            }
+        }
+        // A third: each output pixel covers three stripes, so 1/3 or 2/3.
+        let out = transform_store(&src, &Affine::scale(1.0 / 3.0, 1.0 / 3.0));
+        for x in 1..20 {
+            let v = out.get_pixel(x, 2).r;
+            assert!(
+                (v - 1.0 / 3.0).abs() < 0.02 || (v - 2.0 / 3.0).abs() < 0.02,
+                "x = {x}: {v}"
+            );
+        }
+        // Rotations keep a single sample: a 90° turn stays exact.
+        let turned = transform_store(
+            &src,
+            &Affine::rotate(std::f32::consts::FRAC_PI_2).then(&Affine::translate(64.0, 0.0)),
+        );
+        assert!(turned.get_pixel(10, 10).r == 0.0 || turned.get_pixel(10, 10).r == 1.0);
+    }
 
     /// A reveal-all mask with a painted-hidden rect must keep hiding that
     /// rect after any transform, and keep revealing everywhere else. The

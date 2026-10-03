@@ -27,28 +27,36 @@ mod blend_ui;
 mod brand;
 mod brush_panel;
 mod camera_raw;
+mod camera_raw_filter;
 mod canvas;
+mod channels_panel;
 mod clipboard;
 mod color_picker;
 mod crop;
 mod debug;
 mod demo;
 mod dialogs;
+mod everyday_ui;
 mod export_as;
 mod gradient_ui;
 mod guides;
 mod histogram;
 mod history;
+mod info_panel;
 mod layer_actions;
 mod layers;
 mod liquify;
 mod lut_ui;
 mod macos_open;
 mod menu;
+mod navigator;
 mod options_bar;
 mod palette;
+mod panels;
+mod paths_panel;
 mod pen;
 mod properties;
+mod puppet_ui;
 mod quick_select_tool;
 mod retouch_ui;
 #[cfg(test)]
@@ -314,6 +322,8 @@ struct App {
     export_as: Option<Box<export_as::ExportAsState>>,
     /// Filter > Liquify's workspace, while open (it replaces the editor UI).
     liquify: Option<Box<liquify::LiquifyState>>,
+    /// Edit ▸ Puppet Warp's workspace, while open (it replaces the editor UI).
+    puppet: Option<Box<puppet_ui::PuppetState>>,
     /// The Camera Raw develop workspace, while a RAW file is being opened.
     camera_raw: Option<Box<camera_raw::CameraRawState>>,
     /// Select ▸ Select and Mask's workspace, while open (it replaces the
@@ -428,6 +438,8 @@ struct App {
     brushes: brush_panel::BrushLibrary,
     /// On-canvas text editing with the Text tool (text_edit.rs).
     typer: text_edit::TypeTool,
+    /// Channels / Paths / Navigator / Info display state (panels.rs).
+    panels: panels::PanelState,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -502,6 +514,7 @@ impl App {
             text_align: TextAlign::Left,
             text_new_armed: false,
             liquify: None,
+            puppet: None,
             doc_key: 0,
             next_doc_key: 0,
             smart_link: None,
@@ -595,6 +608,7 @@ impl App {
             gradient: Default::default(),
             brushes: brush_panel::BrushLibrary::load(),
             typer: text_edit::TypeTool::default(),
+            panels: Default::default(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -608,7 +622,7 @@ impl App {
             app.place_image(p);
         }
         app.restore_brush();
-        if session::autosave_file().is_some_and(|p| p.exists()) {
+        if !session::autosave_backups().is_empty() {
             app.dialog = Some(Dialog::Recover);
         }
         app
@@ -885,6 +899,19 @@ impl App {
     }
 
     /// True when any open tab has unsaved changes.
+    /// Every open document with unsaved changes (the active one first),
+    /// with where it came from: what an autosave backs up.
+    fn unsaved_docs(&self) -> Vec<(lumenply_doc::Document, Option<PathBuf>)> {
+        let mut out = Vec::new();
+        if self.editor.history().len() != self.saved_rev {
+            out.push((self.editor.doc().clone(), self.path.clone()));
+        }
+        for t in self.tabs.iter().filter(|t| t.unsaved()) {
+            out.push((t.editor.doc().clone(), t.path.clone()));
+        }
+        out
+    }
+
     fn any_unsaved(&self) -> bool {
         self.editor.history().len() != self.saved_rev || self.tabs.iter().any(|t| t.unsaved())
     }
@@ -1140,6 +1167,7 @@ impl App {
                 i.consume_key(M::COMMAND, Key::Num1),
             )
         });
+        self.panel_keys(ctx);
         for (hit, id) in [
             (zoom_in, "zoom-in"),
             (zoom_out, "zoom-out"),
@@ -1293,14 +1321,15 @@ impl App {
             )
             .show(ctx, |ui| {
                 raise_controls(ui);
-                let rows = self.layer_rows().len().max(1) as f32;
+                let rows = self.dock_rows() as f32;
                 let quick_id = egui::Id::new("dock-quick-add-h");
                 let quick_h = ctx.data(|d| d.get_temp::<f32>(quick_id)).unwrap_or(96.0);
                 // Layers get their full height up to ~45% of the dock (never
                 // fewer than three rows); Properties gets the rest.
                 let avail = ui.available_height();
-                let layers_full = layers::HEADER_H + rows * layers::ROW_PITCH + layers::FOOTER_H;
-                let layers_min = layers::HEADER_H + 3.0 * layers::ROW_PITCH + layers::FOOTER_H;
+                let tabs = panels::TABS_H;
+                let layers_full = tabs + layers::HEADER_H + rows * layers::ROW_PITCH + layers::FOOTER_H;
+                let layers_min = tabs + layers::HEADER_H + 3.0 * layers::ROW_PITCH + layers::FOOTER_H;
                 let layers_auto = layers_full.min(layers_min.max(avail * 0.45));
                 // The divider below Properties can be dragged; double-click
                 // returns to the automatic split.
@@ -1355,7 +1384,7 @@ impl App {
                 let h = ui.cursor().top() - top;
                 ctx.data_mut(|d| d.insert_temp(quick_id, h));
                 ui.separator();
-                self.layers_ui(ui);
+                self.dock_tabs_ui(ui);
             });
     }
 }
@@ -1385,6 +1414,11 @@ impl App {
     fn frame(&mut self, ctx: &egui::Context) {
         if self.liquify.is_some() {
             self.liquify_ui(ctx);
+            self.debug_screenshot(ctx);
+            return;
+        }
+        if self.puppet.is_some() {
+            self.puppet_ui(ctx);
             self.debug_screenshot(ctx);
             return;
         }
@@ -1428,17 +1462,29 @@ impl App {
             self.tool_palette(ctx);
             self.side_panel(ctx);
             self.canvas(ctx);
+            self.floating_panels(ctx);
         }
         self.dialogs(ctx);
         self.palette_ui(ctx);
-        let unsaved = self.editor.history().len() != self.saved_rev;
-        if unsaved && self.drag.is_none() && self.last_autosave.elapsed() > self.prefs.autosave_every() {
+        if !self.no_doc
+            && self.any_unsaved()
+            && self.drag.is_none()
+            && self.last_autosave.elapsed() > self.prefs.autosave_every()
+        {
             self.last_autosave = std::time::Instant::now();
-            session::autosave(self.editor.doc().clone(), self.path.clone());
-            self.status = "Autosaved a backup".into();
+            let docs = self.unsaved_docs();
+            let n = docs.len();
+            session::autosave_all(docs);
+            self.status = if n == 1 {
+                "Autosaved a backup".into()
+            } else {
+                format!("Autosaved backups of {n} documents")
+            };
         }
         if self.dirty && !self.no_doc {
+            let area = self.dirty_rect;
             self.refresh(ctx);
+            self.panels_refreshed(ctx, area);
             ctx.request_repaint();
         }
         let name = self
@@ -1619,7 +1665,7 @@ fn filter_category(f: &Filter) -> &'static str {
         Filter::Mosaic { .. } => "Pixelate",
         Filter::Sharpen { .. } => "Sharpen",
         Filter::Emboss { .. } | Filter::FindEdges => "Stylize",
-        Filter::HighPass { .. } => "Other",
+        Filter::HighPass { .. } | Filter::Develop { .. } => "Other",
     }
 }
 
@@ -1909,6 +1955,10 @@ pub(crate) mod a11y_tests {
             ("Trim", Dialog::Trim(true)),
             ("Keyboard shortcuts", Dialog::Shortcuts),
             ("Rotate canvas", Dialog::RotateBy(15.0, true)),
+            (
+                "Stroke",
+                Dialog::Stroke(3.0, lumenply_core::everyday::StrokeLocation::Center, 100.0),
+            ),
             (
                 "Load selection",
                 Dialog::LoadSelection(0, CombineOp::Replace, false),

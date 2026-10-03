@@ -186,6 +186,25 @@ const ACTIONS: &[(&str, &str)] = &[
     ("History Brush (Brush ▸ History)", "tool-history-brush"),
     ("Background Eraser (Eraser ▸ Background)", "tool-bg-eraser"),
     ("Magic Eraser (Eraser ▸ Magic)", "tool-magic-eraser"),
+    ("Layers panel", "panel-layers"),
+    ("Channels panel", "panel-channels"),
+    ("Paths panel", "panel-paths"),
+    ("View the RGB composite", "channel-rgb"),
+    ("View the red channel alone", "channel-red"),
+    ("View the green channel alone", "channel-green"),
+    ("View the blue channel alone", "channel-blue"),
+    ("Show or hide the Navigator", "navigator"),
+    ("Show or hide the Info panel", "info-panel"),
+    ("Make work path from selection", "make-work-path"),
+    ("Puppet Warp", "puppet-warp"),
+    ("Camera Raw Filter...", crate::camera_raw_filter::CRF_ACTION),
+    ("Layer via cut", "layer-via-cut"),
+    ("Reselect", "reselect"),
+    ("Stroke selection...", "stroke-selection"),
+    ("Load layer pixels as selection", "select-layer-pixels"),
+    ("Bring layer to front", "layer-front"),
+    ("Send layer to back", "layer-back"),
+    ("Duplicate document", "duplicate-doc"),
 ];
 
 impl App {
@@ -286,6 +305,7 @@ pub(crate) fn filter_id(f: &Filter) -> &'static str {
         Filter::SurfaceBlur { .. } => "filter-surface",
         Filter::LensBlur { .. } => "filter-lens",
         Filter::DustScratches { .. } => "filter-dust",
+        Filter::Develop { .. } => crate::camera_raw_filter::CRF_ACTION,
     }
 }
 
@@ -553,6 +573,15 @@ impl App {
         if let Some(block) = self.smart_filter_action_block(id) {
             return block;
         }
+        if let Some(block) = self.panel_action_block(id) {
+            return block;
+        }
+        if let Some(block) = self.everyday_action_block(id) {
+            return block;
+        }
+        if let Some(block) = self.crf_action_block(id) {
+            return block;
+        }
         match id {
             "export-lut" if !self.has_visible_adjustments() => Some("Add an adjustment layer first"),
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
@@ -571,6 +600,7 @@ impl App {
                 Some("Rasterize the layer first")
             }
             "liquify" if !pixel => need_pixel,
+            "puppet-warp" => self.puppet_block(),
             "smart-edit" | "smart-replace" if !smart => Some("Select a smart object first"),
             "save-selection" if !selection => need_selection,
             "cut" if !pixel => need_pixel,
@@ -646,6 +676,12 @@ impl App {
         if let Some(keys) = self.layer_action_keys(ctx, id) {
             return keys;
         }
+        if let Some(keys) = self.everyday_action_keys(ctx, id) {
+            return keys;
+        }
+        if let Some(keys) = self.panel_action_keys(ctx, id) {
+            return keys;
+        }
         let (m, k) = match id {
             "fill" => (M::SHIFT, Key::F5),
             "cut" => (M::COMMAND, Key::X),
@@ -688,7 +724,10 @@ impl App {
             self.status = why.into();
             return;
         }
-        if self.run_layer_action(id) || self.run_smart_filter_action(id) {
+        if self.run_layer_action(id) || self.run_smart_filter_action(id) || self.run_crf_action(id) {
+            return;
+        }
+        if self.run_panel_action(id) || self.run_everyday_action(id) {
             return;
         }
         match id {
@@ -837,6 +876,7 @@ impl App {
             "paste" => self.paste_pixels(false),
             "paste-in-place" => self.paste_pixels(true),
             "liquify" => self.open_liquify(),
+            "puppet-warp" => self.open_puppet(),
             "export-as" => self.open_export_as(),
             "smart-edit" => self.edit_smart_contents(),
             "save-selection" => {
@@ -918,7 +958,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 133); // + convert for smart filters, retouching modes, load-lut, export-lut
+        assert_eq!(n, 152); // + layer via cut, reselect, stroke, layer pixels, front/back, duplicate document, load-lut, export-lut
     }
 
     #[test]
