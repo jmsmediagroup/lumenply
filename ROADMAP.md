@@ -119,8 +119,18 @@ history; wgpu executes the graph on the GPU.
 - [ ] Pattern Overlay effect pixels as blobs in the graph (today only in
       memory); disabled smart filters and the stack's master switch in the
       graph
-- [ ] Stage 3, graph-backed editor: graph versions as the undo history,
-      the app renders through the graph cache (replacing `BelowCache`)
+- [x] Stage 3a, graph-backed editor: undo history is graph versions (graph
+      + `DocState`), `editor.doc()` is their projection, sync reuses every
+      unchanged layer's nodes (content keys stay, caches keep hitting);
+      brush strokes and whole-pixel moves are content-chain ops (`compact`
+      keeps 16-bit tiles at rest); a stroke or move costs 0 history bytes;
+      `DocState` is format 3's meta. A 400-step random edit sequence
+      renders like the layer tree at every step; ~1 ms sync per stroke on a
+      30-layer 4000×3000 document
+- [ ] Stage 3b: the app renders through `Editor::renderer()` (replacing
+      `BelowCache`) and opens and saves `.lumen` format 3
+- [ ] Port more commands to `Command::graph_edit` (fills, pixel filters and
+      adjustments, mask painting); memoise content keys along long chains
 - [x] Stage 4a, GPU executor (ADR 0027): `lumenply_graph::GpuRenderer`,
       tiles resident under the same content keys, kernels for layer (all
       blend modes but Dissolve), table adjustments, pass-through, image and
