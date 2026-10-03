@@ -201,6 +201,24 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Desaturate", "adj-desaturate"),
     ("Equalize", "adj-equalize"),
     ("Auto tone", "auto-tone"),
+    (
+        "Brightness/Contrast (apply to pixels)...",
+        "adjd-brightness-contrast",
+    ),
+    ("Levels (apply to pixels)...", "adjd-levels"),
+    ("Curves (apply to pixels)...", "adjd-curves"),
+    ("Exposure (apply to pixels)...", "adjd-exposure"),
+    ("Vibrance (apply to pixels)...", "adjd-vibrance"),
+    ("Hue/Saturation (apply to pixels)...", "adjd-hue-saturation"),
+    ("Color Balance (apply to pixels)...", "adjd-color-balance"),
+    ("Black & White (apply to pixels)...", "adjd-black-white"),
+    ("Photo Filter (apply to pixels)...", "adjd-photo-filter"),
+    ("Channel Mixer (apply to pixels)...", "adjd-channel-mixer"),
+    ("Invert (apply to pixels)", "adjd-invert"),
+    ("Posterize (apply to pixels)...", "adjd-posterize"),
+    ("Threshold (apply to pixels)...", "adjd-threshold"),
+    ("Gradient Map (apply to pixels)...", "adjd-gradient-map"),
+    ("Selective Color (apply to pixels)...", "adjd-selective-color"),
 ];
 
 impl App {
@@ -944,7 +962,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 148); // + Image ▸ Adjustments (5) and auto tone
+        assert_eq!(n, 163); // + Image ▸ Adjustments (5 + 15 applied kinds) and auto tone
     }
 
     #[test]

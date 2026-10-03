@@ -1,15 +1,17 @@
-//! Image ▸ Adjustments: Photoshop's destructive adjustments that have no
-//! adjustment-layer form here — Shadows/Highlights, Equalize, Desaturate,
-//! Replace Color and Match Color — with their dialogs (live canvas
-//! preview, Preview toggle, OK as one undo step), plus Auto Tone and the
-//! submenu that also offers every adjustment layer.
+//! Image ▸ Adjustments: Photoshop's destructive adjustments — every
+//! adjustment-layer kind applied to the pixels (Levels, Curves, ...) plus
+//! Shadows/Highlights, Equalize, Desaturate, Replace Color and Match
+//! Color — with their dialogs (live canvas preview, Preview toggle, OK as
+//! one undo step), Auto Tone, and the submenu that also offers every
+//! adjustment layer.
 //!
 //! The pixel maths is `lumenply_render::adjust_more`; the commands are
 //! `lumenply_core::adjust_cmds`.
 
 use super::*;
 use lumenply_core::adjust_cmds::{
-    ApplyMatchColor, ApplyReplaceColor, ApplyShadowsHighlights, Desaturate, Equalize, ToneZone,
+    ApplyAdjustment, ApplyMatchColor, ApplyReplaceColor, ApplyShadowsHighlights, Desaturate, Equalize,
+    ToneZone,
 };
 use lumenply_render::adjust_more::{self, LabStats, MatchColor, ReplaceColor, ShadowsHighlights};
 
@@ -19,6 +21,64 @@ pub(crate) const ADJ_DESATURATE: &str = "adj-desaturate";
 pub(crate) const ADJ_REPLACE: &str = "adj-replace-color";
 pub(crate) const ADJ_MATCH: &str = "adj-match-color";
 pub(crate) const AUTO_TONE: &str = "auto-tone";
+/// Prefix of the destructive forms of the adjustment-layer kinds
+/// (`adjd-levels`, `adjd-hue-saturation`, ...).
+pub(crate) const ADJD: &str = "adjd-";
+
+/// Photoshop's Image ▸ Adjustments order for the kinds that also exist as
+/// adjustment layers; kinds not listed follow at the end.
+const PS_ORDER: [&str; 15] = [
+    "Brightness/Contrast",
+    "Levels",
+    "Curves",
+    "Exposure",
+    "Vibrance",
+    "Hue/Saturation",
+    "Color Balance",
+    "Black & White",
+    "Photo Filter",
+    "Channel Mixer",
+    "Invert",
+    "Posterize",
+    "Threshold",
+    "Gradient Map",
+    "Selective Color",
+];
+
+/// The action id of an adjustment kind's destructive form.
+pub(crate) fn adjd_id(name: &str) -> String {
+    let mut id = String::from(ADJD);
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            id.push(c.to_ascii_lowercase());
+        } else if !id.ends_with('-') {
+            id.push('-');
+        }
+    }
+    id.trim_end_matches('-').to_string()
+}
+
+/// The adjustment layer presets in Photoshop's menu order.
+fn ps_ordered_presets() -> Vec<(&'static str, Adjustment)> {
+    let mut v = adjustment_presets();
+    v.sort_by_key(|(n, _)| PS_ORDER.iter().position(|o| o == n).unwrap_or(PS_ORDER.len()));
+    v
+}
+
+/// The starting settings for a destructive-adjustment action id.
+fn adjd_preset(id: &str) -> Option<Adjustment> {
+    adjustment_presets()
+        .into_iter()
+        .find(|(n, _)| adjd_id(n) == id)
+        .map(|(_, a)| a)
+}
+
+fn is_ours(id: &str) -> bool {
+    matches!(
+        id,
+        ADJ_SH | ADJ_EQUALIZE | ADJ_DESATURATE | ADJ_REPLACE | ADJ_MATCH
+    ) || id.starts_with(ADJD)
+}
 
 /// Where Match Color takes its colours from.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -32,6 +92,8 @@ pub(crate) struct SourcePick {
 
 #[derive(Clone, Debug)]
 pub(crate) enum AdjxKind {
+    /// An adjustment-layer kind applied to the pixels (Levels, Curves...).
+    Adjust(Adjustment),
     ShadowsHighlights(ShadowsHighlights),
     /// With a selection: equalise the entire layer based on it.
     Equalize {
@@ -70,6 +132,7 @@ pub(crate) struct AdjxState {
 impl AdjxKind {
     fn title(&self) -> &'static str {
         match self {
+            AdjxKind::Adjust(a) => a.name(),
             AdjxKind::ShadowsHighlights(_) => "Shadows/Highlights",
             AdjxKind::Equalize { .. } => "Equalize",
             AdjxKind::ReplaceColor { .. } => "Replace Color",
@@ -140,10 +203,7 @@ impl App {
     /// Why one of this module's actions can't run; `None` for ids it
     /// doesn't own (see [`App::action_block`]).
     pub(crate) fn adjx_action_block(&self, id: &str) -> Option<Option<&'static str>> {
-        if !matches!(
-            id,
-            ADJ_SH | ADJ_EQUALIZE | ADJ_DESATURATE | ADJ_REPLACE | ADJ_MATCH
-        ) {
+        if !is_ours(id) {
             return None;
         }
         let layer = self.active_layer();
@@ -162,12 +222,24 @@ impl App {
             return true;
         }
         let Some(layer) = self.active else {
-            return matches!(
-                id,
-                ADJ_SH | ADJ_EQUALIZE | ADJ_DESATURATE | ADJ_REPLACE | ADJ_MATCH
-            );
+            return is_ours(id);
         };
         let kind = match id {
+            id if id.starts_with(ADJD) => match adjd_preset(id) {
+                // Invert has no settings: it applies at once, as Cmd+I does.
+                Some(Adjustment::Invert) => {
+                    self.run(&ApplyAdjustment {
+                        layer,
+                        adjustment: Adjustment::Invert,
+                    });
+                    return true;
+                }
+                Some(a) => AdjxKind::Adjust(a),
+                None => {
+                    self.status = format!("Unknown adjustment '{id}'");
+                    return true;
+                }
+            },
             ADJ_SH => AdjxKind::ShadowsHighlights(ShadowsHighlights::default()),
             ADJ_DESATURATE => {
                 self.run(&Desaturate { layer });
@@ -222,14 +294,42 @@ impl App {
         true
     }
 
-    /// Image ▸ Adjustments: the destructive adjustments on the right, the
-    /// adjustment layers (the non-destructive way to the same looks) on
-    /// the left. Two columns keep it inside a 600 px window.
+    /// Image ▸ Adjustments: every adjustment applied to the pixels, as in
+    /// Photoshop (left), the ones that exist only that way (middle), and
+    /// the adjustment layers, the non-destructive way to the same looks
+    /// (right).
     pub(crate) fn adjustments_menu(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_top(|ui| {
             crate::layer_actions::menu_column(ui, "adjx-left", |ui| {
+                section_title(ui, "APPLY TO PIXELS");
+                for (name, adj) in ps_ordered_presets() {
+                    let label = if matches!(adj, Adjustment::Invert) {
+                        name.to_string()
+                    } else {
+                        format!("{name}...")
+                    };
+                    let hint = format!(
+                        "Changes the layer's pixels; the {name} adjustment layer on the right \
+                         stays editable instead"
+                    );
+                    self.act_hint(ui, &label, &adjd_id(name), &hint);
+                }
+            });
+            ui.add_space(6.0);
+            // Three short columns rather than two long ones, so the menu
+            // fits a 600 px window (egui menus can't scroll).
+            crate::layer_actions::menu_column(ui, "adjx-mid", |ui| {
+                section_title(ui, "MORE");
+                self.act(ui, "Shadows/Highlights...", ADJ_SH);
+                self.act(ui, "Desaturate", ADJ_DESATURATE);
+                self.act(ui, "Match Color...", ADJ_MATCH);
+                self.act(ui, "Replace Color...", ADJ_REPLACE);
+                self.act(ui, "Equalize", ADJ_EQUALIZE);
+            });
+            ui.add_space(6.0);
+            crate::layer_actions::menu_column(ui, "adjx-right", |ui| {
                 section_title(ui, "AS ADJUSTMENT LAYER");
-                for (name, adj) in adjustment_presets() {
+                for (name, adj) in ps_ordered_presets() {
                     let r = menu_item_response(ui, !self.no_doc, name, "");
                     let r = r.on_hover_text(format!(
                         "Adds a {name} adjustment layer: editable any time in Properties, \
@@ -241,17 +341,23 @@ impl App {
                     }
                 }
             });
-            ui.add_space(6.0);
-            crate::layer_actions::menu_column(ui, "adjx-right", |ui| {
-                section_title(ui, "APPLY TO PIXELS");
-                self.act(ui, "Shadows/Highlights...", ADJ_SH);
-                self.act(ui, "Replace Color...", ADJ_REPLACE);
-                self.act(ui, "Match Color...", ADJ_MATCH);
-                menu_separator(ui);
-                self.act(ui, "Desaturate", ADJ_DESATURATE);
-                self.act(ui, "Equalize", ADJ_EQUALIZE);
-            });
         });
+    }
+
+    /// [`App::act`] with a hover hint while the action can run.
+    fn act_hint(&mut self, ui: &mut egui::Ui, label: &str, id: &str, hint: &str) {
+        let ctx = ui.ctx().clone();
+        let block = self.action_block(id);
+        let keys = self.action_keys(&ctx, id);
+        let r = menu_item_response(ui, block.is_none(), label, &keys);
+        let r = match block {
+            Some(why) => r.on_disabled_hover_text(why),
+            None => r.on_hover_text(hint),
+        };
+        if r.clicked() {
+            ui.close_menu();
+            self.run_action(&ctx, id);
+        }
     }
 
     /// Image ▸ Auto Tone: one black and one white point shared by R, G and
@@ -291,6 +397,10 @@ impl App {
     fn adjx_command(&self, st: &AdjxState) -> Option<Box<dyn Command>> {
         let layer = st.layer;
         Some(match &st.kind {
+            AdjxKind::Adjust(a) => Box::new(ApplyAdjustment {
+                layer,
+                adjustment: a.clone(),
+            }),
             AdjxKind::ShadowsHighlights(p) => Box::new(ApplyShadowsHighlights { layer, params: *p }),
             AdjxKind::Equalize { entire } => Box::new(Equalize {
                 layer,
@@ -470,6 +580,14 @@ impl App {
                     let short = ui.ctx().screen_rect().height() < 700.0;
                     ui.spacing_mut().item_spacing.y = if short { 2.0 } else { 5.0 };
                     match &mut st.kind {
+                        AdjxKind::Adjust(a) => {
+                            self.adjustment_controls(ui, st.layer, a);
+                            crate::dialogs::note(
+                                ui,
+                                "Changes the layer's pixels; Layer > New adjustment layer keeps \
+                                 it editable instead.",
+                            );
+                        }
                         AdjxKind::ShadowsHighlights(p) => {
                             ui.horizontal(|ui| {
                                 row_label(ui, "Preset", LABEL_W);
@@ -734,8 +852,10 @@ impl App {
     }
 
     /// Debug tokens (`adjx:...`) for `--screenshot-do`:
-    /// `adjx:open=sh|equalize|replace|match` opens a dialog on the active
-    /// pixel layer (the bottom pixel layer when the active one isn't);
+    /// `adjx:open=sh|equalize|replace|match|adjd-<kind>` opens a dialog on
+    /// the active pixel layer (the bottom pixel layer when the active one
+    /// isn't); `adjx:hs=H:S:L` and `adjx:levels=IB:IW:GAMMA` (0–255) set
+    /// an open Hue/Saturation or Levels dialog;
     /// `adjx:sh=SA:ST:SR:HA:HT:HR:COLOR:MID` sets Shadows/Highlights
     /// (percent, px); `adjx:replace=RRGGBB:FUZZ:HUE:SAT:LIGHT` (percent,
     /// degrees); `adjx:replace-image` shows the image thumbnail;
@@ -768,9 +888,36 @@ impl App {
                     "equalize" => ADJ_EQUALIZE,
                     "replace" => ADJ_REPLACE,
                     "match" => ADJ_MATCH,
+                    other if other.starts_with(ADJD) => other,
                     _ => return true,
                 };
                 self.run_menu_action(id);
+            }
+            "hs" | "levels" => {
+                let g = |i: usize, d: f32| nums.get(i).copied().unwrap_or(d);
+                match self.adjx.as_mut().map(|s| &mut s.kind) {
+                    Some(AdjxKind::Adjust(Adjustment::HueSaturation {
+                        hue,
+                        saturation,
+                        lightness,
+                        ..
+                    })) => {
+                        *hue = g(0, 0.0);
+                        *saturation = g(1, 0.0) / 100.0;
+                        *lightness = g(2, 0.0) / 100.0;
+                    }
+                    Some(AdjxKind::Adjust(Adjustment::Levels {
+                        in_black,
+                        in_white,
+                        gamma,
+                        ..
+                    })) => {
+                        *in_black = g(0, 0.0) / 255.0;
+                        *in_white = g(1, 255.0) / 255.0;
+                        *gamma = g(2, 1.0);
+                    }
+                    _ => {}
+                }
             }
             "desaturate" => self.run_menu_action(ADJ_DESATURATE),
             "equalize" => self.run_menu_action(ADJ_EQUALIZE),
@@ -952,6 +1099,38 @@ mod tests {
         // Desaturate runs straight away: white stays white, one step.
         app.run_menu_action(ADJ_DESATURATE);
         assert_eq!(app.editor.history().last().copied(), Some("Desaturate"));
+    }
+
+    #[test]
+    fn every_adjustment_kind_has_an_applied_form() {
+        assert_eq!(adjd_id("Black & White"), "adjd-black-white");
+        assert_eq!(adjd_id("Hue/Saturation"), "adjd-hue-saturation");
+        let presets = adjustment_presets();
+        assert!(presets.len() >= 15);
+        for (name, adj) in &presets {
+            assert_eq!(adjd_preset(&adjd_id(name)).as_ref(), Some(adj), "{name}");
+        }
+        // Photoshop's order: Brightness/Contrast, Levels, Curves first.
+        let names: Vec<&str> = ps_ordered_presets().iter().map(|(n, _)| *n).collect();
+        assert_eq!(&names[..3], &["Brightness/Contrast", "Levels", "Curves"]);
+        // Invert applies at once; Levels opens its dialog and OK is one step.
+        let mut app = small_app();
+        let ctx = crate::a11y_tests::ctx();
+        let n = app.editor.history().len();
+        app.run_menu_action("adjd-invert");
+        assert!(app.adjx.is_none());
+        assert_eq!(app.editor.history().last().copied(), Some("Invert"));
+        app.run_menu_action("adjd-levels");
+        assert!(matches!(
+            app.adjx.as_ref().map(|s| &s.kind),
+            Some(AdjxKind::Adjust(Adjustment::Levels { .. }))
+        ));
+        let missing = crate::a11y_tests::nameless(&mut app, &ctx);
+        assert_eq!(missing, Vec::<String>::new());
+        app.adjx.as_mut().unwrap().debug_ok = true;
+        frames(&mut app, &ctx, 1);
+        assert_eq!(app.editor.history().len(), n + 2);
+        assert_eq!(app.editor.history().last().copied(), Some("Levels"));
     }
 
     #[test]

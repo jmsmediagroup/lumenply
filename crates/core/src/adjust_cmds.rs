@@ -174,6 +174,41 @@ impl Command for Equalize {
     }
 }
 
+/// Image ▸ Adjustments ▸ Levels, Curves, Hue/Saturation, ...: any
+/// adjustment-layer kind baked into the layer's pixels, exactly as the
+/// adjustment layer would render it at 100 % Normal right above.
+pub struct ApplyAdjustment {
+    pub layer: LayerId,
+    pub adjustment: lumenply_doc::Adjustment,
+}
+
+impl Command for ApplyAdjustment {
+    fn label(&self) -> String {
+        self.adjustment.name().into()
+    }
+
+    fn target_layer(&self) -> Option<LayerId> {
+        Some(self.layer)
+    }
+
+    fn affected(&self, doc: &Document) -> Option<Rect> {
+        affected_area(doc, self.layer)
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        pixel_store(doc, self.layer)?;
+        let adj = self.adjustment.compile();
+        edit_pixels(doc, self.layer, |_, _, p| {
+            if p.a <= 0.0 {
+                return p;
+            }
+            let s = p.to_straight();
+            let o = adj.apply([s[0], s[1], s[2]]);
+            Rgba::from_straight(o[0].max(0.0), o[1].max(0.0), o[2].max(0.0), s[3])
+        })
+    }
+}
+
 /// Image ▸ Adjustments ▸ Desaturate (Shift+Cmd+U): Hue/Saturation at −100.
 pub struct Desaturate {
     pub layer: LayerId,
@@ -483,6 +518,43 @@ mod tests {
         assert!(close(l(px(&ed, id, 0, 0)), 30.0, 0.1));
         assert!(close(l(px(&ed, id, 1, 0)), 70.0, 0.1));
         assert_eq!(ed.history().last().copied(), Some("Match Color"));
+    }
+
+    #[test]
+    fn apply_adjustment_bakes_like_the_layer_would_render() {
+        let (mut ed, id) = doc_with(10, 4, |_, _| grey(0.2));
+        select_rect(&mut ed, Rect::new(0, 0, 5, 4));
+        ed.execute(&ApplyAdjustment {
+            layer: id,
+            adjustment: lumenply_doc::Adjustment::Invert,
+        })
+        .unwrap();
+        assert_eq!(ed.history().last().copied(), Some("Invert"));
+        // Inverted in gamma inside the selection: 0.2 -> 0.8.
+        assert!(close(gamma(px(&ed, id, 2, 2))[0], 0.8, 1e-3));
+        assert!(close(gamma(px(&ed, id, 7, 2))[0], 0.2, 1e-3));
+        // Levels 0.2..0.6 stretch a 0.4 grey to 0.5 (gamma), everywhere.
+        ed.undo();
+        ed.execute(&crate::commands::SetSelection { selection: None })
+            .unwrap();
+        let (mut ed, id) = doc_with(4, 4, |_, _| grey(0.4));
+        ed.execute(&ApplyAdjustment {
+            layer: id,
+            adjustment: lumenply_doc::Adjustment::Levels {
+                in_black: 0.2,
+                in_white: 0.6,
+                gamma: 1.0,
+                out_black: 0.0,
+                out_white: 1.0,
+                channels: Default::default(),
+            },
+        })
+        .unwrap();
+        assert!(
+            close(gamma(px(&ed, id, 1, 1))[0], 0.5, 2e-3),
+            "{:?}",
+            gamma(px(&ed, id, 1, 1))
+        );
     }
 
     #[test]

@@ -789,8 +789,31 @@ impl App {
 
     pub(crate) fn adjustment_ui(&mut self, ui: &mut egui::Ui, id: LayerId, mut adj: Adjustment) {
         let before = adj.clone();
+        let finished = self.adjustment_controls(ui, id, &mut adj);
+        if adj != before {
+            self.run_coalescing(
+                &SetAdjustment {
+                    layer: id,
+                    adjustment: adj,
+                },
+                &format!("adj-{id}"),
+            );
+        }
+        if finished {
+            self.editor.end_coalescing();
+        }
+    }
+
+    /// The controls for one adjustment's settings (also used by the
+    /// Image ▸ Adjustments dialogs). True when an edit finished.
+    pub(crate) fn adjustment_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: LayerId,
+        adj: &mut Adjustment,
+    ) -> bool {
         let mut finished = false;
-        match &mut adj {
+        match adj {
             Adjustment::Invert => {
                 ui.label(RichText::new("This adjustment has no settings.").weak());
             }
@@ -954,18 +977,7 @@ impl App {
             }
             other => finished |= crate::adjust_ui::adjustment_ui(ui, id, other),
         }
-        if adj != before {
-            self.run_coalescing(
-                &SetAdjustment {
-                    layer: id,
-                    adjustment: adj,
-                },
-                &format!("adj-{id}"),
-            );
-        }
-        if finished {
-            self.editor.end_coalescing();
-        }
+        finished
     }
 }
 

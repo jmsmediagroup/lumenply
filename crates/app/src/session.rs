@@ -42,6 +42,11 @@ pub(crate) const SHORTCUTS: &[(&str, &str, bool, bool, &str)] = &[
     ("grid", "Show grid", true, false, "Quote"),
     ("adj-desaturate", "Desaturate", true, true, "U"),
     ("auto-tone", "Auto tone", true, true, "L"),
+    // After their Shift chords above, which contain these.
+    ("adjd-levels", "Levels", true, false, "L"),
+    ("adjd-curves", "Curves", true, false, "M"),
+    ("adjd-hue-saturation", "Hue/Saturation", true, false, "U"),
+    ("adjd-invert", "Invert", true, false, "I"),
 ];
 
 /// The effective chord for an action: the user's binding when it parses,
