@@ -298,6 +298,20 @@ None of these could be tested in the container.
 
 ## 5. Tools and features
 
+### Local AI selection (ADR 0028)
+- [x] App side: Object Selection (Wand ▸ Object: click, box, Shift adds,
+      Alt subtracts), Select ▸ Subject, Layer ▸ Remove Background (adds a
+      layer mask), first-use download with consent (name, size, source,
+      licence) and progress/cancel, Preferences ▸ AI models, jobs off the UI
+      thread with results applied to the document they were asked for;
+      tested against a fake engine
+- [ ] Engine (`lumenply-ai`, ONNX Runtime with CoreML/DirectML/CUDA):
+      MobileSAM, BiRefNet lite, guided-filter refinement, model store with
+      pinned SHA-256; then the adapter into the app's `AiService`
+- [ ] Object Selection refinements: negative-point prompts, Photoshop's
+      object-finder hover, caching the composite between clicks
+
+
 - [x] Healing brush and spot healing (rim-diffusion colour, optional texture
       from a clone-style source; new Heal tool, key J, Spot toggle)
 - [x] Retouching as tool modes: Heal ▸ Spot (content-aware by default) /

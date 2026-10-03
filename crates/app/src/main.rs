@@ -25,6 +25,9 @@ use lumenply_tiles::{Affine, Raster, Rect};
 mod actions_panel;
 mod adjust_dialogs;
 mod adjust_ui;
+mod ai;
+mod ai_jobs;
+mod ai_ui;
 mod blend_ui;
 mod brand;
 mod brush_panel;
@@ -478,6 +481,8 @@ struct App {
     patterns: pattern_ui::PatternLibrary,
     /// Window ▸ Actions: recorded actions and the recorder (actions_panel.rs).
     actions: actions_panel::ActionsState,
+    /// Local AI selection and masking: service, jobs, first-use dialog (ai_ui.rs).
+    ai: ai_ui::AiState,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -658,6 +663,7 @@ impl App {
             panels: Default::default(),
             patterns: Default::default(),
             actions: actions_panel::ActionsState::load(),
+            ai: ai_ui::AiState::new(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -1348,9 +1354,9 @@ impl App {
             self.hand_zoom = ctx.input(|i| i.key_pressed(Key::Z));
         }
         if let Some(t) = tool {
-            // Shift+W switches between the Magic Wand and Quick Selection.
+            // Shift+W cycles the Magic Wand, Quick and Object Selection.
             if t == Tool::Wand && ctx.input(|i| i.modifiers.shift) {
-                self.quick.on = !self.quick.on;
+                self.cycle_wand_mode();
             }
             // Shift+J / Shift+E step through the Heal and Eraser modes.
             let shift = ctx.input(|i| i.modifiers.shift);
@@ -1561,6 +1567,7 @@ impl App {
         }
         self.dialogs(ctx);
         self.adjx_ui(ctx);
+        self.ai_ui(ctx);
         self.palette_ui(ctx);
         self.pattern_picker_ui(ctx);
         if !self.no_doc

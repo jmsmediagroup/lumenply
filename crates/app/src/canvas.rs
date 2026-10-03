@@ -1265,6 +1265,7 @@ impl App {
                     }
                 }
             }
+            Tool::Wand if self.quick.object => self.object_select_input(ctx, resp, &to_doc),
             Tool::Wand if self.quick.on => self.quick_select_input(ctx, resp, &to_doc),
             Tool::Wand => {
                 if resp.hovered() {
@@ -1813,6 +1814,7 @@ impl App {
             }
             Tool::Text => self.paint_text_overlay(painter, resp),
             Tool::Crop => self.paint_crop(ctx, painter, resp),
+            Tool::Wand if self.quick.object => self.paint_object_select(painter),
             Tool::Wand if self.quick.on => self.paint_quick_select(painter, resp),
             Tool::Shape => self.paint_shape_overlay(painter, resp),
             Tool::Hand | Tool::Move | Tool::Eyedropper | Tool::Bucket | Tool::Wand => {}

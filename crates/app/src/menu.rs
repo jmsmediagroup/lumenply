@@ -461,6 +461,7 @@ impl App {
         self.act(ui, "Invert", "invert-sel");
         menu_separator(ui);
         self.act(ui, "Colour range...", "color-range");
+        self.act(ui, "Subject", crate::ai_ui::SELECT_SUBJECT);
         let quick = self.quick_mask;
         self.act_check(ui, "Quick mask", "quick-mask", quick)
             .on_hover_text("Paint the selection: white selects, black deselects");
@@ -560,6 +561,7 @@ impl App {
         } else {
             self.act(ui, "Add mask", "add-mask");
         }
+        self.act(ui, "Remove background", crate::ai_ui::REMOVE_BG);
         if self.active_layer().is_some_and(|l| l.clip) {
             self.act(ui, "Release clip", "unclip");
         } else {
@@ -604,6 +606,9 @@ impl App {
                 self.act(ui, if on { "Disable mask" } else { "Enable mask" }, "mask-toggle");
             }
             None => self.act(ui, "Add mask", "add-mask"),
+        }
+        if pixel {
+            self.act(ui, "Remove background", crate::ai_ui::REMOVE_BG);
         }
         menu_separator(ui);
         if group {

@@ -254,6 +254,16 @@ const ACTIONS: &[(&str, &str)] = &[
         crate::soft_proof::PROOF_COLORS,
     ),
     ("Gamut warning (CMYK)", crate::soft_proof::GAMUT_WARNING),
+    ("Select subject (AI)", crate::ai_ui::SELECT_SUBJECT),
+    (
+        "Remove background (AI, adds a layer mask)",
+        crate::ai_ui::REMOVE_BG,
+    ),
+    (
+        "Object Selection tool (Wand ▸ Object, AI)",
+        crate::ai_ui::OBJECT_TOOL,
+    ),
+    ("AI models...", crate::ai_ui::AI_MODELS),
 ];
 
 impl App {
@@ -292,7 +302,7 @@ impl App {
                     };
                     row(ui, t.name(), &keys);
                 }
-                row(ui, "Quick selection (Wand sibling)", "Shift+W");
+                row(ui, "Wand ▸ Quick ▸ Object selection", "Shift+W");
                 section_title(ui, "COMMANDS");
                 for (label, id) in ACTIONS {
                     let keys = self.action_keys(&ctx, id);
@@ -640,6 +650,9 @@ impl App {
         if let Some(block) = self.actions_action_block(id) {
             return block;
         }
+        if let Some(block) = self.ai_action_block(id) {
+            return block;
+        }
         match id {
             "export-lut" if !self.has_visible_adjustments() => Some("Add an adjustment layer first"),
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
@@ -805,6 +818,9 @@ impl App {
             return;
         }
         if self.run_actions_panel_action(id) || self.run_proof_action(id) || self.run_resolution_action(id) {
+            return;
+        }
+        if self.run_ai_action(id) {
             return;
         }
         match id {
@@ -1040,7 +1056,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 189); // + Proof colors, gamut warning, smart guides, print size
+        assert_eq!(n, 193); // + Select subject, Remove background, Object Selection, AI models
     }
 
     #[test]

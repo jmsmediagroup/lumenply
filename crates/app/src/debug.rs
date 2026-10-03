@@ -36,6 +36,7 @@ impl App {
             || self.debug_actions(tok)
             || self.debug_image_size(ctx, tok)
             || self.debug_smart_guides(ctx, tok)
+            || self.debug_ai(tok)
     }
 
     /// Selections and what acts on them (`select:...`):

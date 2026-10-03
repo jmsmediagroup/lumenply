@@ -796,6 +796,9 @@ impl App {
                                 );
                             }
                         }
+                        // The General / AI models switch; the AI page
+                        // replaces the general settings when chosen.
+                        Dialog::Preferences(..) if self.ai_prefs_page(ui) => {}
                         Dialog::Preferences(p, capturing) => {
                             let wide = RowOpts {
                                 label_w: 120.0,
@@ -904,8 +907,9 @@ impl App {
                                 }
                             }
                             // The shortcut list scrolls so the footer stays on screen in
-                            // short windows (the dialog is anchored to the centre).
-                            let list_h = (ui.ctx().screen_rect().height() - 530.0).clamp(110.0, 560.0);
+                            // short windows (the dialog is anchored to the centre; the
+                            // General / AI models switch takes 40 of these points).
+                            let list_h = (ui.ctx().screen_rect().height() - 570.0).clamp(70.0, 520.0);
                             let scroll_out = egui::ScrollArea::vertical()
                                 .id_salt("prefs-shortcuts")
                                 .max_height(list_h)
@@ -1327,7 +1331,7 @@ impl App {
 /// behind it can be edited while the dialog is open; optionally dimmed.
 /// It sits in the foreground order on top of the canvas's floating bars
 /// (zoom, selection actions); the dialog is then raised above it.
-fn modal_backdrop(ctx: &egui::Context, dim: bool) {
+pub(crate) fn modal_backdrop(ctx: &egui::Context, dim: bool) {
     let id = egui::Id::new("modal-backdrop");
     let screen = ctx.screen_rect();
     egui::Area::new(id)

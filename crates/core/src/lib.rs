@@ -11,6 +11,7 @@
 
 pub mod actions;
 pub mod adjust_cmds;
+pub mod ai_masks;
 pub mod align;
 pub mod brush_tip;
 pub mod canvas_ops;
