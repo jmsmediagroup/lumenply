@@ -1046,6 +1046,8 @@ impl App {
                                     filter_changed |= row(ui, "Radius", radius, 1.0..=8.0, " px", o);
                                     filter_changed |= row(ui, "Threshold", threshold, 0.0..=255.0, " levels", o);
                                 }
+                                // Edited in its own workspace (camera_raw_filter.rs).
+                                Filter::Develop { .. } => {}
                             }
                             note(
                                 ui,

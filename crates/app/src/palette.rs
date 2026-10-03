@@ -184,6 +184,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("History Brush (Brush ▸ History)", "tool-history-brush"),
     ("Background Eraser (Eraser ▸ Background)", "tool-bg-eraser"),
     ("Magic Eraser (Eraser ▸ Magic)", "tool-magic-eraser"),
+    ("Camera Raw Filter...", crate::camera_raw_filter::CRF_ACTION),
 ];
 
 impl App {
@@ -284,6 +285,7 @@ pub(crate) fn filter_id(f: &Filter) -> &'static str {
         Filter::SurfaceBlur { .. } => "filter-surface",
         Filter::LensBlur { .. } => "filter-lens",
         Filter::DustScratches { .. } => "filter-dust",
+        Filter::Develop { .. } => crate::camera_raw_filter::CRF_ACTION,
     }
 }
 
@@ -551,6 +553,9 @@ impl App {
         if let Some(block) = self.smart_filter_action_block(id) {
             return block;
         }
+        if let Some(block) = self.crf_action_block(id) {
+            return block;
+        }
         match id {
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
             "redo" if !self.editor.can_redo() => Some("Nothing to redo"),
@@ -685,7 +690,7 @@ impl App {
             self.status = why.into();
             return;
         }
-        if self.run_layer_action(id) || self.run_smart_filter_action(id) {
+        if self.run_layer_action(id) || self.run_smart_filter_action(id) || self.run_crf_action(id) {
             return;
         }
         match id {
@@ -913,7 +918,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 131); // + convert for smart filters, retouching modes
+        assert_eq!(n, 132); // + convert for smart filters, retouching modes, Camera Raw Filter
     }
 
     #[test]

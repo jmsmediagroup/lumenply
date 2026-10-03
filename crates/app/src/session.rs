@@ -25,6 +25,8 @@ pub(crate) const SHORTCUTS: &[(&str, &str, bool, bool, &str)] = &[
     ("liquify", "Liquify", true, true, "X"),
     ("undo", "Undo", true, false, "Z"),
     ("invert-sel", "Invert selection", true, true, "I"),
+    // Before "select-all": Shift+Cmd+A contains Cmd+A.
+    ("camera-raw-filter", "Camera Raw Filter", true, true, "A"),
     ("select-all", "Select all", true, false, "A"),
     ("deselect", "Deselect", true, false, "D"),
     ("save", "Save", true, false, "S"),

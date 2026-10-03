@@ -14,6 +14,8 @@ pub mod commands;
 mod content_aware;
 pub mod crop;
 pub mod demo;
+#[cfg(test)]
+mod develop_filter_tests;
 mod erasers;
 pub mod fill_cmds;
 pub mod fill_opacity;

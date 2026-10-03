@@ -119,6 +119,7 @@ pub(crate) fn smart_filter_params(ui: &mut egui::Ui, f: &mut Filter) -> bool {
             finished |= slider_row_ex(ui, "Radius", radius, 1.0..=8.0, " px", int);
             finished |= slider_row_ex(ui, "Threshold", threshold, 0.0..=255.0, " levels", int);
         }
+        Filter::Develop { settings, .. } => crate::camera_raw_filter::develop_params(ui, settings),
     }
     finished
 }
@@ -451,6 +452,12 @@ impl App {
         if finished {
             self.editor.end_coalescing();
         }
+        // "Edit in Camera Raw…" on the open (Camera Raw) filter.
+        if crate::camera_raw_filter::take_request(&ctx) {
+            if let Some(i) = focus {
+                self.open_camera_raw_filter_on_smart(id, i);
+            }
+        }
     }
 
     /// The Layers panel's rows under layer `id`: "Smart Filters" (eye =
@@ -468,6 +475,7 @@ impl App {
         let layer_name = layer.name.clone();
         let focus = sf_focus(&ctx).filter(|&(l, _)| l == id).map(|(_, i)| i);
         let mut act: Option<SfAct> = None;
+        let mut reopen: Option<usize> = None;
         let w = ui.available_width();
         let eye_x = |rect: egui::Rect| rect.min.x + 6.0 + depth as f32 * 16.0 + 8.0;
         let text_x = |rect: egui::Rect| rect.min.x + 6.0 + depth as f32 * 16.0 + 30.0;
@@ -599,9 +607,16 @@ impl App {
                     SfAct::Focus(Some(i))
                 });
             }
+            // Double-clicking a Camera Raw filter re-opens its workspace.
+            if resp.double_clicked() && !on_eye && matches!(f.filter, Filter::Develop { .. }) {
+                reopen = Some(i);
+            }
         }
         if let Some(a) = act {
             self.run_sf_act(&ctx, id, a);
+        }
+        if let Some(i) = reopen {
+            self.open_camera_raw_filter_on_smart(id, i);
         }
     }
 

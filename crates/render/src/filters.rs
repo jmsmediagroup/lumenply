@@ -71,6 +71,7 @@ pub fn filter_raster(src: &Raster, filter: &Filter, origin: (i32, i32)) -> Raste
         Filter::SurfaceBlur { radius, threshold } => more::surface_blur(src, *radius, *threshold),
         Filter::LensBlur { radius, highlights } => more::lens_blur(src, *radius, *highlights),
         Filter::DustScratches { radius, threshold } => more::dust_scratches(src, *radius, *threshold),
+        Filter::Develop { settings, frame } => crate::develop::develop_in(src, settings, origin, *frame),
     }
 }
 

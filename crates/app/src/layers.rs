@@ -85,6 +85,7 @@ impl App {
                             Filter::FindEdges => "Live edges",
                             Filter::SurfaceBlur { .. } | Filter::LensBlur { .. } => "Live blur",
                             Filter::DustScratches { .. } => "Live dust",
+                            Filter::Develop { .. } => "Live Camera Raw",
                         }),
                     ),
                     LayerContent::Text(_) => (Kind::Text, Some("Text")),
