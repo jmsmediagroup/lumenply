@@ -28,6 +28,7 @@ pub mod inpaint;
 pub mod liquify;
 pub mod membrane;
 pub mod puppet;
+pub mod pattern;
 pub mod resample;
 pub mod shape;
 pub mod smart_filters;
@@ -631,7 +632,7 @@ fn render_effects_under(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas:
 /// whose bounds would mean compositing twice).
 fn render_overlays_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas: Rect) {
     let fx = &layer.effects;
-    if fx.color_overlay.is_none() && fx.gradient_overlay.is_none() {
+    if fx.color_overlay.is_none() && fx.gradient_overlay.is_none() && fx.pattern_overlay.is_none() {
         return;
     }
     let (ox, oy) = coord.origin();
@@ -657,7 +658,16 @@ fn render_overlays_over(dst: &mut Tile, layer: &Layer, coord: TileCoord, canvas:
             }
             blend_tile(dst, &tile, blend, layer.opacity);
         };
-    // Photoshop stacks colour over gradient overlay.
+    // Photoshop stacks colour over gradient over pattern overlay.
+    if let Some(po) = &fx.pattern_overlay {
+        let sampler = po.as_fill().sampler(canvas);
+        paint(
+            dst,
+            &|x, y| pattern::straight(sampler.sample(x, y)),
+            po.opacity,
+            po.blend,
+        );
+    }
     if let Some(go) = &fx.gradient_overlay {
         let bounds = match layer.raster_store().and_then(|s| s.content_bounds()) {
             Some(b) => b,

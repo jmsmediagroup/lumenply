@@ -644,6 +644,7 @@ pub(super) fn linear_descriptor_colors(doc: &mut lumenply_doc::Document) {
     let fix_fill = |f: &mut Fill| match f {
         Fill::Solid { color } => fix(color),
         Fill::Gradient { gradient, .. } => gradient.stops.iter_mut().for_each(|s| fix(&mut s.color)),
+        Fill::Pattern { .. } => {}
     };
     doc.for_each_layer_mut(|l| match &mut l.content {
         LayerContent::Fill(f) => fix_fill(&mut f.fill),

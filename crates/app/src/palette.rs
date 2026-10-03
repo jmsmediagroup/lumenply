@@ -203,6 +203,9 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Bring layer to front", "layer-front"),
     ("Send layer to back", "layer-back"),
     ("Duplicate document", "duplicate-doc"),
+    ("New fill layer: pattern...", "fill-pattern"),
+    ("Define Pattern", "define-pattern"),
+    ("Import patterns (.pat)...", "import-patterns"),
 ];
 
 impl App {
@@ -577,6 +580,9 @@ impl App {
         if let Some(block) = self.everyday_action_block(id) {
             return block;
         }
+        if let Some(block) = self.pattern_action_block(id) {
+            return block;
+        }
         if let Some(block) = self.crf_action_block(id) {
             return block;
         }
@@ -721,7 +727,7 @@ impl App {
             self.status = why.into();
             return;
         }
-        if self.run_layer_action(id) || self.run_smart_filter_action(id) || self.run_crf_action(id) {
+        if self.run_layer_action(id) || self.run_smart_filter_action(id) || self.run_crf_action(id) || self.run_pattern_action(id) {
             return;
         }
         if self.run_panel_action(id) || self.run_everyday_action(id) {
@@ -953,7 +959,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 150); // + layer via cut, reselect, stroke, layer pixels, front/back, duplicate document
+        assert_eq!(n, 153); // + pattern fill, Define Pattern, import .pat
     }
 
     #[test]

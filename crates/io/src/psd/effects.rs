@@ -290,6 +290,7 @@ impl Reader<'_> {
                 .and_then(|f| match f {
                     Fill::Gradient { gradient, .. } => gradient.sorted().first().map(|s| s.color),
                     Fill::Solid { color } => Some(color),
+                    Fill::Pattern { .. } => None,
                 })
                 .unwrap_or([1.0; 3])
         };
@@ -397,6 +398,7 @@ pub(super) fn parse_effects(
                         )
                     }
                     Fill::Solid { color } => (*color, *color, 90.0),
+                    Fill::Pattern { .. } => ([0.5; 3], [0.5; 3], 90.0),
                 };
                 fx.gradient_overlay = Some(GradientOverlayFx {
                     start,
@@ -423,6 +425,7 @@ pub(super) fn parse_effects(
                     .and_then(|f| match f {
                         Fill::Gradient { gradient, .. } => gradient.sorted().first().map(|s| s.color),
                         Fill::Solid { color } => Some(color),
+                        Fill::Pattern { .. } => None,
                     })
                     .unwrap_or([0.0; 3])
             }
@@ -467,8 +470,12 @@ pub(super) fn parse_effects(
     if !enabled(&root, b"ChFX", b"satinMulti").is_empty() {
         r.warn("satin effect is not supported yet and was not imported".into());
     }
-    if !enabled(&root, b"patternFill", b"patternFillMulti").is_empty() {
-        r.warn("pattern overlay effect is not supported yet and was not imported".into());
+    if let Some(d) = first(&mut r, b"patternFill", b"patternFillMulti", "pattern overlay") {
+        let blend = r.blend(&d, b"Md  ", "pattern overlay");
+        match super::patterns::overlay_of(&d, blend) {
+            Some(po) => fx.pattern_overlay = Some(po),
+            None => r.warn("pattern overlay settings are not readable".into()),
+        }
     }
     (!fx.is_empty()).then_some(fx)
 }
@@ -653,6 +660,10 @@ fn effects_desc(fx: &LayerEffects) -> Option<Desc> {
             }
         }
         root = root.with(b"GrFl", Val::Obj(d));
+    }
+    if let Some(p) = &fx.pattern_overlay {
+        let h = head(b"patternFill").with(b"Md  ", mode(p.blend));
+        root = root.with(b"patternFill", Val::Obj(super::patterns::overlay_desc(h, p)));
     }
     if let Some(s) = &fx.stroke {
         let styl: &[u8] = match s.position {
@@ -855,6 +866,15 @@ mod tests {
                 position: StrokeAlign::Center,
                 ..StrokeFx::default()
             }),
+            pattern_overlay: Some(lumenply_doc::PatternOverlayFx {
+                scale: 0.5,
+                blend: BlendMode::Screen,
+                ..lumenply_doc::PatternOverlayFx::new(lumenply_doc::PatternRef {
+                    id: "uuid-1".into(),
+                    name: "Bricks".into(),
+                    image: None,
+                })
+            }),
         };
         let mut l = Layer::pixel(1, "L");
         l.effects = fx.clone();
@@ -895,6 +915,12 @@ mod tests {
         let st = back.stroke.unwrap();
         assert_eq!(st.position, StrokeAlign::Center);
         assert!(close(st.size, 3.0));
+        let po = back.pattern_overlay.unwrap();
+        assert_eq!(
+            (po.pattern.id.as_str(), po.pattern.name.as_str()),
+            ("uuid-1", "Bricks")
+        );
+        assert_eq!((po.scale, po.opacity, po.blend), (0.5, 1.0, BlendMode::Screen));
     }
 
     #[test]

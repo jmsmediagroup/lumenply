@@ -28,6 +28,7 @@ impl App {
             || self.debug_panels(ctx, tok)
             || self.debug_puppet(tok)
             || self.debug_camera_raw_filter(ctx, tok)
+            || self.debug_pattern(ctx, tok)
     }
 
     /// Selections and what acts on them (`select:...`):

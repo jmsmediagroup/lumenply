@@ -27,7 +27,7 @@ pub fn render_fill(fill: &Fill, canvas: Rect, float: bool) -> TileStore {
     // Tiles wholly inside the canvas of a solid fill are all the same one.
     let shared = match &sampler {
         FillSampler::Solid(c) => Some(finish(Tile::filled(*c))),
-        FillSampler::Gradient { .. } => None,
+        FillSampler::Gradient { .. } | FillSampler::Pattern(_) => None,
     };
     let tiles: Vec<_> = canvas
         .tiles()
@@ -66,6 +66,8 @@ pub fn refresh_cache(f: &mut FillLayer, width: u32, height: u32, float: bool) {
 /// for another canvas size are rebuilt; the rest are left alone. Shape
 /// layers' caches are brought up to date too (see [`crate::shape`]).
 pub fn refresh_stale(doc: &mut Document) {
+    // Pattern references first: a changed pattern drops the caches it drew.
+    doc.resolve_patterns();
     let (w, h, float) = (doc.width, doc.height, doc.float_mode);
     doc.for_each_layer_mut(|l: &mut Layer| {
         if let LayerContent::Fill(f) = &mut l.content {

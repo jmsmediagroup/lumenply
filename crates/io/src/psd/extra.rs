@@ -642,6 +642,15 @@ pub(super) fn fill_block(fill: &Fill) -> (&'static [u8; 4], Vec<u8>) {
                 );
             (b"GdFl", descriptor_block(&desc))
         }
+        Fill::Pattern {
+            pattern,
+            scale,
+            offset,
+            angle,
+        } => (
+            b"PtFl",
+            super::patterns::pattern_fill_block(pattern, *scale, *offset, *angle),
+        ),
     }
 }
 

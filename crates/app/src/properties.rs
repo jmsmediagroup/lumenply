@@ -485,6 +485,7 @@ impl App {
             fx.color_overlay.is_some(),
             fx.gradient_overlay.is_some(),
             fx.stroke.is_some(),
+            fx.pattern_overlay.is_some(),
         ]
         .into_iter()
         .filter(|b| *b)
@@ -772,6 +773,8 @@ impl App {
             fx.stroke = Some(st);
         }
 
+        let (c, f) = self.pattern_overlay_ui(ui, id, &mut fx.pattern_overlay);
+        (changed, finished) = (changed || c, finished || f);
         if changed || finished {
             self.run_coalescing(
                 &SetLayerEffects {

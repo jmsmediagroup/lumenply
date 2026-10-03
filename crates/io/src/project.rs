@@ -72,6 +72,17 @@ struct Manifest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     channels: Vec<ChannelRecord>,
     layers: Vec<LayerRecord>,
+    /// Patterns the layers use (ADR 0020), pixels under patterns/.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    patterns: Vec<PatternRecord>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PatternRecord {
+    id: String,
+    name: String,
+    /// Zip entry of the 16-bit PNG.
+    file: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -204,6 +215,24 @@ fn write_archive(path: &Path, doc: &Document) -> Result<(), ProjectError> {
             tiles,
         });
     }
+    let mut patterns = Vec::new();
+    for id in doc.used_pattern_ids() {
+        let Some(p) = doc.patterns.iter().find(|p| p.id == id) else {
+            continue;
+        };
+        let file = format!(
+            "patterns/{}-{}.png",
+            patterns.len(),
+            crate::pattern_files::file_stem(&p.id)
+        );
+        zip.start_file(&file, stored)?;
+        zip.write_all(&crate::pattern_files::encode_pattern_png(&p.image)?)?;
+        patterns.push(PatternRecord {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            file,
+        });
+    }
     let manifest = Manifest {
         format: "lumenply".into(),
         version: FORMAT_VERSION,
@@ -216,6 +245,7 @@ fn write_archive(path: &Path, doc: &Document) -> Result<(), ProjectError> {
         guides: doc.guides.clone(),
         channels,
         layers,
+        patterns,
     };
     zip.start_file("manifest.json", stored)?;
     zip.write_all(&serde_json::to_vec_pretty(&manifest)?)?;
@@ -390,6 +420,13 @@ pub fn load(path: impl AsRef<Path>) -> Result<Document, ProjectError> {
                 enabled: true,
             },
         });
+    }
+    for r in &manifest.patterns {
+        let bytes = read_entry(&mut zip, &r.file)?;
+        let image = crate::pattern_files::decode_pattern_png(&bytes)
+            .map_err(|e| ProjectError::Corrupt(format!("pattern '{}': {e}", r.name)))?;
+        doc.patterns
+            .push(lumenply_doc::Pattern::new(r.id.clone(), r.name.clone(), image));
     }
     doc.for_each_layer(|l| {
         max_id = max_id.max(l.id);

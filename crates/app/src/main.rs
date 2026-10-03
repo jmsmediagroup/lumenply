@@ -53,6 +53,7 @@ mod options_bar;
 mod palette;
 mod panels;
 mod paths_panel;
+mod pattern_ui;
 mod pen;
 mod properties;
 mod puppet_ui;
@@ -439,6 +440,8 @@ struct App {
     typer: text_edit::TypeTool,
     /// Channels / Paths / Navigator / Info display state (panels.rs).
     panels: panels::PanelState,
+    /// Pattern library and picker (pattern_ui.rs).
+    patterns: pattern_ui::PatternLibrary,
 }
 
 /// A document parked in an inactive tab: its editor plus the per-document
@@ -608,6 +611,7 @@ impl App {
             brushes: brush_panel::BrushLibrary::load(),
             typer: text_edit::TypeTool::default(),
             panels: Default::default(),
+            patterns: Default::default(),
         };
         // Everything opens through the same paths as File → Open, so a
         // file that fails to load leaves its error on the welcome screen.
@@ -1465,6 +1469,7 @@ impl App {
         }
         self.dialogs(ctx);
         self.palette_ui(ctx);
+        self.pattern_picker_ui(ctx);
         if !self.no_doc
             && self.any_unsaved()
             && self.drag.is_none()
@@ -1880,6 +1885,9 @@ pub(crate) mod a11y_tests {
                 inner_glow: Some(Default::default()),
                 bevel: Some(Default::default()),
                 stroke: Some(Default::default()),
+                pattern_overlay: Some(lumenply_doc::PatternOverlayFx::new(
+                    lumenply_render::pattern::builtin_patterns()[0].reference(),
+                )),
             },
         });
         check(&mut app, "every layer effect on");
