@@ -1257,8 +1257,11 @@ impl App {
                     // The history strip's fold state lives in the prefs but
                     // isn't edited here; keep whatever it is now.
                     let folded = self.prefs.history_collapsed;
+                    // The AI models page applies its setting at once.
+                    let detail = self.prefs.ai_high_detail;
                     self.prefs = p.clone();
                     self.prefs.history_collapsed = folded;
+                    self.prefs.ai_high_detail = detail;
                     self.prefs.apply(&mut self.editor);
                     self.prefs.save();
                     self.status = "Preferences saved".into();

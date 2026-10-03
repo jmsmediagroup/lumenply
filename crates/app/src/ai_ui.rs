@@ -40,6 +40,9 @@ pub(crate) const AI_MODELS: &str = "ai-models";
 const PHASE_RUN: u8 = 0;
 /// Encoding the image for the first click on it (the slow part).
 const PHASE_ENCODING: u8 = 1;
+/// Loading Object Selection's model for the first click after launch
+/// (seconds; the first time on a machine CoreML compiles it, longer).
+const PHASE_LOADING: u8 = 2;
 
 /// One AI edit the user asked for.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,6 +86,7 @@ impl AiTask {
     fn doing_short(&self, phase: u8) -> &'static str {
         match self {
             AiTask::Object { .. } if phase == PHASE_ENCODING => "Analysing the image…",
+            AiTask::Object { .. } if phase == PHASE_LOADING => "Loading the model…",
             _ => "Selecting…",
         }
     }
@@ -91,6 +95,9 @@ impl AiTask {
     fn doing(&self, phase: u8) -> &'static str {
         match self {
             AiTask::Object { .. } if phase == PHASE_ENCODING => "Analysing the image (first click only)…",
+            AiTask::Object { .. } if phase == PHASE_LOADING => {
+                "Loading the Object Selection model (first click only)…"
+            }
             AiTask::Object { .. } => "Selecting the object…",
             AiTask::Subject => "Finding the subject…",
             AiTask::RemoveBackground { .. } => "Separating the subject from the background…",
@@ -113,6 +120,8 @@ pub(crate) struct AiRequest {
     doc_key: u64,
     doc: Document,
     source: Source,
+    /// Subject mattes at the model's larger size (Preferences).
+    high_detail: bool,
 }
 
 /// The inference job in flight.
@@ -120,6 +129,7 @@ struct Running {
     task: AiTask,
     doc_key: u64,
     size: (u32, u32),
+    high_detail: bool,
     job: Job<Result<Vec<f32>, String>>,
 }
 
@@ -128,6 +138,7 @@ struct Finished {
     task: AiTask,
     doc_key: u64,
     size: (u32, u32),
+    high_detail: bool,
     result: Result<Vec<f32>, String>,
     secs: f32,
 }
@@ -149,6 +160,60 @@ pub(crate) struct Consent {
     pub(crate) model: ModelKey,
     pending: Option<AiRequest>,
     pub(crate) phase: ConsentPhase,
+    /// "Download in background": the dialog is closed while the download
+    /// runs (the progress card shows it); a failure opens it again.
+    pub(crate) hidden: bool,
+    /// A failure's technical detail, for the message's tooltip.
+    detail: Option<String>,
+}
+
+impl Consent {
+    fn ask(model: ModelKey, pending: Option<AiRequest>) -> Consent {
+        Consent {
+            model,
+            pending,
+            phase: ConsentPhase::Ask,
+            hidden: false,
+            detail: None,
+        }
+    }
+}
+
+/// A download error as a user should read it: what went wrong and what
+/// to do. The library's own text (a URL and an OS error) is kept for the
+/// tooltip.
+pub(crate) fn download_problem(error: &str) -> String {
+    let e = error.to_ascii_lowercase();
+    let any = |words: &[&str]| words.iter().any(|w| e.contains(w));
+    if any(&["sha-256", "checksum", "does not match"]) {
+        "The downloaded file was damaged (it doesn't match the published one), so it wasn't installed. \
+         Try again."
+            .into()
+    } else if any(&["no space", "os error 28", "disk full"]) {
+        "There isn't enough free disk space for the model.".into()
+    } else if any(&["got ", "more than the expected"]) && e.contains("bytes") {
+        "The download was cut off before it finished.".into()
+    } else if any(&["status code", "http status", "404", "403", "500", "503"]) {
+        "The model's server didn't hand out the file just now. Try again later.".into()
+    } else if any(&[
+        "connection refused",
+        "offline",
+        "dns",
+        "resolve",
+        "unreachable",
+        "timed out",
+        "timeout",
+        "connect",
+        "network",
+        "host",
+        "io:",
+    ]) {
+        "Couldn't reach huggingface.co: the computer seems to be offline, or a firewall or proxy \
+         blocks the connection."
+            .into()
+    } else {
+        error.to_string()
+    }
 }
 
 /// Everything AI the app keeps between frames.
@@ -167,6 +232,9 @@ pub(crate) struct AiState {
     drag: Option<(Pos2, Pos2)>,
     /// The UI's context, so workers can ask for a repaint.
     waker: Option<egui::Context>,
+    /// Object Selection's model has been asked to load ahead of the first
+    /// click (once the tool is picked).
+    warm_requested: bool,
 }
 
 impl AiState {
@@ -188,6 +256,7 @@ impl AiState {
             prefs_tab: false,
             drag: None,
             waker: None,
+            warm_requested: false,
         }
     }
 
@@ -206,6 +275,12 @@ impl AiState {
 
     fn downloading(&self, model: ModelKey) -> Option<&Job<Result<(), String>>> {
         self.downloads.iter().find(|(m, _)| *m == model).map(|(_, j)| j)
+    }
+
+    /// How far a running download of `model` is (0 to 1).
+    #[cfg(feature = "uitest")]
+    pub(crate) fn download_fraction(&self, model: ModelKey) -> Option<f32> {
+        self.downloading(model).map(|j| j.progress.fraction())
     }
 
     /// Anything running, queued or waiting to be applied.
@@ -266,15 +341,34 @@ impl App {
             doc_key: self.doc_key,
             doc: self.editor.doc().clone(),
             source,
+            high_detail: self.prefs.ai_high_detail,
         };
         if !self.ai.installed(task.model()) {
-            // One question at a time; a click while it is up is dropped.
-            if self.ai.consent.is_none() {
-                self.ai.consent = Some(Consent {
-                    model: task.model(),
-                    pending: Some(req),
-                    phase: ConsentPhase::Ask,
-                });
+            let waiting = self
+                .ai
+                .consent
+                .as_ref()
+                .map(|c| (c.hidden && c.model == task.model(), c.model));
+            match waiting {
+                None => self.ai.consent = Some(Consent::ask(task.model(), Some(req))),
+                // Downloading in the background: the latest request runs
+                // once the model is in.
+                Some((true, model)) => {
+                    let pct = self
+                        .ai
+                        .downloading(model)
+                        .map_or(0.0, |j| j.progress.fraction() * 100.0);
+                    let name = self.ai.info(model).name;
+                    self.status = format!(
+                        "{} runs when {name} has downloaded ({pct:.0}% so far)",
+                        task.feature()
+                    );
+                    if let Some(c) = self.ai.consent.as_mut() {
+                        c.pending = Some(req);
+                    }
+                }
+                // One question at a time; a click while it is up is dropped.
+                Some(_) => {}
             }
             return;
         }
@@ -291,22 +385,24 @@ impl App {
             return;
         };
         let service = self.ai.service.clone();
-        let (task, doc_key) = (req.task, req.doc_key);
+        let (task, doc_key, high_detail) = (req.task, req.doc_key, req.high_detail);
         let size = (req.doc.width, req.doc.height);
         let job = Job::spawn(self.ai.waker.clone(), move |progress, _| {
             let image = source_raster(&req.doc, req.source)?;
             match req.task {
                 AiTask::Object { prompt, .. } => {
-                    progress.set_phase(PHASE_RUN);
+                    let ready = service.select_ready();
+                    progress.set_phase(if ready { PHASE_RUN } else { PHASE_LOADING });
                     service.select(&image, &[prompt], &|| progress.set_phase(PHASE_ENCODING))
                 }
-                AiTask::Subject | AiTask::RemoveBackground { .. } => service.matte(&image),
+                AiTask::Subject | AiTask::RemoveBackground { .. } => service.matte(&image, req.high_detail),
             }
         });
         self.ai.running = Some(Running {
             task,
             doc_key,
             size,
+            high_detail,
             job,
         });
     }
@@ -363,6 +459,7 @@ impl App {
 
     pub(crate) fn ai_remove_model(&mut self, model: ModelKey) {
         let name = self.ai.info(model).name;
+        self.ai.warm_requested = false;
         match self.ai.service.remove(model) {
             Ok(()) => self.status = format!("Removed {name}"),
             Err(e) => self.status = format!("Couldn't remove {name}: {e}"),
@@ -410,6 +507,7 @@ impl App {
                     task: r.task,
                     doc_key: r.doc_key,
                     size: r.size,
+                    high_detail: r.high_detail,
                     result: out.and_then(|x| x),
                     secs: r.job.started.elapsed().as_secs_f32(),
                 });
@@ -429,6 +527,7 @@ impl App {
         let ours = self.ai.consent.as_ref().is_some_and(|c| c.model == model);
         match result {
             Ok(()) => {
+                self.ai.warm_requested = false;
                 self.status = format!("Installed {} ({})", info.name, format_bytes(info.bytes));
                 if ours {
                     let c = self.ai.consent.take().expect("checked above");
@@ -445,9 +544,13 @@ impl App {
                 }
             }
             Err(e) => {
-                self.status = format!("Couldn't download {}: {e}", info.name);
+                let why = download_problem(&e);
+                self.status = format!("Couldn't download {}: {why}", info.name);
                 if let (true, Some(c)) = (ours, self.ai.consent.as_mut()) {
-                    c.phase = ConsentPhase::Failed(e);
+                    c.phase = ConsentPhase::Failed(why);
+                    c.detail = Some(e);
+                    // Back in front: the user has to know.
+                    c.hidden = false;
                 }
             }
         }
@@ -506,7 +609,12 @@ impl App {
             self.status.clear();
             self.run(cmd.as_ref());
             if self.status.is_empty() {
-                self.status = format!("{} ({:.1} s)", f.task.label(), f.secs);
+                let detail = if f.high_detail && !matches!(f.task, AiTask::Object { .. }) {
+                    "high detail, "
+                } else {
+                    ""
+                };
+                self.status = format!("{} ({detail}{:.1} s)", f.task.label(), f.secs);
             }
         } else if let Some(tab) = self.tabs.iter_mut().find(|t| t.doc_key == f.doc_key) {
             let title = tab.title();
@@ -558,10 +666,11 @@ impl App {
         let Some(c) = self.ai.consent.as_ref() else {
             return;
         };
-        // Another modal dialog first.
-        if self.dialog.is_some() {
+        // Another modal dialog first; or downloading in the background.
+        if self.dialog.is_some() || c.hidden {
             return;
         }
+        let detail = c.detail.clone();
         let info = self.ai.info(c.model);
         let phase = c.phase.clone();
         let feature = c
@@ -584,6 +693,7 @@ impl App {
         enum Act {
             Download,
             Cancel,
+            Background,
         }
         let mut act = None;
         let shown = egui::Window::new(title)
@@ -650,6 +760,16 @@ impl App {
                                 ),
                             );
                             crate::dialogs::footer(ui, |ui| {
+                                if ui
+                                    .add(footer_button("Download in background"))
+                                    .on_hover_text(format!(
+                                        "Close this window and keep working; {feature} runs when the \
+                                         download is done. The progress shows above the canvas."
+                                    ))
+                                    .clicked()
+                                {
+                                    act = Some(Act::Background);
+                                }
                                 if ui.add(footer_button("Cancel")).clicked() || esc {
                                     act = Some(Act::Cancel);
                                 }
@@ -657,7 +777,10 @@ impl App {
                         }
                         ConsentPhase::Failed(why) => {
                             ui.label(RichText::new(format!("{} wasn't installed.", info.name)).color(TEXT));
-                            ui.add(egui::Label::new(RichText::new(why).color(DANGER)).wrap());
+                            let msg = ui.add(egui::Label::new(RichText::new(why).color(DANGER)).wrap());
+                            if let Some(d) = &detail {
+                                msg.on_hover_text(d);
+                            }
                             crate::dialogs::note(
                                 ui,
                                 "Check the internet connection and try again. The model is needed \
@@ -685,6 +808,11 @@ impl App {
         match act {
             Some(Act::Download) => self.ai_consent_download(),
             Some(Act::Cancel) => self.ai_consent_cancel(),
+            Some(Act::Background) => {
+                if let Some(c) = self.ai.consent.as_mut() {
+                    c.hidden = true;
+                }
+            }
             None => {}
         }
     }
@@ -695,7 +823,7 @@ impl App {
     fn ai_progress_card(&mut self, ctx: &egui::Context) {
         // A modal dialog (Preferences shows downloads in its own rows) or
         // the first-use dialog is in front: never above it.
-        if self.no_doc || self.dialog.is_some() || self.ai.consent.is_some() {
+        if self.no_doc || self.dialog.is_some() || self.ai.consent.as_ref().is_some_and(|c| !c.hidden) {
             return;
         }
         // The running inference, once it has taken long enough to notice
@@ -707,10 +835,13 @@ impl App {
             .filter(|r| !r.job.cancelled())
             .and_then(|r| {
                 let phase = r.job.progress.phase();
-                let slow = phase == PHASE_ENCODING
+                let slow = phase != PHASE_RUN
                     || !matches!(r.task, AiTask::Object { .. })
                     || r.job.started.elapsed() > Duration::from_millis(250);
-                slow.then(|| (r.task.doing(phase).to_string(), self.ai.queue.len()))
+                slow.then(|| {
+                    let secs = r.job.started.elapsed().as_secs();
+                    (r.task.doing(phase).to_string(), self.ai.queue.len(), secs)
+                })
             });
         let downloads: Vec<(ModelKey, String, f32)> = self
             .ai
@@ -737,10 +868,14 @@ impl App {
                     .inner_margin(egui::Margin::symmetric(12.0, 8.0))
                     .show(ui, |ui| {
                         raise_controls(ui);
-                        if let Some((text, waiting)) = &infer {
+                        if let Some((text, waiting, secs)) = &infer {
                             ui.horizontal(|ui| {
                                 ui.add(egui::Spinner::new().size(16.0).color(ACCENT));
                                 ui.label(RichText::new(text).color(TEXT));
+                                // A long wait shows that time is passing.
+                                if *secs >= 2 {
+                                    ui.label(RichText::new(format!("{secs} s")).monospace().color(MUTED));
+                                }
                                 if *waiting > 0 {
                                     ui.label(RichText::new(format!("+{waiting} waiting")).color(MUTED));
                                 }
@@ -795,13 +930,15 @@ impl App {
         crate::dialogs::note(
             ui,
             "Object Selection, Select Subject and Remove Background run on this computer \
-             with these models, downloaded once on first use. Images never leave this computer.",
+             with these models, downloaded once on first use. Images never leave this computer. \
+             Changes on this page apply at once.",
         );
         let unavailable = self.ai.service.unavailable();
         let busy = self.ai.running.is_some();
         let mut download = None;
         let mut cancel = None;
         let mut remove = None;
+        let mut detail = None;
         for m in self.ai.models.clone() {
             ui.add_space(2.0);
             egui::Frame::none()
@@ -812,7 +949,16 @@ impl App {
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
+                        // The facts wrap beside the button instead of
+                        // running under it (a long licence did).
+                        let button_w = if self.ai.downloading(m.key).is_some() {
+                            PREFS_BUTTON_W
+                        } else {
+                            100.0
+                        };
+                        let facts_w = (ui.available_width() - button_w).max(160.0);
                         ui.vertical(|ui| {
+                            ui.set_max_width(facts_w);
                             ui.spacing_mut().item_spacing.y = 2.0;
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new(&m.name).strong().color(TEXT));
@@ -824,18 +970,39 @@ impl App {
                                 ui.label(RichText::new(state).small().color(ink));
                             });
                             ui.label(RichText::new(&m.purpose).color(MUTED));
-                            ui.label(
-                                RichText::new(format!("{}  ·  {} licence", format_bytes(m.bytes), m.licence))
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!(
+                                        "{}  ·  {} licence",
+                                        format_bytes(m.bytes),
+                                        m.licence
+                                    ))
                                     .color(MUTED),
+                                )
+                                .wrap(),
                             );
                             ui.add(
                                 egui::Label::new(RichText::new(&m.source).small().color(MUTED)).truncate(),
                             )
                             .on_hover_text(format!("Downloaded from {}", m.source));
+                            if m.key == ModelKey::BiRefNetLite {
+                                ui.add_space(4.0);
+                                let mut high = self.prefs.ai_high_detail;
+                                let r = check(ui, &mut high, "High detail for hair and fur").on_hover_text(
+                                    "Runs the model at 1024 × 1024 instead of 768 × 768: finer edges, \
+                                     about twice as slow, and a run needs about 5 GB of free memory \
+                                     instead of 3 GB",
+                                );
+                                if r.changed() {
+                                    detail = Some(high);
+                                }
+                            }
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if let Some(job) = self.ai.downloading(m.key) {
-                                if ui.add(footer_button("Cancel")).clicked() {
+                                let r = ui.add(footer_button("Cancel"));
+                                a11y_name(&r, &format!("Cancel the {} download", m.name));
+                                if r.clicked() {
                                     cancel = Some(m.key);
                                 }
                                 let frac = job.progress.fraction();
@@ -850,6 +1017,8 @@ impl App {
                                     .add_enabled(!busy, footer_button("Remove"))
                                     .on_hover_text(format!("Delete {} from this computer", m.name))
                                     .on_disabled_hover_text("Wait for the running job to finish");
+                                // Two rows have a Remove: say which.
+                                a11y_name(&r, &format!("Remove {}", m.name));
                                 if r.clicked() {
                                     remove = Some(m.key);
                                 }
@@ -862,6 +1031,7 @@ impl App {
                                         m.source
                                     ))
                                     .on_disabled_hover_text(unavailable.clone().unwrap_or_default());
+                                a11y_name(&r, &format!("Download {}", m.name));
                                 if r.clicked() {
                                     download = Some(m.key);
                                 }
@@ -894,6 +1064,15 @@ impl App {
         }
         if let Some(m) = remove {
             self.ai_remove_model(m);
+        }
+        if let Some(high) = detail {
+            self.prefs.ai_high_detail = high;
+            self.prefs.save();
+            self.status = if high {
+                "Select Subject and Remove Background: high detail".into()
+            } else {
+                "Select Subject and Remove Background: standard detail".into()
+            };
         }
         true
     }
@@ -968,8 +1147,24 @@ impl App {
         }
     }
 
+    /// Load Object Selection's model in the background once the tool is
+    /// picked, so the first click doesn't wait for it (the first time on a
+    /// machine that took 21 s, CoreML compiling it).
+    pub(crate) fn ai_warm_select(&mut self) {
+        if self.ai.warm_requested
+            || !self.ai.installed(ModelKey::MobileSam)
+            || self.ai.service.unavailable().is_some()
+        {
+            return;
+        }
+        self.ai.warm_requested = true;
+        let service = self.ai.service.clone();
+        std::thread::spawn(move || service.prepare_select());
+    }
+
     /// The Wand bar in Object Selection mode.
     pub(crate) fn object_select_bar(&mut self, ui: &mut egui::Ui, tight: bool) {
+        self.ai_warm_select();
         crate::options_bar::select_ops(ui, &mut self.select_op);
         ui.separator();
         check(ui, &mut self.sample_merged, "All layers")
@@ -987,6 +1182,13 @@ impl App {
         } else if let Some(doing) = running {
             ui.add(egui::Spinner::new().size(14.0).color(ACCENT));
             ui.label(RichText::new(doing).color(TEXT));
+        } else if let Some(frac) = self
+            .ai
+            .downloading(ModelKey::MobileSam)
+            .map(|j| j.progress.fraction())
+        {
+            ui.add(egui::Spinner::new().size(14.0).color(ACCENT));
+            ui.label(RichText::new(format!("Downloading the model… {:.0}%", frac * 100.0)).color(TEXT));
         } else if !self.ai.installed(ModelKey::MobileSam) {
             let info = self.ai.info(ModelKey::MobileSam);
             let label = if tight {
@@ -1005,11 +1207,7 @@ impl App {
                 .clicked()
                 && self.ai.consent.is_none()
             {
-                self.ai.consent = Some(Consent {
-                    model: ModelKey::MobileSam,
-                    pending: None,
-                    phase: ConsentPhase::Ask,
-                });
+                self.ai.consent = Some(Consent::ask(ModelKey::MobileSam, None));
             }
         } else if !tight {
             ui.label(
@@ -1098,11 +1296,7 @@ impl App {
                 let Some(model) = ModelKey::from_slug(arg) else {
                     return false;
                 };
-                self.ai.consent = Some(Consent {
-                    model,
-                    pending: None,
-                    phase: ConsentPhase::Ask,
-                });
+                self.ai.consent = Some(Consent::ask(model, None));
                 if verb == "download" {
                     self.ai_consent_download();
                 }
@@ -1149,6 +1343,10 @@ impl App {
         true
     }
 }
+
+/// Room a model row in Preferences keeps for its button (or its
+/// download's bar, figure and Cancel).
+const PREFS_BUTTON_W: f32 = 230.0;
 
 /// A thin determinate bar, its figures left to a label beside it (egui's
 /// own text sits in the bar's ink and vanishes past the filled part).

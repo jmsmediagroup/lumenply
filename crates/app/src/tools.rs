@@ -108,7 +108,7 @@ impl Tool {
             Tool::EllipseSelect => "Elliptical Marquee (Shift+M)",
             Tool::Lasso => "Lasso (L)",
             Tool::PolyLasso => "Polygonal Lasso (Shift+L)",
-            Tool::Wand => "Magic Wand (W)",
+            Tool::Wand => "Magic Wand (W) · Quick Selection · Object Selection (Shift+W)",
             Tool::Hand => "Hand (H) · Zoom (Z)",
             Tool::Crop => "Crop (C) — drag the handles; drag outside the frame to straighten; Enter crops",
             Tool::Shape => {
