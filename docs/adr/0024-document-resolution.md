@@ -31,16 +31,19 @@ and units.
     inch (fractional ppi round on JPEG export). Written by patching the
     encoded bytes (`crates/io/src/resolution.rs`), so the codecs and their
     callers stay resolution-free.
-  - Read-only: EXIF/TIFF XResolution (+ ResolutionUnit) and a Photoshop
-    APP13 1005 block inside JPEGs (precedence APP13 > EXIF > JFIF).
+  - TIFF (16-bit export): X/YResolution as rationals (1/1000 ppi) with
+    ResolutionUnit = inch, added by writing a copy of the first IFD with
+    the extra entries at the end of the file and pointing the header at it
+    (the `image` crate's TIFF encoder has no resolution tags).
+  - Read-only: EXIF XResolution (+ ResolutionUnit) and a Photoshop APP13
+    1005 block inside JPEGs (precedence APP13 > EXIF > JFIF).
   - Values read from files snap to the whole number they came from when
     within 0.02 ppi (PNG's 11811 px/m reads 300, not 299.9994), else keep
     two decimals.
   - OpenRaster: the `xres`/`yres` attributes of `<image>` (ppi), read
     and written.
   - PDF: the page is the print size, `width / ppi` inches.
-- Not stored: TIFF export (the `image` crate's TIFF encoder has no
-  resolution tags), WebP and GIF (no standard field).
+- Not stored: WebP and GIF (no standard field).
 
 ## Consequences
 

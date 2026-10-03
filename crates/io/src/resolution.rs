@@ -222,6 +222,91 @@ pub fn tiff_ppi(t: &[u8]) -> Option<f32> {
     }
 }
 
+/// One raw 12-byte IFD entry with its tag.
+type IfdEntry = (u16, [u8; 12]);
+
+/// `t` (a classic TIFF) with X/YResolution set to `ppi` and
+/// ResolutionUnit to inches. The first IFD is rewritten, with the new
+/// entries, at the end of the file and the header pointed at it; every
+/// other byte stays where it was, so offsets into the old data still hold.
+/// Anything that isn't a well-formed TIFF comes back as is.
+pub fn tiff_with_ppi(t: &[u8], ppi: f32) -> Vec<u8> {
+    let le = match t.get(0..2) {
+        Some(b"II") => true,
+        Some(b"MM") => false,
+        _ => return t.to_vec(),
+    };
+    let u16_at = |at: usize| -> Option<u16> {
+        let b: [u8; 2] = t.get(at..at + 2)?.try_into().ok()?;
+        Some(if le {
+            u16::from_le_bytes(b)
+        } else {
+            u16::from_be_bytes(b)
+        })
+    };
+    let u32_at = |at: usize| -> Option<u32> {
+        let b: [u8; 4] = t.get(at..at + 4)?.try_into().ok()?;
+        Some(if le {
+            u32::from_le_bytes(b)
+        } else {
+            u32::from_be_bytes(b)
+        })
+    };
+    let p16 = |v: u16| if le { v.to_le_bytes() } else { v.to_be_bytes() };
+    let p32 = |v: u32| if le { v.to_le_bytes() } else { v.to_be_bytes() };
+    let parsed = (|| -> Option<(Vec<IfdEntry>, u32)> {
+        if u16_at(2)? != 42 {
+            return None;
+        }
+        let ifd = u32_at(4)? as usize;
+        let count = u16_at(ifd)? as usize;
+        let mut entries = Vec::with_capacity(count + 3);
+        for i in 0..count {
+            let e = ifd + 2 + 12 * i;
+            entries.push((u16_at(e)?, t.get(e..e + 12)?.try_into().ok()?));
+        }
+        Some((entries, u32_at(ifd + 2 + 12 * count)?))
+    })();
+    let Some((mut entries, next)) = parsed else {
+        return t.to_vec();
+    };
+    entries.retain(|(tag, _)| !matches!(tag, 282 | 283 | 296));
+    let mut out = t.to_vec();
+    if out.len() % 2 == 1 {
+        out.push(0); // IFDs start on a word boundary
+    }
+    let ifd_at = out.len();
+    let n = entries.len() + 3;
+    let rational_at = (ifd_at + 2 + 12 * n + 4) as u32;
+    // Resolution as a rational with 1/1000 ppi precision.
+    let num = (ppi as f64 * 1000.0).round().clamp(1.0, u32::MAX as f64) as u32;
+    let entry = |tag: u16, kind: u16, value: [u8; 4]| {
+        let mut e = [0u8; 12];
+        e[0..2].copy_from_slice(&p16(tag));
+        e[2..4].copy_from_slice(&p16(kind));
+        e[4..8].copy_from_slice(&p32(1));
+        e[8..12].copy_from_slice(&value);
+        (tag, e)
+    };
+    let mut unit = [0u8; 4];
+    unit[0..2].copy_from_slice(&p16(2)); // inches
+    entries.push(entry(282, 5, p32(rational_at)));
+    entries.push(entry(283, 5, p32(rational_at + 8)));
+    entries.push(entry(296, 3, unit));
+    entries.sort_by_key(|(tag, _)| *tag);
+    out.extend_from_slice(&p16(n as u16));
+    for (_, e) in &entries {
+        out.extend_from_slice(e);
+    }
+    out.extend_from_slice(&p32(next));
+    for _ in 0..2 {
+        out.extend_from_slice(&p32(num));
+        out.extend_from_slice(&p32(1000));
+    }
+    out[4..8].copy_from_slice(&p32(ifd_at as u32));
+    out
+}
+
 // ---- JPEG -----------------------------------------------------------------------
 
 /// Each `(marker, payload)` of a JPEG's header segments, up to the scan.
@@ -310,14 +395,16 @@ pub fn read_ppi(bytes: &[u8]) -> Option<f32> {
     }
 }
 
-/// `bytes` with `ppi` written in when the format is PNG or JPEG; other
-/// formats (WebP, GIF, …) have no common resolution field and come back
-/// unchanged.
+/// `bytes` with `ppi` written in when the format is PNG, JPEG or TIFF;
+/// other formats (WebP, GIF, …) have no common resolution field and come
+/// back unchanged.
 pub fn with_ppi(bytes: Vec<u8>, ppi: f32) -> Vec<u8> {
     if bytes.starts_with(PNG_SIG) {
         png_with_ppi(&bytes, ppi)
     } else if bytes.starts_with(&[0xFF, 0xD8]) {
         jpeg_with_ppi(&bytes, ppi)
+    } else if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+        tiff_with_ppi(&bytes, ppi)
     } else {
         bytes
     }
@@ -328,7 +415,7 @@ pub fn file_ppi(path: impl AsRef<Path>) -> Option<f32> {
     read_ppi(&std::fs::read(path).ok()?)
 }
 
-/// Write `ppi` into the PNG or JPEG file at `path` in place.
+/// Write `ppi` into the PNG, JPEG or TIFF file at `path` in place.
 pub fn set_file_ppi(path: impl AsRef<Path>, ppi: f32) -> Result<(), IoError> {
     let path = path.as_ref();
     let bytes = std::fs::read(path)?;
@@ -555,6 +642,32 @@ mod tests {
         }
         zout.finish().unwrap();
         assert_eq!(crate::project::load(&old).unwrap().resolution, 72.0);
+    }
+
+    #[test]
+    fn tiff_write_round_trip() {
+        // A 16-bit TIFF as File ▸ Export 16-bit writes it.
+        let dir = std::env::temp_dir().join("lumenply-resolution-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("r.tif");
+        crate::save_16bit(&path, &sample()).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        set_file_ppi(&path, 300.0).unwrap();
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(read_ppi(&after), Some(300.0));
+        // The image itself is untouched and still decodes the same.
+        let a = image::load_from_memory(&before).unwrap().to_rgba16();
+        let b = image::load_from_memory(&after).unwrap().to_rgba16();
+        assert_eq!(a.as_raw(), b.as_raw());
+        // Re-tagging replaces the entries; fractional ppi keeps 1/1000.
+        let again = tiff_with_ppi(&after, 72.5);
+        assert_eq!(tiff_ppi(&again), Some(72.5));
+        // A file that already had resolution entries gets them replaced.
+        assert_eq!(
+            tiff_ppi(&tiff_with_ppi(&tiff_bytes(72, 1, 2), 150.0)),
+            Some(150.0)
+        );
+        assert_eq!(tiff_with_ppi(b"II*\0garbage", 300.0), b"II*\0garbage".to_vec());
     }
 
     #[test]
