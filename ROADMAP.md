@@ -115,10 +115,9 @@ history; wgpu executes the graph on the GPU.
       costs that blob) + optional render hints; atomic save; v1/`.nge`
       convert with `load_any_as_graph`; all 482 corpus files save, reload
       and render bit-identically, 45% smaller than the PSDs with hints
-- [ ] The app opens and saves format 3 (needs the graph-backed editor)
-- [ ] Pattern Overlay effect pixels as blobs in the graph (today only in
-      memory); disabled smart filters and the stack's master switch in the
-      graph
+- [x] Pattern Overlay pixels are a blob the `layer`/`clip-group` op names
+      (in the content key and the file); the old manifest table still reads
+- [ ] Disabled smart filters and the stack's master switch in the graph
 - [x] Stage 3a, graph-backed editor: undo history is graph versions (graph
       + `DocState`), `editor.doc()` is their projection, sync reuses every
       unchanged layer's nodes (content keys stay, caches keep hitting);
@@ -127,8 +126,17 @@ history; wgpu executes the graph on the GPU.
       `DocState` is format 3's meta. A 400-step random edit sequence
       renders like the layer tree at every step; ~1 ms sync per stroke on a
       30-layer 4000×3000 document
-- [ ] Stage 3b: the app renders through `Editor::renderer()` (replacing
-      `BelowCache`) and opens and saves `.lumen` format 3
+- [x] Stage 3b: the canvas renders through the graph renderer (`BelowCache`
+      is gone; previews composite the edited layers over a graph backdrop;
+      transient composites skip caching single-use tiles); on a 30-layer
+      4000×3000 document a stroke commit redraws in 13 ms (was 89), undo in
+      6 ms (was 91), an opacity tick in 76 ms (was 175); Preferences ▸
+      Render cache (default 1536 MB) with a status-bar readout
+- [x] The app opens, saves, autosaves and recovers `.lumen` format 3 (format
+      1 and `.nge` still open; a one-time notice on conversion)
+- [ ] Brush preview applies only new dabs instead of re-painting the whole
+      stroke every frame (10–14 ms, now the main cost of stroke-to-screen);
+      group thumbnails through the graph renderer
 - [ ] Port more commands to `Command::graph_edit` (fills, pixel filters and
       adjustments, mask painting); memoise content keys along long chains
 - [x] Stage 4a, GPU executor (ADR 0027): `lumenply_graph::GpuRenderer`,
