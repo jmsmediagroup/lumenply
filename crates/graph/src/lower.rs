@@ -205,3 +205,44 @@ impl Cx<'_> {
         id
     }
 }
+
+/// Run one step of the lowering on an existing graph (for
+/// [`crate::sync`], which lowers only what changed).
+fn with_cx<T>(
+    graph: &mut Graph,
+    blobs: &mut BlobStore,
+    hasher: &TileHasher,
+    f: impl FnOnce(&mut Cx) -> T,
+) -> T {
+    let mut cx = Cx {
+        graph: std::mem::replace(graph, Graph::new(0, 0)),
+        blobs,
+        hasher,
+        layer_nodes: HashMap::new(),
+    };
+    let out = f(&mut cx);
+    *graph = cx.graph;
+    out
+}
+
+/// The nodes producing a (non-group) layer's own pixels, as [`lower`]
+/// makes them; returns the last.
+pub(crate) fn lower_content(
+    graph: &mut Graph,
+    blobs: &mut BlobStore,
+    hasher: &TileHasher,
+    layer: &Layer,
+) -> NodeId {
+    debug_assert!(!matches!(layer.content, LayerContent::Group(_)));
+    with_cx(graph, blobs, hasher, |cx| cx.content(layer))
+}
+
+/// A layer's mask node, as [`lower`] makes it (`None`: no enabled mask).
+pub(crate) fn lower_mask(
+    graph: &mut Graph,
+    blobs: &mut BlobStore,
+    hasher: &TileHasher,
+    layer: &Layer,
+) -> Option<NodeId> {
+    with_cx(graph, blobs, hasher, |cx| cx.mask(layer))
+}

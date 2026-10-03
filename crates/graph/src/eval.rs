@@ -103,6 +103,22 @@ impl Renderer {
         }
     }
 
+    /// A bound on where `node`'s output can be non-transparent (`None`:
+    /// transparent everywhere). Not limited to the canvas.
+    pub fn extent(&self, graph: &Graph, blobs: &BlobStore, node: NodeId) -> Option<Rect> {
+        self.ctx(graph, blobs, node).extent(node)
+    }
+
+    /// All of `node`'s output: every tile within its extent, on the canvas
+    /// or off it (a layer's pixels may reach past the canvas).
+    pub fn render_all(&self, graph: &Graph, blobs: &BlobStore, node: NodeId) -> TileStore {
+        let ctx = self.ctx(graph, blobs, node);
+        match ctx.extent(node) {
+            Some(r) => ctx.area(node, r),
+            None => TileStore::new(),
+        }
+    }
+
     /// `node`'s output over the tiles touching `rect`.
     pub fn render_node(&self, graph: &Graph, blobs: &BlobStore, node: NodeId, rect: Rect) -> TileStore {
         self.ctx(graph, blobs, node).area(node, rect)

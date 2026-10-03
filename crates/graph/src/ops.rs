@@ -165,6 +165,9 @@ pub enum Op {
         base: LayerProps,
         members: Vec<ClipMember>,
     },
+    /// The input shifted by whole pixels (a pixel layer moved).
+    /// Port: input.
+    Translate { dx: i32, dy: i32 },
 }
 
 impl Op {
@@ -179,6 +182,7 @@ impl Op {
             Op::FilterLayer { .. } => "filter-layer",
             Op::PassThrough { .. } => "pass-through",
             Op::ClipGroup { .. } => "clip-group",
+            Op::Translate { .. } => "translate",
         }
     }
 
@@ -190,6 +194,7 @@ impl Op {
             Op::Adjustment { .. } | Op::FilterLayer { .. } => &["backdrop", "mask"],
             Op::PassThrough { .. } => &["before", "after", "mask"],
             Op::ClipGroup { .. } => &["backdrop", "base", "base-mask"],
+            Op::Translate { .. } => &["input"],
         }
     }
 
@@ -301,6 +306,7 @@ pub(crate) fn extent(ctx: &Ctx, id: crate::NodeId) -> Option<Rect> {
                 .unwrap_or(0);
             union(input(0), input(1).map(|r| grow(r, pad)))
         }
+        Op::Translate { dx, dy } => input(0).map(|r| crate::translate::shift(r, *dx, *dy)),
     }
 }
 
@@ -470,5 +476,6 @@ pub(crate) fn eval_tile(ctx: &Ctx, node: &Node, coord: TileCoord) -> Option<Arc<
             }
             lumenply_render::render_tile_over(owned(backdrop), &layers, coord, ctx.canvas).map(Arc::new)
         }
+        Op::Translate { dx, dy } => crate::translate::tile(ctx, input(0), *dx, *dy, coord),
     }
 }

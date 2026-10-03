@@ -17,15 +17,20 @@ pub mod key;
 pub mod lower;
 pub mod model;
 pub mod ops;
+pub mod sync;
+mod translate;
 
 pub use blob::{BlobId, BlobStore, Hash, TileHasher};
 pub use cache::{CacheStats, TileCache};
 pub use eval::{Ctx, Renderer};
-pub use history::History;
+pub use history::{History, Version};
 pub use key::{Key, KeyMemo};
 pub use lower::{lower, Lowered};
 pub use model::{Graph, GraphError, Node, NodeId, FORMAT};
 pub use ops::{ClipMember, LayerProps, Op};
+pub use sync::{project, sync, Base, ContentEdit, DocState, EditInput, LayerRecord};
 
+#[cfg(test)]
+mod sync_tests;
 #[cfg(test)]
 mod tests;

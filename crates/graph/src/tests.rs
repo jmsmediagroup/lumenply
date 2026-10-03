@@ -34,7 +34,7 @@ fn half_mask(area: Rect) -> Mask {
 /// A document using every compositing feature the lowering handles:
 /// blend modes, opacity, fill, masks, effects, adjustment and filter
 /// layers, isolated and pass-through groups, and a clip chain.
-fn busy_document() -> Document {
+pub(crate) fn busy_document() -> Document {
     let mut doc = Document::new(300, 280);
     let canvas = doc.canvas();
     let bg = painted(&mut doc, "Background", canvas, [0.9, 0.85, 0.7, 1.0]);
@@ -123,7 +123,7 @@ fn busy_document() -> Document {
     doc
 }
 
-fn assert_same(a: &TileStore, b: &TileStore, canvas: Rect) {
+pub(crate) fn assert_same(a: &TileStore, b: &TileStore, canvas: Rect) {
     let mut worst = 0.0f32;
     for y in canvas.y..canvas.bottom() {
         for x in canvas.x..canvas.right() {

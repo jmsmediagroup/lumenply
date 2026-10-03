@@ -809,11 +809,20 @@ impl Command for MoveLayer {
     }
 
     fn apply(&self, doc: &mut Document) -> EditResult {
+        self.as_transform().apply(doc)
+    }
+
+    fn graph_edit(&self, doc: &Document) -> Option<crate::ContentEdit> {
+        self.as_transform().graph_edit(doc)
+    }
+}
+
+impl MoveLayer {
+    fn as_transform(&self) -> TransformLayer {
         TransformLayer {
             layer: self.layer,
             transform: Affine::translate(self.dx as f32, self.dy as f32),
         }
-        .apply(doc)
     }
 }
 
@@ -855,6 +864,21 @@ impl Command for TransformLayer {
         } else {
             "Transform".into()
         }
+    }
+
+    /// Moving a plain pixel layer by whole pixels is a `translate` op on
+    /// its content: exactly `TileStore::translated`, which is what `apply`
+    /// does for it. A layer with a mask or a smart-filter mask goes through
+    /// `apply`, which moves those too.
+    fn graph_edit(&self, doc: &Document) -> Option<crate::ContentEdit> {
+        let (dx, dy) = self.transform.integer_translation()?;
+        let l = doc.layer(self.layer)?;
+        let plain = matches!(l.content, LayerContent::Pixel(_))
+            && l.mask.is_none()
+            && l.smart_filters.mask.is_none()
+            && l.smart_filters.filtered().is_none();
+        (plain && (dx, dy) != (0, 0))
+            .then(|| crate::ContentEdit::new(self.layer, lumenply_graph::Op::Translate { dx, dy }))
     }
 
     fn apply(&self, doc: &mut Document) -> EditResult {
