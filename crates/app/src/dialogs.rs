@@ -328,11 +328,15 @@ impl App {
             self.open_image(path);
             return;
         }
-        match project::load(path) {
-            Ok(doc) => {
-                self.open_in_new_tab(Editor::new(doc), Some(PathBuf::from(path)));
+        match crate::project_io::open_project(std::path::Path::new(path)) {
+            Ok(opened) => {
+                self.open_in_new_tab(opened.editor, Some(PathBuf::from(path)));
                 self.recent = session::push_recent(path);
-                self.status = format!("Opened {path}");
+                self.status = if opened.warnings.is_empty() {
+                    format!("Opened {path}")
+                } else {
+                    format!("Opened {path} ({})", opened.warnings.join("; "))
+                };
                 self.note_missing_fonts();
             }
             Err(e) => self.status = format!("Could not open {path}: {e}"),
@@ -394,8 +398,14 @@ impl App {
     }
 
     pub(crate) fn save_path(&mut self, path: &str) {
-        match project::save(path, self.editor.doc()) {
-            Ok(()) => {
+        // Saving always writes format 3 (ADR 0026); say so once when that
+        // replaces, or comes from, a layer-tree project older versions read.
+        let converted = [Some(std::path::Path::new(path)), self.path.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(crate::project_io::is_layer_tree_project);
+        match crate::project_io::ProjectSnapshot::of(&self.editor).save(std::path::Path::new(path)) {
+            Ok(_) => {
                 self.path = Some(PathBuf::from(path));
                 self.saved_rev = self.editor.history().len();
                 self.recent = session::push_recent(path);
@@ -408,7 +418,11 @@ impl App {
                 } else {
                     session::remove_autosave();
                 }
-                self.status = format!("Saved {path}");
+                self.status = if converted {
+                    format!("Saved {path} in the new project format")
+                } else {
+                    format!("Saved {path}")
+                };
             }
             Err(e) => self.status = format!("Could not save: {e}"),
         }

@@ -66,6 +66,7 @@ mod paths_panel;
 mod pattern_ui;
 mod pen;
 mod perspective_crop_ui;
+mod project_io;
 mod properties;
 mod puppet_ui;
 mod quick_select_tool;
@@ -959,13 +960,13 @@ impl App {
     /// True when any open tab has unsaved changes.
     /// Every open document with unsaved changes (the active one first),
     /// with where it came from: what an autosave backs up.
-    fn unsaved_docs(&self) -> Vec<(lumenply_doc::Document, Option<PathBuf>)> {
+    fn unsaved_docs(&self) -> Vec<(project_io::ProjectSnapshot, Option<PathBuf>)> {
         let mut out = Vec::new();
         if self.editor.history().len() != self.saved_rev {
-            out.push((self.editor.doc().clone(), self.path.clone()));
+            out.push((project_io::ProjectSnapshot::of(&self.editor), self.path.clone()));
         }
         for t in self.tabs.iter().filter(|t| t.unsaved()) {
-            out.push((t.editor.doc().clone(), t.path.clone()));
+            out.push((project_io::ProjectSnapshot::of(&t.editor), t.path.clone()));
         }
         out
     }

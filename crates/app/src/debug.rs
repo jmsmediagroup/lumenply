@@ -367,7 +367,9 @@ impl App {
             restyle(self, &|t| t.font = name.to_string());
         } else if let Some(path) = rest.strip_prefix("save:") {
             // Straight to disk: no recent-files entry, no autosave cleanup.
-            if let Err(e) = project::save(path, self.editor.doc()) {
+            if let Err(e) =
+                crate::project_io::ProjectSnapshot::of(&self.editor).save(std::path::Path::new(path))
+            {
                 self.status = format!("Could not save: {e}");
             }
         } else if let Some(q) = rest.strip_prefix("font-open") {
@@ -438,7 +440,7 @@ impl App {
                     if let Some(dir) = file.parent() {
                         let _ = std::fs::create_dir_all(dir);
                     }
-                    let _ = project::save(&file, ed.doc());
+                    let _ = crate::project_io::ProjectSnapshot::of(&ed).save(&file);
                 }
             }
             "start:recover-now" => self.recover_autosave(),

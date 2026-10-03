@@ -329,12 +329,12 @@ pub(crate) fn remove_autosave() {
 /// Back up every unsaved open document (and where each came from), off
 /// the UI thread, replacing the previous set. Project saves are atomic, so
 /// a crash mid-write never leaves a corrupt backup.
-pub(crate) fn autosave_all(docs: Vec<(Document, Option<PathBuf>)>) {
+pub(crate) fn autosave_all(docs: Vec<(crate::project_io::ProjectSnapshot, Option<PathBuf>)>) {
     std::thread::spawn(move || write_backups(&docs));
 }
 
 /// [`autosave_all`]'s work, on the calling thread.
-pub(crate) fn write_backups(docs: &[(Document, Option<PathBuf>)]) {
+pub(crate) fn write_backups(docs: &[(crate::project_io::ProjectSnapshot, Option<PathBuf>)]) {
     let (Some(dir), Some(single), Some(single_src)) =
         (autosave_dir(), autosave_file(), autosave_source_file())
     else {
@@ -345,7 +345,7 @@ pub(crate) fn write_backups(docs: &[(Document, Option<PathBuf>)]) {
             return;
         }
         for (i, (doc, source)) in docs.iter().enumerate() {
-            if project::save(dir.join(format!("{i}.lumen")), doc).is_ok() {
+            if doc.save(&dir.join(format!("{i}.lumen"))).is_ok() {
                 let text = source
                     .as_ref()
                     .map(|p| p.to_string_lossy().into_owned())
