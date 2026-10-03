@@ -482,7 +482,27 @@ pub(crate) fn image_size_ui(ui: &mut egui::Ui, st: &mut ImageSizeState) {
     );
 }
 
-/// File ▸ New's body: preset, pixel size, resolution, and the print size.
+/// A pixel count shown in `unit` (pixels, or a print size at `ppi`).
+fn px_in(px: u32, unit: SizeUnit, ppi: f32) -> f64 {
+    match unit.per_inch() {
+        Some(k) => px as f64 / ppi.max(f32::MIN_POSITIVE) as f64 * k,
+        None => px as f64,
+    }
+}
+
+/// The pixel count for `v` in `unit` at `ppi`.
+fn px_from(v: f64, unit: SizeUnit, ppi: f32) -> u32 {
+    if !v.is_finite() || v <= 0.0 {
+        return 1;
+    }
+    match unit.per_inch() {
+        Some(k) => clamp_side(v / k * ppi as f64),
+        None => clamp_side(v),
+    }
+}
+
+/// File ▸ New's body: preset, size in pixels or print units, resolution,
+/// and the print size.
 pub(crate) fn new_doc_ui(ui: &mut egui::Ui, w: &mut u32, h: &mut u32, ppi: &mut f32) {
     ui.horizontal(|ui| {
         row_label(ui, "Preset", LABEL_W);
@@ -505,16 +525,39 @@ pub(crate) fn new_doc_ui(ui: &mut egui::Ui, w: &mut u32, h: &mut u32, ppi: &mut 
             (*w, *h, *ppi) = (pw, ph, pp);
         }
     });
-    field_row(
+    // The size unit is a view preference kept for the session.
+    let unit_id = egui::Id::new("new-doc-size-unit");
+    let unit = ui
+        .data(|d| d.get_temp::<SizeUnit>(unit_id))
+        .unwrap_or(SizeUnit::Pixels);
+    let units: Vec<(SizeUnit, &str)> = SizeUnit::ALL
+        .iter()
+        .filter(|u| **u != SizeUnit::Percent)
+        .map(|u| (*u, u.label()))
+        .collect();
+    let (decimals, speed) = match unit.per_inch() {
+        None => ((0, 0), 1.0),
+        Some(k) => ((2, 2), 0.01 * k),
+    };
+    let mut wv = px_in(*w, unit, *ppi);
+    let mut u = unit;
+    if unit_row(
         ui,
         "Width",
-        egui::DragValue::new(w).range(1..=MAX_SIDE).suffix(" px"),
-    );
-    field_row(
-        ui,
-        "Height",
-        egui::DragValue::new(h).range(1..=MAX_SIDE).suffix(" px"),
-    );
+        &mut wv,
+        decimals,
+        speed,
+        true,
+        Some(("new-doc-unit", &mut u, units.as_slice())),
+    ) {
+        *w = px_from(wv, unit, *ppi);
+    }
+    let mut hv = px_in(*h, unit, *ppi);
+    if unit_row::<SizeUnit>(ui, "Height", &mut hv, decimals, speed, true, None) {
+        *h = px_from(hv, unit, *ppi);
+    }
+    ui.data_mut(|d| d.insert_temp(unit_id, u));
+    let before = *ppi;
     field_row(
         ui,
         "Resolution",
@@ -523,10 +566,17 @@ pub(crate) fn new_doc_ui(ui: &mut egui::Ui, w: &mut u32, h: &mut u32, ppi: &mut 
             .max_decimals(2)
             .suffix(" ppi"),
     );
+    if *ppi != before && unit.per_inch().is_some() {
+        // Sized in print units: the print size stays, pixels follow.
+        *w = px_from(px_in(*w, unit, before), unit, *ppi);
+        *h = px_from(px_in(*h, unit, before), unit, *ppi);
+    }
     note(
         ui,
         &format!(
-            "Prints at {} ({}).",
+            "{} × {} pixels.\nPrints at {} ({}).",
+            *w,
+            *h,
             print_size_text(*w, *h, *ppi),
             print_size_cm(*w, *h, *ppi)
         ),
@@ -537,22 +587,23 @@ impl App {
     /// Screenshot hooks (`size:...`): `size:unit=in|cm|mm|px|pct`,
     /// `size:resample=on|off`, `size:width=V` (in the shown unit) and
     /// `size:res=V` act on an open Image Size dialog; `size:new=N` picks
-    /// New's preset N; `size:doc-ppi=V` sets the document's resolution.
-    pub(crate) fn debug_image_size(&mut self, tok: &str) -> bool {
+    /// New's preset N and `size:new-unit=in|cm|mm|px` its size unit;
+    /// `size:doc-ppi=V` sets the document's resolution.
+    pub(crate) fn debug_image_size(&mut self, ctx: &egui::Context, tok: &str) -> bool {
         let Some((key, val)) = tok.strip_prefix("size:").and_then(|r| r.split_once('=')) else {
             return false;
         };
         let num = val.parse::<f64>().ok();
+        let unit = match val {
+            "in" => SizeUnit::Inches,
+            "cm" => SizeUnit::Cm,
+            "mm" => SizeUnit::Mm,
+            "pct" => SizeUnit::Percent,
+            _ => SizeUnit::Pixels,
+        };
         match (key, &mut self.dialog) {
-            ("unit", Some(Dialog::ImageSize(st))) => {
-                st.unit = match val {
-                    "in" => SizeUnit::Inches,
-                    "cm" => SizeUnit::Cm,
-                    "mm" => SizeUnit::Mm,
-                    "pct" => SizeUnit::Percent,
-                    _ => SizeUnit::Pixels,
-                }
-            }
+            ("unit", Some(Dialog::ImageSize(st))) => st.unit = unit,
+            ("new-unit", _) => ctx.data_mut(|d| d.insert_temp(egui::Id::new("new-doc-size-unit"), unit)),
             ("resample", Some(Dialog::ImageSize(st))) => st.set_resample(val != "off"),
             ("width", Some(Dialog::ImageSize(st))) => st.set_width(st.unit, num.unwrap_or(0.0)),
             ("res", Some(Dialog::ImageSize(st))) => st.set_resolution(st.res_unit, num.unwrap_or(0.0)),
@@ -739,6 +790,22 @@ mod tests {
         assert_eq!(print_size_zoom(sppi), 1.0);
         assert_eq!(print_size_zoom(sppi * 2.0), 0.5);
         assert_eq!(print_size_zoom(30_000.0), 0.05, "clamped like other zooms");
+    }
+
+    #[test]
+    fn new_document_print_units() {
+        assert_eq!(px_in(2550, SizeUnit::Inches, 300.0), 8.5);
+        assert_eq!(px_from(8.5, SizeUnit::Inches, 300.0), 2550);
+        // 210 × 297 mm at 300 ppi: A4's 2480 × 3508.
+        assert_eq!(px_from(210.0, SizeUnit::Mm, 300.0), 2480);
+        assert_eq!(px_from(29.7, SizeUnit::Cm, 300.0), 3508);
+        assert_eq!(px_from(1920.0, SizeUnit::Pixels, 72.0), 1920);
+        assert_eq!(px_from(-1.0, SizeUnit::Inches, 300.0), 1);
+        // A print-sized document keeps its inches when the ppi changes.
+        assert_eq!(
+            px_from(px_in(2550, SizeUnit::Inches, 300.0), SizeUnit::Inches, 150.0),
+            1275
+        );
     }
 
     #[test]

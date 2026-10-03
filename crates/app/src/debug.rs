@@ -34,7 +34,7 @@ impl App {
             || self.debug_pcrop(tok)
             || self.debug_adjx(ctx, tok)
             || self.debug_actions(tok)
-            || self.debug_image_size(tok)
+            || self.debug_image_size(ctx, tok)
     }
 
     /// Selections and what acts on them (`select:...`):
