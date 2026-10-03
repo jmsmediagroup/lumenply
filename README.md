@@ -17,6 +17,9 @@ What's in:
   channel, Hue/Saturation with Colorize, Color Balance, Black & White,
   Exposure, Vibrance, Photo Filter, Channel Mixer, Selective Color, Gradient
   Map, Color Lookup (3D LUTs, .cube/.3dl), Invert, Posterize, Threshold.
+  Each can also be applied to pixels (Image ▸ Adjustments), next to
+  Shadows/Highlights, Replace Color, Match Color, Equalize, Desaturate and
+  Auto Tone.
 - **Selections**: marquees, lassos, Magic Wand, Quick Selection, Colour
   Range, Select and Mask (refine edge, decontaminate), quick mask, saved
   selections as alpha channels, Modify ▸ Expand/Contract/Border/Smooth.
@@ -35,6 +38,8 @@ What's in:
   measured against ~480 real Photoshop files, `scripts/psd_corpus.py`);
   OpenRaster; PNG/JPEG/WebP/TIFF/EXR/GIF/BMP/TGA; HEIC/AVIF on macOS; camera
   RAW; export to PNG/JPEG/WebP/GIF/PDF; `lumenply batch` for whole folders.
+- **Actions**: record edits, play them back as one undo step, or run them
+  over folders with `lumenply batch --action`.
 - **Everyday**: command palette (Ctrl+K), Photoshop shortcuts, clipboard
   with other apps, tabs, autosave of every open document with crash
   recovery, screen-reader names on every control.
