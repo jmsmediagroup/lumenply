@@ -107,6 +107,12 @@ impl App {
     }
 
     pub(crate) fn properties_ui(&mut self, ui: &mut egui::Ui) {
+        let top = ui.cursor().top();
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(props_essential_id(), 0.0f32);
+            d.insert_temp(props_top_id(), top);
+            d.insert_temp(curve_shrink_id(), 0.0f32);
+        });
         let Some(id) = self.active else {
             section_title(ui, "PROPERTIES");
             ui.add_space(2.0);
@@ -487,15 +493,24 @@ impl App {
                 self.begin_free_transform();
             }
         }
-        if can_fx {
-            self.effects_ui(ui, id, effects);
+        // The dock gives Properties room for everything above here, and for
+        // the effects while they are unfolded (see `props_essential_height`);
+        // the histogram may scroll.
+        let mut end = ui.cursor().top();
+        if can_fx && self.effects_ui(ui, id, effects) {
+            end = ui.cursor().top();
         }
+        ui.ctx().data_mut(|d| {
+            let shrunk = d.get_temp::<f32>(curve_shrink_id()).unwrap_or(0.0);
+            d.insert_temp(props_essential_id(), end - top + shrunk);
+        });
         self.histogram_footer(ui);
     }
 
     /// The layer-effects section, folded by default (the header says how
-    /// many are on) so the layer's own settings stay in view.
-    fn effects_ui(&mut self, ui: &mut egui::Ui, id: LayerId, fx: lumenply_doc::LayerEffects) {
+    /// many are on) so the layer's own settings stay in view. True while
+    /// it is unfolded.
+    fn effects_ui(&mut self, ui: &mut egui::Ui, id: LayerId, fx: lumenply_doc::LayerEffects) -> bool {
         let on = [
             fx.drop_shadow.is_some(),
             fx.outer_glow.is_some(),
@@ -519,13 +534,15 @@ impl App {
         egui::CollapsingHeader::new(RichText::new(title).small().strong().color(MUTED))
             .id_salt("layer-effects")
             .default_open(on > 0)
-            .show(ui, |ui| self.effects_body(ui, id, fx));
+            .show(ui, |ui| self.effects_body(ui, id, fx))
+            .body_returned
+            .is_some()
     }
 
     /// Non-destructive layer effects: toggles and parameters, coalescing
     /// into one history step per drag.
     fn effects_body(&mut self, ui: &mut egui::Ui, id: LayerId, mut fx: lumenply_doc::LayerEffects) {
-        use lumenply_doc::{GlowFx, ShadowFx, StrokeFx};
+        use lumenply_doc::{GlowFx, ShadowFx};
         let mut changed = false;
         let mut finished = false;
         let color_btn = |ui: &mut egui::Ui, c: &mut [f32; 3]| -> bool {
@@ -762,7 +779,7 @@ impl App {
         ui.horizontal(|ui| {
             let mut on = fx.stroke.is_some();
             if check(ui, &mut on, "Stroke").changed() {
-                fx.stroke = on.then(StrokeFx::default);
+                fx.stroke = on.then(new_stroke_fx);
                 changed = true;
                 finished = true;
             }
@@ -1009,9 +1026,121 @@ impl App {
     }
 }
 
-/// An interactive curve: drag points, click to add, right-click to remove.
+/// The stroke a user turns on: Photoshop's 3 px outside, in black (the
+/// stored default, white, vanished on the usual white paper).
+fn new_stroke_fx() -> lumenply_doc::StrokeFx {
+    lumenply_doc::StrokeFx {
+        color: [0.0; 3],
+        ..Default::default()
+    }
+}
+
+fn props_essential_id() -> egui::Id {
+    egui::Id::new("props-essential-h")
+}
+
+/// Where Properties starts this frame (screen y), set by `properties_ui`.
+fn props_top_id() -> egui::Id {
+    egui::Id::new("props-top")
+}
+
+/// The height the dock gives Properties this frame; present only while
+/// the dock draws Properties.
+fn props_room_id() -> egui::Id {
+    egui::Id::new("props-room")
+}
+
+/// How much smaller than full size the curve was drawn this frame.
+fn curve_shrink_id() -> egui::Id {
+    egui::Id::new("props-curve-shrink")
+}
+
+/// How tall the active layer's own settings were last frame in Properties
+/// (header, opacity and blend, and its kind's controls: a curve with its
+/// presets, the levels sliders...), without the effects and histogram
+/// below them, as they'd be at full size. The dock shrinks Layers to make
+/// this fit.
+pub(crate) fn props_essential_height(ctx: &egui::Context) -> f32 {
+    ctx.data(|d| d.get_temp::<f32>(props_essential_id()))
+        .unwrap_or(0.0)
+}
+
+/// Draw Properties into a dock section `room` points tall: controls that
+/// can shrink (the curve) shrink to fit it when Layers can't give way.
+pub(crate) fn with_props_room<R>(ctx: &egui::Context, room: f32, f: impl FnOnce() -> R) -> R {
+    ctx.data_mut(|d| d.insert_temp(props_room_id(), room));
+    let r = f();
+    ctx.data_mut(|d| d.remove::<f32>(props_room_id()));
+    r
+}
+
+/// Full size of the curve graph.
+const CURVE_SIDE: f32 = 210.0;
+/// The smallest the graph shrinks to in a short dock (it scrolls then).
+const CURVE_MIN_SIDE: f32 = 150.0;
+/// The presets row under the graph, with spacing and the dock's margin.
+const CURVE_BELOW: f32 = 36.0;
+
+/// The curve graph's side: full size, or in a short Properties section
+/// small enough that the graph and its presets stay in view.
+fn curve_side(ui: &egui::Ui) -> f32 {
+    let (room, top) = ui.ctx().data(|d| {
+        (
+            d.get_temp::<f32>(props_room_id()),
+            d.get_temp::<f32>(props_top_id()),
+        )
+    });
+    let (Some(room), Some(top)) = (room, top) else {
+        return CURVE_SIDE;
+    };
+    let above = ui.cursor().top() - top;
+    let side = curve_fit(room, above);
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(curve_shrink_id(), CURVE_SIDE - side));
+    side
+}
+
+/// The graph side that fits `room` with `above` points of settings above
+/// it, between [`CURVE_MIN_SIDE`] and [`CURVE_SIDE`].
+fn curve_fit(room: f32, above: f32) -> f32 {
+    (room - above - CURVE_BELOW)
+        .clamp(CURVE_MIN_SIDE, CURVE_SIDE)
+        .floor()
+}
+
+/// The Layers panel's automatic height: `auto` (its usual share), less
+/// what Properties needs to show the active layer's settings without
+/// scrolling, but not below `min` for that. `fixed`: the rest of the dock
+/// (the quick-add chips, the divider and the spacing between sections).
+pub(crate) fn dock_layers_height(avail: f32, fixed: f32, essential: f32, auto: f32, min: f32) -> f32 {
+    // 8: slack for rounding.
+    let room = avail - fixed - 8.0 - essential;
+    auto.min(room.max(min))
+}
+
+/// The most points a curve takes (Photoshop allows 16 too).
+const CURVE_MAX_POINTS: usize = 16;
+/// How far past the graph's edge a point must be dragged to be removed.
+const CURVE_DROP_MARGIN: f32 = 24.0;
+
+/// Add a curve point at `(x, y)` (0–1) between its neighbours; its index,
+/// or None when the curve is full or `x` falls on or beyond an end point.
+fn insert_curve_point(points: &mut Vec<[f32; 2]>, (x, y): (f32, f32)) -> Option<usize> {
+    if points.len() >= CURVE_MAX_POINTS {
+        return None;
+    }
+    let at = points.iter().position(|pt| pt[0] > x)?;
+    if at == 0 || x - points[at - 1][0] < 0.01 || points[at][0] - x < 0.01 {
+        return None;
+    }
+    points.insert(at, [x, y]);
+    Some(at)
+}
+
+/// An interactive curve: click or press-and-drag to add a point and move
+/// it, drag points, right-click or drag one off the graph to remove it.
 pub(crate) fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<[f32; 2]>, drag: &mut Option<usize>) -> bool {
-    let size = Vec2::splat(210.0);
+    let size = Vec2::splat(curve_side(ui));
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
     resp.widget_info(|| {
         let label = format!("Curve, {} points", points.len());
@@ -1050,19 +1179,27 @@ pub(crate) fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<[f32; 2]>, drag: 
     let mut finished = false;
     if resp.drag_started() {
         if let Some(q) = ui.input(|i| i.pointer.press_origin()) {
-            *drag = nearest(points, q);
+            // As in Photoshop, pressing away from a point adds one there
+            // and the same drag moves it.
+            *drag = nearest(points, q).or_else(|| insert_curve_point(points, from_screen(q)));
         }
     }
     if resp.dragged() {
         if let (Some(i), Some(q)) = (*drag, resp.interact_pointer_pos()) {
-            let (x, y) = from_screen(q);
             let last = points.len() - 1;
-            let x = if i == 0 || i == last {
-                points[i][0]
+            if i != 0 && i != last && !rect.expand(CURVE_DROP_MARGIN).contains(q) {
+                // Dragged off the graph: the point goes (Photoshop).
+                points.remove(i);
+                *drag = None;
             } else {
-                x.clamp(points[i - 1][0] + 0.01, points[i + 1][0] - 0.01)
-            };
-            points[i] = [x, y];
+                let (x, y) = from_screen(q);
+                let x = if i == 0 || i == last {
+                    points[i][0]
+                } else {
+                    x.clamp(points[i - 1][0] + 0.01, points[i + 1][0] - 0.01)
+                };
+                points[i] = [x, y];
+            }
         }
     }
     if resp.drag_stopped() {
@@ -1071,12 +1208,7 @@ pub(crate) fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<[f32; 2]>, drag: 
     }
     if resp.clicked() {
         if let Some(q) = resp.interact_pointer_pos() {
-            if nearest(points, q).is_none() && points.len() < 16 {
-                let (x, y) = from_screen(q);
-                let at = points.iter().position(|pt| pt[0] > x).unwrap_or(points.len());
-                if at > 0 && at < points.len() {
-                    points.insert(at, [x, y]);
-                }
+            if nearest(points, q).is_none() && insert_curve_point(points, from_screen(q)).is_some() {
                 finished = true;
             }
         }
@@ -1132,4 +1264,170 @@ pub(crate) fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<[f32; 2]>, drag: 
         }
     });
     finished
+}
+
+#[cfg(test)]
+mod curve_tests {
+    use super::*;
+
+    /// Drives the curve editor with real pointer events. The graph is the
+    /// 210 pt square at the top-left of the window, so curve (x, y) sits
+    /// at screen (210 x, 210 (1 − y)).
+    struct Rig {
+        ctx: egui::Context,
+        points: Vec<[f32; 2]>,
+        drag: Option<usize>,
+        finished: bool,
+    }
+
+    fn at(x: f32, y: f32) -> Pos2 {
+        egui::pos2(210.0 * x, 210.0 * (1.0 - y))
+    }
+
+    impl Rig {
+        fn new() -> Self {
+            let mut r = Rig {
+                ctx: egui::Context::default(),
+                points: vec![[0.0, 0.0], [1.0, 1.0]],
+                drag: None,
+                finished: false,
+            };
+            r.frame(vec![]);
+            r
+        }
+
+        fn frame(&mut self, events: Vec<egui::Event>) {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0))),
+                events,
+                ..Default::default()
+            };
+            let (points, drag) = (&mut self.points, &mut self.drag);
+            let mut finished = false;
+            let _ = self.ctx.run(raw, |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::none())
+                    .show(ctx, |ui| {
+                        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+                        finished = curve_editor(ui, points, drag);
+                    });
+            });
+            self.finished = finished;
+        }
+
+        fn button(&mut self, p: Pos2, pressed: bool, button: egui::PointerButton) {
+            self.frame(vec![
+                egui::Event::PointerMoved(p),
+                egui::Event::PointerButton {
+                    pos: p,
+                    button,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ]);
+        }
+
+        fn drag(&mut self, from: Pos2, to: Pos2) {
+            self.button(from, true, egui::PointerButton::Primary);
+            for i in 1..=6 {
+                let t = i as f32 / 6.0;
+                self.frame(vec![egui::Event::PointerMoved(from + (to - from) * t)]);
+            }
+            self.button(to, false, egui::PointerButton::Primary);
+        }
+    }
+
+    fn close(a: [f32; 2], b: [f32; 2]) -> bool {
+        (a[0] - b[0]).abs() < 0.01 && (a[1] - b[1]).abs() < 0.01
+    }
+
+    #[test]
+    fn pressing_on_the_line_and_dragging_adds_a_point_and_moves_it() {
+        let mut rig = Rig::new();
+        // Press on the diagonal at three-quarter tones, drag up to 0.9.
+        rig.drag(at(0.75, 0.75), at(0.75, 0.9));
+        assert_eq!(rig.points.len(), 3, "{:?}", rig.points);
+        assert!(close(rig.points[1], [0.75, 0.9]), "{:?}", rig.points);
+        assert!(rig.finished, "the release closes the step");
+        // Dragging that point again moves it, no new point.
+        rig.drag(at(0.75, 0.9), at(0.75, 0.6));
+        assert_eq!(rig.points.len(), 3);
+        assert!(close(rig.points[1], [0.75, 0.6]), "{:?}", rig.points);
+    }
+
+    #[test]
+    fn dragging_a_point_off_the_graph_removes_it_but_never_an_end() {
+        let mut rig = Rig::new();
+        rig.drag(at(0.25, 0.25), at(0.25, 0.4));
+        assert_eq!(rig.points.len(), 3);
+        // 40 pt past the left edge: gone, and the curve is straight again.
+        rig.drag(at(0.25, 0.4), egui::pos2(-40.0, at(0.25, 0.4).y));
+        assert_eq!(rig.points, vec![[0.0, 0.0], [1.0, 1.0]]);
+        assert!(rig.finished);
+        // An end point dragged off stays (clamped to the graph).
+        rig.drag(at(1.0, 1.0), egui::pos2(210.0, -60.0));
+        assert_eq!(rig.points.len(), 2);
+        assert!(close(rig.points[1], [1.0, 1.0]), "{:?}", rig.points);
+    }
+
+    #[test]
+    fn a_click_adds_a_point_and_a_right_click_removes_it() {
+        let mut rig = Rig::new();
+        rig.button(at(0.5, 0.7), true, egui::PointerButton::Primary);
+        rig.button(at(0.5, 0.7), false, egui::PointerButton::Primary);
+        assert_eq!(rig.points.len(), 3);
+        assert!(close(rig.points[1], [0.5, 0.7]), "{:?}", rig.points);
+        rig.button(at(0.5, 0.7), true, egui::PointerButton::Secondary);
+        rig.button(at(0.5, 0.7), false, egui::PointerButton::Secondary);
+        assert_eq!(rig.points.len(), 2);
+    }
+
+    #[test]
+    fn layers_give_way_until_the_active_layers_settings_fit() {
+        // A 790 pt dock, 128 pt of chips, divider and spacing; Layers would take 355 (45%),
+        // never less than 220. A curve's 380 pt fit when Layers take 274.
+        assert_eq!(dock_layers_height(790.0, 128.0, 380.0, 355.0, 220.0), 274.0);
+        // Short settings (Exposure's sliders) leave the usual split.
+        assert_eq!(dock_layers_height(790.0, 128.0, 200.0, 355.0, 220.0), 355.0);
+        // Not enough room for both: Layers keep their three rows.
+        assert_eq!(dock_layers_height(500.0, 128.0, 380.0, 225.0, 220.0), 220.0);
+        // A short layer list stays as short as it is.
+        assert_eq!(dock_layers_height(790.0, 128.0, 380.0, 140.0, 220.0), 140.0);
+    }
+
+    #[test]
+    fn the_curve_shrinks_to_keep_its_presets_in_view() {
+        // 372 pt of Properties with 128 pt of settings above the graph:
+        // 372 − 128 − 36 = 208.
+        assert_eq!(curve_fit(372.0, 128.0), 208.0);
+        assert_eq!(curve_fit(600.0, 128.0), CURVE_SIDE, "never above full size");
+        assert_eq!(
+            curve_fit(200.0, 128.0),
+            CURVE_MIN_SIDE,
+            "never below 150: it scrolls then"
+        );
+    }
+
+    #[test]
+    fn a_new_stroke_is_3_px_outside_in_black() {
+        let s = new_stroke_fx();
+        assert_eq!(s.color, [0.0, 0.0, 0.0]);
+        assert_eq!(s.size, 3.0);
+        assert_eq!(s.position, lumenply_doc::StrokeAlign::Outside);
+        assert_eq!(s.opacity, 1.0);
+    }
+
+    #[test]
+    fn a_full_curve_takes_no_more_points() {
+        let mut pts: Vec<[f32; 2]> = (0..16).map(|i| [i as f32 / 15.0; 2]).collect();
+        assert_eq!(insert_curve_point(&mut pts, (0.5, 0.5)), None);
+        let mut pts = vec![[0.0, 0.0], [1.0, 1.0]];
+        assert_eq!(
+            insert_curve_point(&mut pts, (0.004, 0.5)),
+            None,
+            "too close to an end"
+        );
+        assert_eq!(insert_curve_point(&mut pts, (0.3, 0.5)), Some(1));
+        assert_eq!(pts, vec![[0.0, 0.0], [0.3, 0.5], [1.0, 1.0]]);
+    }
 }

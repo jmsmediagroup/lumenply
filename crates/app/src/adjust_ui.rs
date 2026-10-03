@@ -665,6 +665,28 @@ fn mixer_presets() -> Vec<(&'static str, Option<[f32; 4]>)> {
     ]
 }
 
+/// The Channel Mixer preset the settings match, or "Custom" (Photoshop's
+/// Preset menu shows it the same way).
+fn mixer_preset_name(
+    red: &[f32; 4],
+    green: &[f32; 4],
+    blue: &[f32; 4],
+    monochrome: bool,
+    gray: &[f32; 4],
+) -> &'static str {
+    let same = |a: &[f32; 4], b: &[f32; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4);
+    let identity = same(red, &[1.0, 0.0, 0.0, 0.0])
+        && same(green, &[0.0, 1.0, 0.0, 0.0])
+        && same(blue, &[0.0, 0.0, 1.0, 0.0]);
+    mixer_presets()
+        .into_iter()
+        .find(|(_, row)| match row {
+            None => !monochrome && identity,
+            Some(w) => monochrome && same(gray, w),
+        })
+        .map_or("Custom", |(n, _)| n)
+}
+
 /// Photoshop's photo filter colours, 8-bit sRGB.
 pub(crate) const PHOTO_FILTERS: [(&str, [u8; 3]); 20] = [
     ("Warming Filter (85)", [236, 138, 0]),
@@ -713,9 +735,10 @@ pub(crate) fn adjustment_ui(ui: &mut egui::Ui, layer: LayerId, adj: &mut Adjustm
             monochrome,
             gray,
         } => {
-            combo_row(ui, "Preset", ("mixer-preset", layer), "Choose…", |ui| {
+            let current = mixer_preset_name(red, green, blue, *monochrome, gray);
+            combo_row(ui, "Preset", ("mixer-preset", layer), current, |ui| {
                 for (name, row) in mixer_presets() {
-                    if ui.selectable_label(false, name).clicked() {
+                    if ui.selectable_label(name == current, name).clicked() {
                         match row {
                             None => {
                                 *red = [1.0, 0.0, 0.0, 0.0];
@@ -911,6 +934,25 @@ mod tests {
             }
             self.button(to, false);
         }
+    }
+
+    #[test]
+    fn the_channel_mixer_preset_menu_names_the_current_preset() {
+        let id = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        let gray = [0.4, 0.4, 0.2, 0.0];
+        assert_eq!(
+            mixer_preset_name(&id[0], &id[1], &id[2], false, &gray),
+            "Default (no change)"
+        );
+        let red = [1.0, 0.0, 0.0, 0.0];
+        assert_eq!(
+            mixer_preset_name(&id[0], &id[1], &id[2], true, &red),
+            "B&W with red filter"
+        );
+        // Photoshop's own 40/40/20 monochrome mix is no preset here.
+        assert_eq!(mixer_preset_name(&id[0], &id[1], &id[2], true, &gray), "Custom");
+        let warm = [1.2, 0.0, 0.0, 0.0];
+        assert_eq!(mixer_preset_name(&warm, &id[1], &id[2], false, &gray), "Custom");
     }
 
     #[test]

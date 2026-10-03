@@ -202,6 +202,16 @@ pub(crate) fn sh_presets() -> Vec<(&'static str, ShadowsHighlights)> {
     ]
 }
 
+/// The document pixel under `at`, a point `size` across the Replace Color
+/// thumbnail of a `doc` sized image (the thumbnail shows all of it).
+fn thumb_to_doc(at: egui::Vec2, size: egui::Vec2, doc: (u32, u32)) -> (i32, i32) {
+    let fx = (at.x / size.x.max(1.0)).clamp(0.0, 1.0);
+    let fy = (at.y / size.y.max(1.0)).clamp(0.0, 1.0);
+    let x = (fx * doc.0 as f32).floor() as i32;
+    let y = (fy * doc.1 as f32).floor() as i32;
+    (x.min(doc.0 as i32 - 1), y.min(doc.1 as i32 - 1))
+}
+
 fn zone_rows(ui: &mut egui::Ui, z: &mut ToneZone) {
     pct(ui, "Amount", &mut z.amount, 0.0..=1.0, " %");
     pct(ui, "Tone", &mut z.tone, 0.0..=1.0, " %");
@@ -409,6 +419,7 @@ impl App {
         }
         match auto_tone_levels(&pooled) {
             Some((in_black, in_white)) => {
+                let before = self.editor.history().len();
                 self.add_adjustment(Adjustment::Levels {
                     in_black,
                     in_white,
@@ -417,12 +428,32 @@ impl App {
                     out_white: 1.0,
                     channels: Default::default(),
                 });
+                self.name_auto_layer(before, "Auto Tone");
                 self.status = format!(
                     "Auto tone: black {:.2}, white {:.2} for all channels (as an adjustment layer)",
                     in_black, in_white
                 );
             }
             None => self.status = "Auto tone: the image already spans the full range".into(),
+        }
+    }
+
+    /// Name the Levels layer an auto command just added after the command
+    /// ("Auto Tone"), in the same undo step, so the layer says where it
+    /// came from. `before`: the history length before the command.
+    pub(crate) fn name_auto_layer(&mut self, before: usize, name: &str) {
+        let Some(layer) = self.active else {
+            return;
+        };
+        if self.editor.history().len() != before + 1 {
+            return;
+        }
+        self.run(&RenameLayer {
+            layer,
+            name: name.into(),
+        });
+        if self.editor.history().len() == before + 2 {
+            self.editor.squash_newest(2, name);
         }
     }
 
@@ -508,6 +539,42 @@ impl App {
         }
     }
 
+    /// Replace Color's eyedropper at document pixel `(x, y)`, from a click
+    /// on the canvas or on the dialog's thumbnail.
+    fn replace_sample(&mut self, ctx: &egui::Context, st: &mut AdjxState, (x, y): (i32, i32)) {
+        let AdjxKind::ReplaceColor { rc, swatch, .. } = &mut st.kind else {
+            return;
+        };
+        let p = self
+            .editor
+            .doc()
+            .layer(st.layer)
+            .and_then(|l| l.pixels())
+            .map(|s| s.get_pixel(x, y))
+            .filter(|p| p.a > 0.0);
+        let Some(p) = p else {
+            return;
+        };
+        // Photoshop's eyedroppers: Shift adds to the sample, Alt
+        // subtracts from it, a plain click starts over.
+        let [r, g, b, _] = p.to_straight();
+        let m = ctx.input(|i| i.modifiers);
+        let hex = color_picker::format_hex([r, g, b].map(lumenply_doc::adjust::srgb_encode));
+        if m.shift {
+            rc.added.push([r, g, b]);
+            self.status = format!("Replace Color: added {hex} to the sample");
+        } else if m.alt {
+            rc.removed.push([r, g, b]);
+            self.status = format!("Replace Color: took {hex} out of the sample");
+        } else {
+            rc.color = [r, g, b];
+            rc.added.clear();
+            rc.removed.clear();
+            *swatch = [r, g, b].map(lumenply_doc::adjust::srgb_encode);
+            self.status = format!("Replace Color: sampled {hex}");
+        }
+    }
+
     /// The open Image ▸ Adjustments dialog, if any: drawn over the editor,
     /// previewing on the canvas.
     pub(crate) fn adjx_ui(&mut self, ctx: &egui::Context) {
@@ -562,34 +629,8 @@ impl App {
                 sampled = r.interact_pointer_pos().and_then(to_doc);
             }
         }
-        if let (Some((x, y)), AdjxKind::ReplaceColor { rc, swatch, .. }) = (sampled, &mut st.kind) {
-            let p = self
-                .editor
-                .doc()
-                .layer(st.layer)
-                .and_then(|l| l.pixels())
-                .map(|s| s.get_pixel(x, y))
-                .filter(|p| p.a > 0.0);
-            if let Some(p) = p {
-                // Photoshop's eyedroppers: Shift adds to the sample, Alt
-                // subtracts from it, a plain click starts over.
-                let [r, g, b, _] = p.to_straight();
-                let m = ctx.input(|i| i.modifiers);
-                let hex = color_picker::format_hex([r, g, b].map(lumenply_doc::adjust::srgb_encode));
-                if m.shift {
-                    rc.added.push([r, g, b]);
-                    self.status = format!("Replace Color: added {hex} to the sample");
-                } else if m.alt {
-                    rc.removed.push([r, g, b]);
-                    self.status = format!("Replace Color: took {hex} out of the sample");
-                } else {
-                    rc.color = [r, g, b];
-                    rc.added.clear();
-                    rc.removed.clear();
-                    *swatch = [r, g, b].map(lumenply_doc::adjust::srgb_encode);
-                    self.status = format!("Replace Color: sampled {hex}");
-                }
-            }
+        if let Some(at) = sampled {
+            self.replace_sample(ctx, &mut st, at);
         }
         // Match Color's source statistics follow the source picked.
         if let AdjxKind::MatchColor { pick, .. } = &st.kind {
@@ -606,6 +647,8 @@ impl App {
             .collect();
         let default_pos = canvas_rect.map_or(egui::pos2(80.0, 90.0), |r| r.min + egui::vec2(16.0, 16.0));
         let thumb_tex = st.thumb.clone();
+        let mut thumb_pick: Option<(i32, i32)> = None;
+        let doc_size = (self.editor.doc().width, self.editor.doc().height);
         let shown = egui::Window::new(title)
             .id(egui::Id::new("adjx-dialog"))
             .collapsible(false)
@@ -711,8 +754,19 @@ impl App {
                             if let Some(tex) = &thumb_tex {
                                 ui.vertical_centered(|ui| {
                                     let size = tex.size_vec2();
-                                    let r = ui.add(egui::Image::new((tex.id(), size)));
+                                    // As in Photoshop, the thumbnail takes
+                                    // eyedropper clicks too: the canvas may
+                                    // be under this dialog.
+                                    let r = ui
+                                        .add(egui::Image::new((tex.id(), size)).sense(Sense::click()))
+                                        .on_hover_cursor(egui::CursorIcon::Crosshair)
+                                        .on_hover_text("Click to sample a colour (Shift adds, Alt removes)");
                                     a11y_name(&r, "Replace Color preview");
+                                    if r.clicked() {
+                                        thumb_pick = r
+                                            .interact_pointer_pos()
+                                            .map(|p| thumb_to_doc(p - r.rect.min, r.rect.size(), doc_size));
+                                    }
                                 });
                             }
                             ui.horizontal(|ui| {
@@ -836,12 +890,19 @@ impl App {
             });
         if let Some(shown) = shown {
             ctx.move_to_top(shown.response.layer_id);
+            // Always just above its backdrop, as dialogs.rs does: never
+            // left below it, out of the mouse's reach, by the layer order
+            // of an earlier dialog.
+            ctx.set_sublayer(backdrop.response.layer_id, shown.response.layer_id);
             ctx.accesskit_node_builder(shown.response.id, |b| {
                 b.set_role(egui::accesskit::Role::Dialog);
                 b.set_name(title);
             });
         }
 
+        if let Some(at) = thumb_pick {
+            self.replace_sample(ctx, &mut st, at);
+        }
         // Replace Color's thumbnail follows the mask settings.
         if let AdjxKind::ReplaceColor { rc, show_image, .. } = &st.kind {
             let key = format!("{rc:?}{show_image}");
@@ -1139,6 +1200,99 @@ mod tests {
                 ..Default::default()
             };
             let _ = ctx.run(raw, |ctx| app.frame(ctx));
+        }
+    }
+
+    #[test]
+    fn color_balance_and_auto_color_have_photoshops_keys() {
+        use egui::Modifiers as M;
+        let prefs = crate::session::Prefs::default();
+        let chord = |id| crate::session::resolve_chord(&prefs, id);
+        assert_eq!(chord("adjd-color-balance"), Some((M::COMMAND, Key::B)));
+        assert_eq!(chord("auto-color"), Some((M::COMMAND | M::SHIFT, Key::B)));
+        // No two actions share a default chord.
+        let mut all: Vec<_> = crate::session::SHORTCUTS
+            .iter()
+            .map(|(_, _, c, s, k)| (*c, *s, *k))
+            .collect();
+        let n = all.len();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(all.len(), n, "a default chord is used twice");
+        // Cmd+B opens the Color Balance dialog.
+        let mut app = small_app();
+        app.run_menu_action("adjd-color-balance");
+        assert!(matches!(
+            app.adjx.as_ref().map(|s| &s.kind),
+            Some(AdjxKind::Adjust(Adjustment::ColorBalance { .. }))
+        ));
+    }
+
+    #[test]
+    fn auto_commands_name_their_layer_in_one_step() {
+        // A grey ramp from 64 to 190: every auto command has range to add.
+        let mut ramp = Raster::new(64, 8);
+        for x in 0..64u32 {
+            let v = lumenply_io::srgb_to_linear_f((64.0 + 2.0 * x as f32) / 255.0);
+            for y in 0..8 {
+                ramp.set(x, y, lumenply_tiles::Rgba::new(v, v, v, 1.0));
+            }
+        }
+        let mut ed = Editor::new(Document::new(64, 8));
+        ed.execute(&AddPixelLayer::from_raster("Background", ramp, 0, 0))
+            .unwrap();
+        let mut app = crate::a11y_tests::launch(&[]);
+        app.open_in_new_tab(ed, None);
+        for (id, name) in [
+            ("auto-tone", "Auto Tone"),
+            ("auto-contrast", "Auto Contrast"),
+            ("auto-color", "Auto Color"),
+        ] {
+            app.last_flat = Some(lumenply_render::composite_raster(app.editor.doc()));
+            app.update_histogram();
+            let before = app.editor.history().len();
+            app.run_menu_action(id);
+            assert_eq!(
+                app.active_layer().map(|l| l.name.clone()),
+                Some(name.to_string()),
+                "{id}"
+            );
+            assert_eq!(app.editor.history().len(), before + 1, "{id}: one undo step");
+            assert_eq!(app.editor.history().last().copied(), Some(name), "{id}");
+            app.undo();
+            assert_eq!(app.editor.doc().layer_count(), 1, "{id}: one undo removes it");
+        }
+    }
+
+    #[test]
+    fn a_click_on_the_replace_color_thumbnail_samples_that_pixel() {
+        // A 220 × 147 thumbnail of a 600 × 400 image: its centre is pixel
+        // (300, 200), its corners the image's corners.
+        let size = egui::vec2(220.0, 146.67);
+        assert_eq!(
+            thumb_to_doc(egui::vec2(110.0, 73.3), size, (600, 400)),
+            (300, 199)
+        );
+        assert_eq!(thumb_to_doc(egui::vec2(0.0, 0.0), size, (600, 400)), (0, 0));
+        assert_eq!(
+            thumb_to_doc(egui::vec2(220.0, 146.67), size, (600, 400)),
+            (599, 399)
+        );
+        assert_eq!(thumb_to_doc(egui::vec2(-5.0, 400.0), size, (600, 400)), (0, 399));
+
+        // Sampling the white canvas makes white the colour to replace.
+        let mut app = small_app();
+        let ctx = crate::a11y_tests::ctx();
+        app.brush_rgb = [1.0, 0.0, 0.0];
+        app.run_menu_action(ADJ_REPLACE);
+        let mut st = app.adjx.take().unwrap();
+        app.replace_sample(&ctx, &mut st, (10, 10));
+        match &st.kind {
+            AdjxKind::ReplaceColor { rc, swatch, .. } => {
+                assert!(rc.color.iter().all(|c| (c - 1.0).abs() < 1e-5), "{:?}", rc.color);
+                assert!(swatch.iter().all(|c| (c - 1.0).abs() < 1e-5), "{swatch:?}");
+            }
+            _ => panic!("not Replace Color"),
         }
     }
 

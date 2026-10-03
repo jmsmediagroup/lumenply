@@ -952,6 +952,7 @@ mod tests {
             filter: lumenply_doc::Filter::GaussianBlur { radius: 2.0 },
             opacity: 1.0,
             above: Some(a),
+            mask_selection: false,
         })
         .unwrap();
         assert_eq!(

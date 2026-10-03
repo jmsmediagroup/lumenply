@@ -80,13 +80,16 @@ impl Command for AddPixelLayer {
     }
 }
 
-/// Add an adjustment layer on top of the stack.
+/// Add an adjustment layer on top of the stack. With `mask_selection`
+/// (the default) and an active selection, the selection becomes the
+/// layer's mask, as Photoshop does (and as fill layers do).
 pub struct AddAdjustmentLayer {
     pub adjustment: Adjustment,
     pub opacity: f32,
     pub blend: BlendMode,
     /// Insert directly above this layer instead of on top of the stack.
     pub above: Option<LayerId>,
+    pub mask_selection: bool,
 }
 
 impl AddAdjustmentLayer {
@@ -96,6 +99,7 @@ impl AddAdjustmentLayer {
             opacity: 1.0,
             blend: BlendMode::Normal,
             above: None,
+            mask_selection: true,
         }
     }
 }
@@ -110,6 +114,9 @@ impl Command for AddAdjustmentLayer {
         let mut layer = Layer::adjustment(id, self.adjustment.clone());
         layer.opacity = self.opacity.clamp(0.0, 1.0);
         layer.blend = self.blend;
+        if self.mask_selection {
+            layer.mask = doc.selection.as_ref().map(|s| s.to_mask());
+        }
         insert_above(doc, layer, self.above)
     }
 }
@@ -129,11 +136,13 @@ pub(crate) fn insert_above(doc: &mut Document, layer: Layer, above: Option<Layer
     }
 }
 
-/// Add a live filter layer, above `above` or on top of the stack.
+/// Add a live filter layer, above `above` or on top of the stack, masked
+/// by the selection like [`AddAdjustmentLayer`] when `mask_selection`.
 pub struct AddFilterLayer {
     pub filter: Filter,
     pub opacity: f32,
     pub above: Option<LayerId>,
+    pub mask_selection: bool,
 }
 
 impl AddFilterLayer {
@@ -142,6 +151,7 @@ impl AddFilterLayer {
             filter,
             opacity: 1.0,
             above: None,
+            mask_selection: true,
         }
     }
 }
@@ -155,6 +165,9 @@ impl Command for AddFilterLayer {
         let id = doc.alloc_id();
         let mut layer = Layer::filter(id, self.filter.clone());
         layer.opacity = self.opacity.clamp(0.0, 1.0);
+        if self.mask_selection {
+            layer.mask = doc.selection.as_ref().map(|s| s.to_mask());
+        }
         insert_above(doc, layer, self.above)
     }
 }
@@ -3429,6 +3442,33 @@ mod tests {
             "inside selection is blurred: {blurred}"
         );
         assert!((crisp - 0.8).abs() < 1e-3, "outside selection untouched: {crisp}");
+    }
+
+    #[test]
+    fn new_adjustment_and_filter_layers_are_masked_by_the_selection() {
+        let mut doc = Document::new(64, 32);
+        doc.selection = Some(Selection::rect(Rect::new(0, 0, 32, 32)));
+        AddAdjustmentLayer::new(Adjustment::Invert)
+            .apply(&mut doc)
+            .unwrap();
+        AddFilterLayer::new(Filter::BoxBlur { radius: 2.0 })
+            .apply(&mut doc)
+            .unwrap();
+        for l in doc.layers() {
+            let m = l.mask.as_ref().expect("masked by the selection");
+            assert_eq!((m.value(10, 10), m.value(50, 10)), (1.0, 0.0), "{}", l.name);
+        }
+        assert!(doc.selection.is_some(), "the selection stays, as for fill layers");
+        // Without a selection, or when asked not to, no mask.
+        let mut cmd = AddAdjustmentLayer::new(Adjustment::Invert);
+        cmd.mask_selection = false;
+        cmd.apply(&mut doc).unwrap();
+        doc.selection = None;
+        AddFilterLayer::new(Filter::BoxBlur { radius: 2.0 })
+            .apply(&mut doc)
+            .unwrap();
+        let n = doc.layers().len();
+        assert!(doc.layers()[n - 2..].iter().all(|l| l.mask.is_none()));
     }
 
     #[test]

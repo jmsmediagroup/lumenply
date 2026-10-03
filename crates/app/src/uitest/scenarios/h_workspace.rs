@@ -221,10 +221,11 @@ fn overlapping_controls(s: &Session) -> Vec<String> {
         .enumerate()
         .filter(|(_, n)| interactive(n.role) && !n.name.trim().is_empty())
         // The two colour wells overlap by design, as in Photoshop; rows of
-        // a scrolled list run on under its edge, clipped.
+        // a scrolled list run on under its edge, clipped (a row scrolled
+        // wholly past the edge, with its eye button, too).
         .filter(|(_, n)| n.role != Role::ColorWell)
         .filter(|(_, n)| {
-            !["Layer ", "Channel ", "Alpha channel ", "Path "]
+            !["Layer ", "Channel ", "Alpha channel ", "Path ", "Show ", "Hide "]
                 .iter()
                 .any(|p| n.name.starts_with(p))
         })

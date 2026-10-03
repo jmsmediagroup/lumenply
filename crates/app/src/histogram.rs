@@ -234,6 +234,7 @@ impl App {
     pub(crate) fn auto_contrast(&mut self) {
         match auto_contrast_levels(&self.histogram, 0.001) {
             Some((in_black, in_white)) => {
+                let before = self.editor.history().len();
                 self.add_adjustment(Adjustment::Levels {
                     in_black,
                     in_white,
@@ -242,6 +243,7 @@ impl App {
                     out_white: 1.0,
                     channels: Default::default(),
                 });
+                self.name_auto_layer(before, "Auto Contrast");
                 self.status = format!(
                     "Auto contrast: black {:.2}, white {:.2} (as an adjustment layer)",
                     in_black, in_white
@@ -278,7 +280,9 @@ impl App {
         if let Adjustment::Levels { channels: c, .. } = &mut adj {
             *c = channels;
         }
+        let before = self.editor.history().len();
         self.add_adjustment(adj);
+        self.name_auto_layer(before, "Auto Color");
         self.status = "Auto color: per-channel levels (as an adjustment layer)".into();
     }
 }

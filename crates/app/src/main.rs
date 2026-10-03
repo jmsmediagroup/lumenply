@@ -416,6 +416,8 @@ struct App {
 
     dialog: Option<Dialog>,
     filter_previewed: bool,
+    /// Each filter kind's settings as last applied (dialogs reopen with them).
+    filter_last: Vec<Filter>,
     status: String,
     /// History length at the last save, for the unsaved-changes dot.
     saved_rev: usize,
@@ -665,6 +667,7 @@ impl App {
                 .map(|s| s.split(',').map(str::to_string).collect())
                 .unwrap_or_default(),
             filter_previewed: false,
+            filter_last: Vec::new(),
             status: String::from("Ready"),
             tabs: Vec::new(),
             cur_tab: 0,
@@ -1461,6 +1464,21 @@ impl App {
                 let layers_full = tabs + layers::HEADER_H + rows * layers::ROW_PITCH + layers::FOOTER_H;
                 let layers_min = tabs + layers::HEADER_H + 3.0 * layers::ROW_PITCH + layers::FOOTER_H;
                 let layers_auto = layers_full.min(layers_min.max(avail * 0.45));
+                // The divider, separator and spacing between the sections,
+                // as measured last frame (a fixed guess left Layers 16 pt
+                // short, half hiding its last row).
+                let chrome_id = egui::Id::new("dock-chrome-h");
+                let chrome = ctx.data(|d| d.get_temp::<f32>(chrome_id)).unwrap_or(40.0);
+                // ...less what the active layer's settings need to show
+                // in full (a curve and its presets) when there is room.
+                let essential = properties::props_essential_height(ctx);
+                let layers_auto = properties::dock_layers_height(
+                    avail,
+                    quick_h + chrome,
+                    essential,
+                    layers_auto,
+                    layers_min,
+                );
                 // The divider below Properties can be dragged; double-click
                 // returns to the automatic split.
                 let split_id = egui::Id::new("dock-layers-h");
@@ -1468,26 +1486,23 @@ impl App {
                 let layers_want = ctx
                     .data_mut(|d| d.get_persisted::<f32>(split_id))
                     .map_or(layers_auto, |h| h.clamp(layers_min, layers_max));
-                // The divider, separator and spacing between the sections,
-                // as measured last frame (a fixed guess left Layers 16 pt
-                // short, half hiding its last row).
-                let chrome_id = egui::Id::new("dock-chrome-h");
-                let chrome = ctx.data(|d| d.get_temp::<f32>(chrome_id)).unwrap_or(40.0);
                 let props_max = (avail - quick_h - layers_want - chrome).max(72.0);
                 let props_top = ui.cursor().top();
-                let scroll_out = egui::ScrollArea::vertical()
-                    .id_salt("props")
-                    .max_height(props_max)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        // Keep the floating scroll bar off the values.
-                        egui::Frame::none()
-                            .inner_margin(egui::Margin {
-                                right: 8.0,
-                                ..Default::default()
-                            })
-                            .show(ui, |ui| self.properties_ui(ui));
-                    });
+                let scroll_out = properties::with_props_room(ctx, props_max, || {
+                    egui::ScrollArea::vertical()
+                        .id_salt("props")
+                        .max_height(props_max)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            // Keep the floating scroll bar off the values.
+                            egui::Frame::none()
+                                .inner_margin(egui::Margin {
+                                    right: 8.0,
+                                    ..Default::default()
+                                })
+                                .show(ui, |ui| self.properties_ui(ui));
+                        })
+                });
                 a11y_scroll(ui.ctx(), &scroll_out, "Properties");
                 let (bar, grip) =
                     ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), Sense::click_and_drag());
