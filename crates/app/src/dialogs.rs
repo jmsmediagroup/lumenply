@@ -535,6 +535,7 @@ impl App {
                 EdgeOp::Contract(_) => "Contract selection",
                 EdgeOp::Border(_) => "Border selection",
                 EdgeOp::Smooth(_) => "Smooth selection",
+                EdgeOp::Feather(_) => "Feather selection",
             },
             Dialog::Fill(..) => "Fill",
             Dialog::ExportJpeg(..) => "Export JPEG",
@@ -591,7 +592,7 @@ impl App {
             &d,
             Dialog::Filter(_) | Dialog::ColorRange(..) | Dialog::SelectEdge(..)
         );
-        let backdrop_layer = backdrop(ctx, !previews);
+        let backdrop = draw_backdrop(ctx, !previews);
 
         let mut keep = true;
         let mut confirmed = false;
@@ -624,6 +625,7 @@ impl App {
                                 EdgeOp::Contract(_) => ("Contract by", 100.0, "Shrinks the selection inward."),
                                 EdgeOp::Border(_) => ("Width", 200.0, "Selects a band centred on the selection's edge."),
                                 EdgeOp::Smooth(_) => ("Sample radius", 100.0, "Rounds corners and drops specks and pinholes."),
+                                EdgeOp::Feather(_) => ("Feather radius", 250.0, "Softens the edge: half selected on the old outline."),
                             };
                             let mut v = op.amount();
                             let before = v;
@@ -638,6 +640,7 @@ impl App {
                                 EdgeOp::Contract(_) => EdgeOp::Contract(v),
                                 EdgeOp::Border(_) => EdgeOp::Border(v),
                                 EdgeOp::Smooth(_) => EdgeOp::Smooth(v),
+                                EdgeOp::Feather(_) => EdgeOp::Feather(v),
                             };
                             note(ui, what);
                             if v != before || !*previewed {
@@ -1220,7 +1223,7 @@ impl App {
             });
         // The dialog above the backdrop, which is above everything else.
         if let Some(shown) = shown {
-            raise_modal(ctx, backdrop_layer, shown.response.layer_id);
+            raise_modal(ctx, backdrop, shown.response.layer_id);
             ctx.accesskit_node_builder(shown.response.id, |b| {
                 b.set_role(egui::accesskit::Role::Dialog);
                 b.set_name(title);
@@ -1254,8 +1257,9 @@ impl App {
             self.record_dialog(&d);
             match &d {
                 Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) | Dialog::Recover | Dialog::About => {}
-                // The previewed step already is the result.
-                Dialog::SelectEdge(..) => {}
+                // The previewed step already is the result; the amount
+                // comes back next time.
+                Dialog::SelectEdge(op, _) => crate::selection_tools::remember(*op),
                 Dialog::Fill(..) => self.fill_active(),
                 Dialog::ColorRange(..) => {}
                 Dialog::Shortcuts => {}
@@ -1387,18 +1391,23 @@ impl App {
     }
 }
 
+/// The layer of [`modal_backdrop`].
+pub(crate) fn backdrop_layer() -> egui::LayerId {
+    egui::LayerId::new(egui::Order::Foreground, egui::Id::new("modal-backdrop"))
+}
+
 /// A full-window layer under a dialog that swallows clicks, so nothing
 /// behind it can be edited while the dialog is open; optionally dimmed.
 /// It sits in the foreground order on top of the canvas's floating bars
 /// (zoom, selection actions); the dialog is then raised above it.
 pub(crate) fn modal_backdrop(ctx: &egui::Context, dim: bool) {
-    let layer = backdrop(ctx, dim);
+    let layer = draw_backdrop(ctx, dim);
     ctx.move_to_top(layer);
 }
 
 /// [`modal_backdrop`] without raising it: the caller raises it with its
 /// dialog once that has been shown ([`raise_modal`]).
-fn backdrop(ctx: &egui::Context, dim: bool) -> egui::LayerId {
+fn draw_backdrop(ctx: &egui::Context, dim: bool) -> egui::LayerId {
     let id = egui::Id::new("modal-backdrop");
     let screen = ctx.screen_rect();
     egui::Area::new(id)
