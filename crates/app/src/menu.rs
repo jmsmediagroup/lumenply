@@ -549,21 +549,7 @@ impl App {
         self.align_menus(ui);
         self.lock_menu(ui);
         layer_actions::column_separator(ui);
-        let mask = self
-            .active_layer()
-            .and_then(|l| l.mask.as_ref())
-            .map(|m| m.enabled);
-        if mask.is_some() {
-            self.act(ui, "Remove mask", "rm-mask");
-            let label = if mask == Some(true) {
-                "Disable mask"
-            } else {
-                "Enable mask"
-            };
-            self.act(ui, label, "mask-toggle");
-        } else {
-            self.act(ui, "Add mask", "add-mask");
-        }
+        self.layer_mask_menu(ui);
         self.act(ui, "Remove background", crate::ai_ui::REMOVE_BG);
         if self.active_layer().is_some_and(|l| l.clip) {
             self.act(ui, "Release clip", "unclip");
@@ -605,7 +591,8 @@ impl App {
         }
         match mask {
             Some(on) => {
-                self.act(ui, "Remove mask", "rm-mask");
+                self.act(ui, "Delete mask", "rm-mask");
+                self.act(ui, "Apply mask", "mask-apply");
                 self.act(ui, if on { "Disable mask" } else { "Enable mask" }, "mask-toggle");
             }
             None => self.act(ui, "Add mask", "add-mask"),

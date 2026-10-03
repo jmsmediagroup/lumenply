@@ -179,7 +179,18 @@ impl App {
         let mut fill_pct = layer.fill_opacity * 100.0;
         let fill_before = fill_pct;
         ui.add_space(2.0);
-        let finished = slider_row(ui, "Opacity", &mut opacity, 0.0..=100.0, "%");
+        // A fully locked layer keeps its opacity, fill and blend: grey them
+        // out and say why, rather than refuse an edit after the fact.
+        let locked = self.lock_block(crate::layer_actions::LockNeed::Props);
+        if let Some(why) = locked {
+            ui.label(RichText::new(why).small().color(MUTED));
+        }
+        let unlocked = locked.is_none();
+        let finished = ui
+            .add_enabled_ui(unlocked, |ui| {
+                slider_row(ui, "Opacity", &mut opacity, 0.0..=100.0, "%")
+            })
+            .inner;
         if opacity != before {
             self.run_coalescing(
                 &SetOpacity {
@@ -193,7 +204,11 @@ impl App {
             self.editor.end_coalescing();
         }
         if has_fill {
-            let finished = slider_row(ui, "Fill", &mut fill_pct, 0.0..=100.0, "%");
+            let finished = ui
+                .add_enabled_ui(unlocked, |ui| {
+                    slider_row(ui, "Fill", &mut fill_pct, 0.0..=100.0, "%")
+                })
+                .inner;
             if fill_pct != fill_before {
                 self.run_coalescing(
                     &lumenply_core::fill_opacity::SetFillOpacity {
@@ -214,7 +229,9 @@ impl App {
         ui.horizontal(|ui| {
             row_label(ui, "Blend", LABEL_W);
             ui.spacing_mut().combo_width = ui.available_width();
-            crate::blend_ui::blend_combo(ui, "blend-mode", "Blend mode", None, &mut sel, is_group);
+            ui.add_enabled_ui(unlocked, |ui| {
+                crate::blend_ui::blend_combo(ui, "blend-mode", "Blend mode", None, &mut sel, is_group)
+            });
         });
         match sel {
             None if !pass => self.run(&SetPassThrough {

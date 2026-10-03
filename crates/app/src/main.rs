@@ -1203,6 +1203,7 @@ impl App {
         // free transform consume it first for their own cancel).
         if self.editor.doc().selection.is_some()
             && !color_picker::is_open(ctx)
+            && !theme::popup_was_open(ctx)
             && !self.gradient.open
             && ctx.input_mut(|i| i.consume_key(M::NONE, Key::Escape))
         {
@@ -1234,6 +1235,8 @@ impl App {
             if i.consume_key(M::COMMAND | M::SHIFT, Key::OpenBracket) {
                 fired.push("layer-back");
             }
+            // Ungroup, clip, move up/down: before Cmd+G and the brush keys.
+            layer_actions::layer_chords(i, &mut fired);
             for (id, ..) in session::SHORTCUTS {
                 if let Some((m, k)) = session::resolve_chord(&self.prefs, id) {
                     if i.consume_key(m, k) {
@@ -1464,7 +1467,13 @@ impl App {
                 let layers_want = ctx
                     .data_mut(|d| d.get_persisted::<f32>(split_id))
                     .map_or(layers_auto, |h| h.clamp(layers_min, layers_max));
-                let props_max = (avail - quick_h - layers_want - 24.0).max(72.0);
+                // The divider, separator and spacing between the sections,
+                // as measured last frame (a fixed guess left Layers 16 pt
+                // short, half hiding its last row).
+                let chrome_id = egui::Id::new("dock-chrome-h");
+                let chrome = ctx.data(|d| d.get_temp::<f32>(chrome_id)).unwrap_or(40.0);
+                let props_max = (avail - quick_h - layers_want - chrome).max(72.0);
+                let props_top = ui.cursor().top();
                 let scroll_out = egui::ScrollArea::vertical()
                     .id_salt("props")
                     .max_height(props_max)
@@ -1510,6 +1519,11 @@ impl App {
                 let h = ui.cursor().top() - top;
                 ctx.data_mut(|d| d.insert_temp(quick_id, h));
                 ui.separator();
+                let used = ui.cursor().top() - props_top - scroll_out.inner_rect.height() - h;
+                if (used - chrome).abs() > 0.5 {
+                    ctx.data_mut(|d| d.insert_temp(chrome_id, used));
+                    ctx.request_repaint();
+                }
                 self.dock_tabs_ui(ui);
             });
     }

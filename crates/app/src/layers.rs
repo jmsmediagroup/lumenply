@@ -1,12 +1,31 @@
 use super::*;
 
+/// The Group button's tooltip, naming this platform's multi-select click.
+const GROUP_TIP: &str = if cfg!(target_os = "macos") {
+    "Group selected layers (Cmd+click to multi-select)"
+} else {
+    "Group selected layers (Ctrl+click to multi-select)"
+};
+
+/// Select all of a text field's text (`id`, holding `text`), as a rename
+/// starts in Photoshop.
+fn select_all_text(ctx: &egui::Context, id: egui::Id, text: &str) {
+    use egui::text::{CCursor, CCursorRange};
+    let mut st = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+    let end = text.chars().count();
+    st.cursor
+        .set_char_range(Some(CCursorRange::two(CCursor::new(0), CCursor::new(end))));
+    st.store(ctx, id);
+}
+
 /// Layer row height and the gap below it.
 const ROW_H: f32 = 38.0;
 const ROW_GAP: f32 = 2.0;
 /// Vertical pitch of the layer list, for the dock's height budget.
 pub(crate) const ROW_PITCH: f32 = ROW_H + ROW_GAP;
-/// Height of the LAYERS title and of the icon footer.
-pub(crate) const HEADER_H: f32 = 30.0;
+/// Height of the tab strip-to-list gap (the lock and filter row with its
+/// spacing) and of the icon footer.
+pub(crate) const HEADER_H: f32 = 34.0;
 pub(crate) const FOOTER_H: f32 = 40.0;
 /// Ink for disabled icons: dimmed, but still legible.
 const DISABLED_INK: Color32 = Color32::from_rgb(0x5A, 0x61, 0x6B);
@@ -168,10 +187,16 @@ impl App {
         let mut rename_commit = None;
         let mut rename_cancel = false;
         let mut mask_click = None;
+        let mut mask_toggle: Option<(LayerId, bool)> = None;
         let mut ctx_action: Option<(&'static str, LayerId)> = None;
         let mut drop_action: Option<(LayerId, Option<LayerId>, usize)> = None;
         let mut row_rects: Vec<egui::Rect> = Vec::new();
         let mut renaming = self.renaming.take();
+        // egui counts two quick clicks on different rows as a double
+        // click; only a second click on the same row renames it.
+        let last_click_id = egui::Id::new("layers:last-clicked-row");
+        let last_clicked: Option<LayerId> = ui.ctx().data(|d| d.get_temp(last_click_id));
+        let mut clicked_row = None;
 
         if rows.is_empty() {
             // Empty document: say what to do instead of showing a void.
@@ -249,18 +274,28 @@ impl App {
                         );
                     }
 
-                    // visibility checkbox
+                    // The eye: a checkbox of its own, so screen readers (and
+                    // Tab) reach it; Alt-click shows this layer alone.
                     let vis_rect = egui::Rect::from_center_size(egui::pos2(x + 8.0, cy), Vec2::splat(16.0));
-                    if hover.is_some_and(|q| vis_rect.expand(3.0).contains(q)) {
+                    let eye = ui.interact(
+                        vis_rect.expand(3.0),
+                        ui.id().with(("layer-eye", row.id)),
+                        Sense::click(),
+                    );
+                    let eye_name = format!("Show {}", row.name);
+                    eye.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, row.visible, &eye_name)
+                    });
+                    if eye.hovered() || eye.has_focus() {
                         p.rect_filled(vis_rect.expand(3.0), 4.0, HOVER);
-                        tip = Some(if row.visible { "Hide layer" } else { "Show layer" }.into());
                     }
                     paint_eye(p, vis_rect, row.visible);
-                    if resp.clicked()
-                        && resp
-                            .interact_pointer_pos()
-                            .is_some_and(|q| vis_rect.expand(3.0).contains(q))
-                    {
+                    let eye = eye.on_hover_text(if row.visible {
+                        "Hide layer (Alt-click: show only this layer)"
+                    } else {
+                        "Show layer (Alt-click: show only this layer)"
+                    });
+                    if eye.clicked() {
                         if ui.input(|i| i.modifiers.alt) {
                             solo = Some(row.id);
                         } else {
@@ -363,17 +398,21 @@ impl App {
                         if on_mask {
                             tip = Some(
                                 if editing {
-                                    "Painting on the mask — click to edit the layer again"
+                                    "Painting on the mask — click to edit the layer again · Shift-click to disable"
                                 } else if row.mask_enabled {
-                                    "Layer mask — click to paint on it"
+                                    "Layer mask — click to paint on it · Shift-click to disable"
                                 } else {
-                                    "Layer mask (disabled) — click to paint on it"
+                                    "Layer mask (disabled) — click to paint on it · Shift-click to enable"
                                 }
                                 .into(),
                             );
                         }
                         if resp.clicked() && resp.interact_pointer_pos().is_some_and(|q| m_rect.contains(q)) {
-                            mask_click = Some(row.id);
+                            if ui.input(|i| i.modifiers.shift) {
+                                mask_toggle = Some((row.id, !row.mask_enabled));
+                            } else {
+                                mask_click = Some(row.id);
+                            }
                         }
                         x += THUMB.0 as f32 + 6.0;
                     }
@@ -385,8 +424,15 @@ impl App {
                                 egui::pos2(x, cy - 11.0),
                                 egui::pos2(rect.max.x - 6.0, cy + 11.0),
                             );
-                            let r = ui.put(edit_rect, egui::TextEdit::singleline(text));
+                            let edit_id = ui.id().with(("layer-rename", row.id));
+                            let first = !ui.ctx().memory(|m| m.has_focus(edit_id));
+                            let r = ui.put(edit_rect, egui::TextEdit::singleline(text).id(edit_id));
                             a11y_name(&r, "Layer name");
+                            if first {
+                                // Photoshop selects the whole name: typing
+                                // replaces it, arrows keep it.
+                                select_all_text(ui.ctx(), edit_id, text);
+                            }
                             r.request_focus();
                             let (enter, escape, click_away) = ui.input(|i| {
                                 (
@@ -492,6 +538,13 @@ impl App {
                             .unwrap_or((0, 1));
                         let pixel = row.kind == Kind::Pixel && row.chip.is_none();
                         let smart = row.chip == Some("Smart");
+                        let rasterizable = doc.layer(row.id).is_some_and(|l| {
+                            l.smart_layer().is_some()
+                                || l.text_layer().is_some()
+                                || l.fill_layer().is_some()
+                                || l.shape_layer().is_some()
+                        });
+                        let apply_block = lumenply_core::layer_masks::apply_mask_block(doc, row.id);
                         let merge = lumenply_core::layer_ops::merge_down_kind(doc, row.id);
                         if menu_item(ui, "Rename", "") {
                             rename_start = Some((row.id, row.name.clone()));
@@ -524,7 +577,11 @@ impl App {
                                 .on_disabled_hover_text("Nothing below to clip to");
                         }
                         if row.masked {
-                            act(ui, true, "Remove mask", "rmmask");
+                            act(ui, true, "Delete mask", "rmmask");
+                            let r = act(ui, apply_block.is_none(), "Apply mask", "applymask");
+                            if let Some(why) = apply_block {
+                                r.on_disabled_hover_text(why);
+                            }
                             if row.mask_enabled {
                                 act(ui, true, "Disable mask", "maskoff");
                             } else {
@@ -537,8 +594,7 @@ impl App {
                         if row.kind == Kind::Group {
                             act(ui, true, "Ungroup", "ungroup");
                         }
-                        let fill = matches!(row.chip, Some("Color Fill" | "Gradient Fill"));
-                        if smart || fill || row.kind == Kind::Text {
+                        if rasterizable {
                             act(ui, true, "Rasterize", "rasterize");
                         }
                         if pixel {
@@ -553,10 +609,14 @@ impl App {
                         act(ui, true, "Delete layer", "delete");
                     });
                     let on_thumb = resp.interact_pointer_pos().is_some_and(|q| t_rect.contains(q));
-                    if resp.double_clicked() && row.kind == Kind::Text && on_thumb {
+                    if resp.clicked() {
+                        clicked_row = Some(row.id);
+                    }
+                    let renames = resp.double_clicked() && last_clicked == Some(row.id) && !ctrl;
+                    if renames && row.kind == Kind::Text && on_thumb {
                         // Photoshop: the text thumbnail edits the text, all selected.
                         text_edit_start = Some(row.id);
-                    } else if resp.double_clicked() {
+                    } else if renames {
                         rename_start = Some((row.id, row.name.clone()));
                     } else if resp.clicked() && on_thumb && ctrl && row.kind != Kind::Group {
                         // Photoshop: Cmd-click a thumbnail loads the layer's
@@ -636,6 +696,9 @@ impl App {
                 }
             });
         a11y_scroll(ui.ctx(), &scroll_out, "Layers");
+        if let Some(id) = clicked_row {
+            ui.ctx().data_mut(|d| d.insert_temp(last_click_id, id));
+        }
 
         if rename_cancel {
             renaming = None;
@@ -669,6 +732,10 @@ impl App {
                 self.set_active(Some(id));
             }
         }
+        if let Some((layer, enabled)) = mask_toggle {
+            self.set_active(Some(layer));
+            self.run(&SetMaskEnabled { layer, enabled });
+        }
         if let Some(id) = mask_click {
             if Some(id) == self.active {
                 self.editing_mask = !self.editing_mask;
@@ -694,10 +761,8 @@ impl App {
                 "ungroup" => self.ungroup_active(),
                 "smart" => self.run(&ConvertToSmartObject { layer: id }),
                 "rasterize" => self.run(&RasterizeLayer { layer: id }),
-                "addmask" => {
-                    self.run(&AddMask { layer: id });
-                    self.editing_mask = true;
-                }
+                "addmask" => self.add_mask_auto(false),
+                "applymask" => self.run_menu_action("mask-apply"),
                 "rmmask" => {
                     self.run(&RemoveMask { layer: id });
                     self.editing_mask = false;
@@ -741,6 +806,9 @@ impl App {
                 Some((i + 1 < list.len(), i > 0))
             })
             .unwrap_or((false, false));
+        let up_why = self.action_block("layer-up");
+        let down_why = self.action_block("layer-down");
+        let mask_why = self.action_block("add-mask");
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -750,7 +818,7 @@ impl App {
             if ui
                 .add_enabled(
                     self.active.is_some(),
-                    IconButton::new(icon_folder, "Group selected layers (Ctrl+click to multi-select)"),
+                    IconButton::new(icon_folder, GROUP_TIP).why(Some("Select a layer first")),
                 )
                 .clicked()
             {
@@ -770,23 +838,32 @@ impl App {
                     }
                 }
             });
-            if ui
-                .add_enabled(
-                    self.active.is_some() && !has_mask,
-                    IconButton::new(icon_mask, "Add mask (from the selection if there is one)"),
+            let mask = ui.add_enabled(
+                self.active.is_some() && !has_mask && mask_why.is_none(),
+                IconButton::new(
+                    icon_mask,
+                    "Add mask: reveals the selection, or everything (Alt-click hides it)",
                 )
-                .clicked()
-            {
-                action = Some("addmask");
+                .why(mask_why),
+            );
+            if mask.clicked() {
+                action = Some(if ui.input(|i| i.modifiers.alt) {
+                    "hidemask"
+                } else {
+                    "addmask"
+                });
             }
             if ui
-                .add_enabled(can_up, IconButton::new(icon_up, "Move layer up"))
+                .add_enabled(can_up, IconButton::new(icon_up, "Move layer up").why(up_why))
                 .clicked()
             {
                 action = Some("up");
             }
             if ui
-                .add_enabled(can_down, IconButton::new(icon_down, "Move layer down"))
+                .add_enabled(
+                    can_down,
+                    IconButton::new(icon_down, "Move layer down").why(down_why),
+                )
                 .clicked()
             {
                 action = Some("down");
@@ -797,7 +874,10 @@ impl App {
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add_enabled(self.active.is_some(), IconButton::new(icon_trash, "Delete layer"))
+                    .add_enabled(
+                        self.active.is_some(),
+                        IconButton::new(icon_trash, "Delete layer").why(Some("Select a layer first")),
+                    )
                     .clicked()
                 {
                     action = Some("delete");
@@ -811,12 +891,8 @@ impl App {
             Some("delete") => self.delete_active(),
             Some("up") => self.reorder_active(1),
             Some("down") => self.reorder_active(-1),
-            Some("addmask") => {
-                if let Some(l) = self.active {
-                    self.run(&AddMask { layer: l });
-                    self.editing_mask = true;
-                }
-            }
+            Some("addmask") => self.add_mask_auto(false),
+            Some("hidemask") => self.add_mask_auto(true),
             Some("rmmask") => {
                 if let Some(l) = self.active {
                     self.run(&RemoveMask { layer: l });
@@ -897,11 +973,18 @@ fn icon_menu(
 pub(crate) struct IconButton {
     draw: fn(&egui::Painter, egui::Rect, Color32),
     tip: &'static str,
+    why: Option<&'static str>,
 }
 
 impl IconButton {
     pub(crate) fn new(draw: fn(&egui::Painter, egui::Rect, Color32), tip: &'static str) -> Self {
-        IconButton { draw, tip }
+        IconButton { draw, tip, why: None }
+    }
+
+    /// Why the button is greyed out, added to its tooltip when it is.
+    pub(crate) fn why(mut self, why: Option<&'static str>) -> Self {
+        self.why = why;
+        self
     }
 }
 
@@ -920,7 +1003,11 @@ impl egui::Widget for IconButton {
         // Icon-only: the tooltip text doubles as the accessible name.
         let tip = self.tip;
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, tip));
-        resp.on_hover_text(tip).on_disabled_hover_text(tip)
+        let off = match self.why {
+            Some(why) => format!("{tip}: {why}"),
+            None => tip.to_string(),
+        };
+        resp.on_hover_text(tip).on_disabled_hover_text(off)
     }
 }
 
@@ -1073,5 +1160,27 @@ mod tests {
         assert_eq!(short_chip("Live high pass"), "Live HP");
         assert_eq!(short_chip("Curves"), "Curves");
         assert_eq!(ROW_PITCH, 40.0);
+    }
+
+    #[test]
+    fn group_tip_names_this_platforms_modifier() {
+        let want = if cfg!(target_os = "macos") {
+            "Cmd+click"
+        } else {
+            "Ctrl+click"
+        };
+        assert!(GROUP_TIP.contains(want), "{GROUP_TIP}");
+    }
+
+    #[test]
+    fn a_rename_starts_with_the_whole_name_selected() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("rename-test");
+        select_all_text(&ctx, id, "Layer 2 é");
+        let r = egui::TextEdit::load_state(&ctx, id)
+            .and_then(|st| st.cursor.char_range())
+            .expect("a selection");
+        let (a, b) = (r.primary.index, r.secondary.index);
+        assert_eq!((a.min(b), a.max(b)), (0, 9), "every character, by char not byte");
     }
 }
