@@ -678,9 +678,12 @@ impl App {
         if self.xform.is_some() || self.drag.is_some() {
             return;
         }
+        // Below the selection's pixels, not its whole tiles (the Info
+        // panel's cached tight bounds).
+        let tight = self.info_selection(ctx);
         let doc = self.editor.doc();
         let Some(sel) = &doc.selection else { return };
-        let b = sel.bounds_within(doc.canvas());
+        let b = tight.unwrap_or_else(|| sel.bounds_within(doc.canvas()));
         if b.is_empty() {
             return;
         }
@@ -1283,14 +1286,8 @@ impl App {
                             (false, Some(layer), true) => SampleSource::Layer(layer),
                             _ => SampleSource::Merged,
                         };
-                        let mods = ctx.input(|i| i.modifiers);
-                        let op = if mods.shift {
-                            CombineOp::Union
-                        } else if mods.alt {
-                            CombineOp::Subtract
-                        } else {
-                            self.select_op
-                        };
+                        // Shift adds, Alt subtracts, both intersect.
+                        let op = self.selection_op(ctx);
                         self.run(&MagicWandSelect {
                             x: x.floor() as i32,
                             y: y.floor() as i32,
@@ -1588,10 +1585,17 @@ impl App {
                 if resp.hovered() {
                     ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
                 }
-                if resp.double_clicked_by(primary) {
-                    if let Some(p) = resp.interact_pointer_pos() {
-                        self.lasso.push(to_doc(p));
-                    }
+                // A double-click closes the polygon, but only on the spot of
+                // the click before: two quick clicks on different corners
+                // are two corners.
+                let closes = resp.double_clicked_by(primary)
+                    && resp.interact_pointer_pos().is_some_and(|p| {
+                        let q = to_doc(p);
+                        self.lasso.last().is_some_and(|l| {
+                            ((l.0 - q.0).powi(2) + (l.1 - q.1).powi(2)).sqrt() * self.zoom < 6.0
+                        })
+                    });
+                if closes {
                     self.finish_polygon(ctx);
                 } else if resp.clicked_by(primary) {
                     if let Some(p) = resp.interact_pointer_pos() {
@@ -1619,10 +1623,12 @@ impl App {
                     self.drag = Some(DragKind::Select);
                     self.drag_start = ctx.input(|i| i.pointer.press_origin());
                     self.begin_snap(&[]);
+                    self.marquee_press(ctx);
                 }
                 if self.drag == Some(DragKind::Select) && resp.dragged_by(primary) {
                     if let (Some(a), Some(b)) = (self.drag_start, resp.interact_pointer_pos()) {
-                        self.track_marquee(to_doc(a), to_doc(b));
+                        // Shift squares and Alt centres when pressed mid-drag.
+                        self.marquee_drag(ctx, to_doc(a), to_doc(b));
                     }
                 }
                 if resp.drag_stopped() && self.drag == Some(DragKind::Select) {
@@ -1637,16 +1643,8 @@ impl App {
                         let canvas = self.editor.doc().canvas();
                         let (da, db) = tracked.unwrap_or((to_doc(a), to_doc(b)));
                         let r = drag_rect(da, db, canvas);
-                        let mods = ctx.input(|i| i.modifiers);
-                        let op = if mods.shift && mods.alt {
-                            CombineOp::Intersect
-                        } else if mods.shift {
-                            CombineOp::Union
-                        } else if mods.alt {
-                            CombineOp::Subtract
-                        } else {
-                            self.select_op
-                        };
+                        // The keys held at the press say how it combines.
+                        let op = self.marquee_op(ctx);
                         if r.w < 2 || r.h < 2 {
                             self.run(&SetSelection { selection: None });
                         } else {
@@ -1655,6 +1653,7 @@ impl App {
                             } else {
                                 Selection::ellipse(r)
                             };
+                            let shape = self.feathered(shape);
                             self.run(&ModifySelection { shape, op });
                         }
                     }
