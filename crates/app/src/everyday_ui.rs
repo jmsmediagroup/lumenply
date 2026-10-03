@@ -374,6 +374,12 @@ mod tests {
         let bytes = std::fs::read(&pdf).unwrap();
         let _ = std::fs::remove_file(&pdf);
         assert!(bytes.starts_with(b"%PDF-1.4"), "{}", app.status);
+        // The Layers filter keeps matches and their groups.
+        app.layer_filter = "PHOTO".into();
+        let names: Vec<String> = app.layer_rows().iter().map(|r| r.name().to_string()).collect();
+        assert_eq!(names, ["photo"]);
+        app.layer_filter.clear();
+        assert_eq!(app.layer_rows().len(), 3);
         // Duplicate the document into a new, unsaved tab.
         let tabs = app.tab_infos().len();
         app.run_menu_action("duplicate-doc");

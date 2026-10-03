@@ -426,7 +426,9 @@ None of these could be tested in the container.
       the Hand tool's Zoom mode (click in at the pointer, Alt-click out);
       Cmd+N, Shift+Cmd+N, Shift+Cmd+S; Shift-drag a transform corner
       scales freely; Alt-click an eye shows that layer alone (again
-      restores); Shift+[ / ] step the brush hardness
+      restores); Shift+[ / ] step the brush hardness; the Layers panel
+      filters by name (searching inside collapsed groups, keeping each
+      match's groups) in place of its duplicate title
 - [x] Merge selected layers (Cmd+E with several layers selected, "Merge
       layers"): the selected visible siblings composite into the topmost
       one's slot and name; hidden ones stay; picture unchanged (tested)

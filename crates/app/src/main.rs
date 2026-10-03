@@ -451,6 +451,8 @@ struct App {
     last_stroke_end: Option<(u64, f32, f32)>,
     /// The Hand tool's Zoom mode (Z): click zooms in, Alt-click out.
     hand_zoom: bool,
+    /// The Layers panel's name filter (empty shows every layer).
+    layer_filter: String,
     /// Alt-click on an eye: (document, soloed layer, visibility before), so
     /// a second Alt-click restores it.
     solo: Option<(u64, LayerId, lumenply_core::everyday::SetVisibilities)>,
@@ -629,6 +631,7 @@ impl App {
             typer: text_edit::TypeTool::default(),
             last_stroke_end: None,
             hand_zoom: false,
+            layer_filter: String::new(),
             solo: None,
             panels: Default::default(),
             patterns: Default::default(),

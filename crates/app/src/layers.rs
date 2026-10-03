@@ -65,7 +65,17 @@ impl LayerRow {
 
 impl App {
     pub(crate) fn layer_rows(&self) -> Vec<LayerRow> {
-        fn walk(layers: &[Layer], parent: Option<LayerId>, depth: usize, out: &mut Vec<LayerRow>) {
+        // A filter searches inside collapsed groups too and keeps each
+        // match's groups, so the matches stay in context.
+        let query = self.layer_filter.trim().to_lowercase();
+        let expand_all = !query.is_empty();
+        fn walk(
+            layers: &[Layer],
+            parent: Option<LayerId>,
+            depth: usize,
+            expand_all: bool,
+            out: &mut Vec<LayerRow>,
+        ) {
             for l in layers.iter().rev() {
                 let (kind, chip) = match &l.content {
                     LayerContent::Pixel(_) => (Kind::Pixel, None),
@@ -108,13 +118,38 @@ impl App {
                     collapsed: l.collapsed,
                     locks: l.locks,
                 });
-                if let (Some(children), false) = (l.children(), l.collapsed) {
-                    walk(children, Some(l.id), depth + 1, out);
+                if let (Some(children), false) = (l.children(), l.collapsed && !expand_all) {
+                    walk(children, Some(l.id), depth + 1, expand_all, out);
                 }
             }
         }
         let mut rows = Vec::new();
-        walk(self.editor.doc().layers(), None, 0, &mut rows);
+        walk(self.editor.doc().layers(), None, 0, expand_all, &mut rows);
+        if expand_all {
+            let hit: Vec<bool> = rows
+                .iter()
+                .map(|r| r.name.to_lowercase().contains(&query))
+                .collect();
+            let mut keep = hit.clone();
+            // A match keeps its groups: walk up through the parents.
+            for (i, r) in rows.iter().enumerate() {
+                if !hit[i] {
+                    continue;
+                }
+                let mut parent = r.parent;
+                while let Some(p) = parent {
+                    match rows.iter().position(|q| q.id == p) {
+                        Some(j) => {
+                            keep[j] = true;
+                            parent = rows[j].parent;
+                        }
+                        None => break,
+                    }
+                }
+            }
+            let mut k = keep.into_iter();
+            rows.retain(|_| k.next().unwrap_or(false));
+        }
         rows
     }
 
