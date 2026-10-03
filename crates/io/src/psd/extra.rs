@@ -150,6 +150,10 @@ pub(super) fn adjustment_block(adj: &Adjustment) -> Option<(&'static [u8; 4], Ve
             }
             b"selc"
         }
+        Adjustment::ColorLookup { lut, name } => {
+            d = super::color_lookup::block_body(lut, name);
+            b"clrL"
+        }
         _ => return None,
     };
     Some((key, d))
@@ -301,7 +305,8 @@ pub(super) enum Val {
     Unit([u8; 4], f64),
     Obj(Desc),
     List(Vec<Val>),
-    /// Raw data (`tdta`), e.g. a type layer's EngineData.
+    /// Raw data (`tdta`), e.g. a type layer's EngineData or an embedded
+    /// LUT file.
     Raw(Vec<u8>),
 }
 

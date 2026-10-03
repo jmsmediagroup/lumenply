@@ -27,6 +27,7 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::IoError;
 
+mod luts;
 mod smart_filters;
 
 pub const FORMAT_VERSION: u32 = 1;
@@ -171,6 +172,14 @@ enum ContentRecord {
     Shape {
         shape: lumenply_doc::ShapeLayer,
     },
+    /// Color Lookup adjustment: its table is the `.cube` entry `lut`
+    /// (`luts/<hash>.cube`), shared by every layer using the same table.
+    ColorLookup {
+        /// The lookup's display name (the layer record owns `name`).
+        #[serde(default)]
+        lut_name: String,
+        lut: String,
+    },
 }
 
 /// Write a document to `path`, replacing any existing file.
@@ -196,6 +205,7 @@ fn write_archive(path: &Path, doc: &Document) -> Result<(), ProjectError> {
     let deflate = FileOptions::default().compression_method(CompressionMethod::Deflated);
     let stored = FileOptions::default().compression_method(CompressionMethod::Stored);
 
+    luts::write_all(&mut zip, doc, deflate)?;
     let mut layers = Vec::new();
     for l in doc.layers() {
         layers.push(write_layer(&mut zip, l, deflate)?);
@@ -278,6 +288,10 @@ fn write_layer<W: Write + std::io::Seek>(
             }
             ContentRecord::Group { children: out }
         }
+        LayerContent::Adjustment(Adjustment::ColorLookup { lut, name }) => ContentRecord::ColorLookup {
+            lut_name: name.clone(),
+            lut: luts::entry_name(lut),
+        },
         LayerContent::Adjustment(adj) => ContentRecord::Adjustment {
             adjustment: adj.clone(),
         },
@@ -443,6 +457,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Document, ProjectError> {
             manifest.next_id
         )));
     }
+    luts::share(&mut doc);
     lumenply_render::fill::refresh_stale(&mut doc);
     Ok(doc)
 }
@@ -478,6 +493,10 @@ fn read_layer<R: Read + std::io::Seek>(
             LayerContent::Group(out)
         }
         ContentRecord::Adjustment { adjustment } => LayerContent::Adjustment(adjustment.clone()),
+        ContentRecord::ColorLookup { lut_name, lut } => LayerContent::Adjustment(Adjustment::ColorLookup {
+            lut: luts::read(zip, lut)?,
+            name: lut_name.clone(),
+        }),
         ContentRecord::Filter { filter } => LayerContent::Filter(filter.clone()),
         ContentRecord::Text { text } => {
             let mut t = text.clone();

@@ -66,6 +66,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Export OpenRaster...", "export-ora"),
     ("Export 16-bit PNG/TIFF...", "export-16bit"),
     ("Export OpenEXR (linear float)...", "export-exr"),
+    ("Export Color Lookup Table (.cube)...", "export-lut"),
     ("Close document", "close"),
     ("Quit Lumenply", "quit"),
     ("Undo", "undo"),
@@ -170,6 +171,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Snap on or off", "snap"),
     ("New fill layer: solid color", "fill-solid"),
     ("New fill layer: gradient", "fill-gradient"),
+    ("Load 3D LUT as a Color Lookup...", "load-lut"),
     ("New shape layer from path", "shape-from-path"),
     ("Select and Mask...", "select-mask"),
     ("Import brushes (.abr)...", "import-brushes"),
@@ -587,6 +589,7 @@ impl App {
             return block;
         }
         match id {
+            "export-lut" if !self.has_visible_adjustments() => Some("Add an adjustment layer first"),
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
             "redo" if !self.editor.can_redo() => Some("Nothing to redo"),
             "flip-h" | "flip-v" if !pixel && !smart && !shape => {
@@ -753,6 +756,7 @@ impl App {
             "export-ora" => self.pick_export_ora(),
             "export-16bit" => self.pick_export_16bit(),
             "export-exr" => self.pick_export_exr(),
+            "export-lut" => self.pick_export_lut(),
             "close" => self.close_tab(self.cur_tab),
             "undo" => self.undo(),
             "redo" => self.redo(),
@@ -801,6 +805,7 @@ impl App {
                 }
             }
             "fill-solid" | "fill-gradient" => self.add_fill_layer(id == "fill-gradient"),
+            "load-lut" => self.load_lut_action(),
             "shape-from-path" => self.shape_from_path(),
             "delete-layer" => self.delete_active(),
             "layer-up" => self.reorder_active(1),
@@ -963,7 +968,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 153); // + pattern fill, Define Pattern, import .pat
+        assert_eq!(n, 155); // + load-lut, export-lut
     }
 
     #[test]
