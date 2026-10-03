@@ -118,6 +118,30 @@ and redo move a cursor over versions. Versions share unchanged nodes
 (`Arc`), so a step costs the nodes it changed — parameters, not pixels.
 Slider drags coalesce into one version, as today.
 
+As built (stage 3a), a version is a `Graph` plus a `DocState`: what the
+document holds besides the graph (selection, paths, guides, saved
+selections, patterns, resolution, float mode) and a record per layer with
+its settings, UI state (name, locks, collapsed, clip) and the ids of the
+nodes that carry it. Compositing nodes carry their layer's id. The
+document the app reads is the version's projection: settings from the
+records, a pixel layer's pixels from its content node. The `DocState` is
+also the project file's `meta.json` (ADR 0026), one mapping for both.
+
+A command still runs on a copy of the document, and `sync` lowers the
+result into the next version, reusing the previous version's nodes (ids
+and `Arc`s, hence content keys and cached tiles) for every layer whose
+pixels (by tile identity), mask and settings didn't change; changed pixels
+become a new `image` blob, hashing only the changed tiles. A command that
+can say what it does as an op (`Command::graph_edit`: a stroke, a move by
+whole pixels) skips that: the op goes onto the layer's content chain and
+the layer's pixels are projected from it. Outside float mode a `compact`
+op follows any op that computes new values, because the editor keeps a
+layer at 16 bits after every command and the next edit must read exactly
+what the document holds; the same op follows a text or smart-object op
+whose cache the document holds compacted. Pixels in a chain cost no
+history memory (they can be recomputed); the memory limit counts the blob
+and record tiles each step stops holding.
+
 ### Storage
 
 `.lumen` becomes a zip of `graph.json` (the graph, format version 3) plus
