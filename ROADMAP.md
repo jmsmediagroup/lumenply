@@ -405,7 +405,9 @@ None of these could be tested in the container.
       paints a straight line from the last stroke; Alt+Backspace /
       Cmd+Backspace fill with the foreground / background colour; Z is
       the Hand tool's Zoom mode (click in at the pointer, Alt-click out);
-      Cmd+N, Shift+Cmd+N, Shift+Cmd+S
+      Cmd+N, Shift+Cmd+N, Shift+Cmd+S; Shift-drag a transform corner
+      scales freely; Alt-click an eye shows that layer alone (again
+      restores)
 - [x] Merge selected layers (Cmd+E with several layers selected, "Merge
       layers"): the selected visible siblings composite into the topmost
       one's slot and name; hidden ones stay; picture unchanged (tested)

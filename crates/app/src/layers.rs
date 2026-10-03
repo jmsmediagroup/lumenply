@@ -124,6 +124,7 @@ impl App {
         let ctrl = ui.input(|i| i.modifiers.command);
 
         let mut toggle_vis = None;
+        let mut solo: Option<LayerId> = None;
         let mut select: Option<(LayerId, bool)> = None;
         let mut load_pixels: Option<(LayerId, CombineOp)> = None;
         let mut toggle_collapse = None;
@@ -225,7 +226,11 @@ impl App {
                             .interact_pointer_pos()
                             .is_some_and(|q| vis_rect.expand(3.0).contains(q))
                     {
-                        toggle_vis = Some((row.id, !row.visible));
+                        if ui.input(|i| i.modifiers.alt) {
+                            solo = Some(row.id);
+                        } else {
+                            toggle_vis = Some((row.id, !row.visible));
+                        }
                     }
                     x += 22.0;
 
@@ -675,6 +680,9 @@ impl App {
         }
         if let Some((layer, visible)) = toggle_vis {
             self.run(&SetVisible { layer, visible });
+        }
+        if let Some(layer) = solo {
+            self.solo_layer(layer);
         }
         if let Some((layer, collapsed)) = toggle_collapse {
             self.run(&SetCollapsed { layer, collapsed });

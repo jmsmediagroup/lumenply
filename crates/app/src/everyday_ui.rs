@@ -164,6 +164,24 @@ impl App {
         self.run(&SelectLayerPixels { layer, op });
     }
 
+    /// Alt-click on an eye: show only this layer; Alt-clicking it again
+    /// brings back what was visible before.
+    pub(crate) fn solo_layer(&mut self, layer: LayerId) {
+        use lumenply_core::everyday::SetVisibilities;
+        let doc = self.editor.doc();
+        let soloed = SetVisibilities::solo(doc, layer);
+        if let Some((key, id, before)) = self.solo.take() {
+            if key == self.doc_key && id == layer && soloed.matches(doc) {
+                self.run(&before);
+                self.status = "Showing the other layers again".into();
+                return;
+            }
+        }
+        self.solo = Some((self.doc_key, layer, SetVisibilities::snapshot(doc)));
+        self.run(&soloed);
+        self.status = "Showing this layer only (Alt-click its eye again to undo)".into();
+    }
+
     /// Bring to Front / Send to Back among the layer's siblings.
     fn layer_to_end(&mut self, front: bool) {
         let Some(layer) = self.active else { return };
@@ -324,6 +342,32 @@ mod tests {
             .unwrap()
             .get_pixel(1, 1);
         assert!(p.r > 0.99 && p.g > 0.99 && p.b < 0.01 && p.a == 1.0, "{p:?}");
+        // Alt-click on an eye solos the layer; again restores the rest.
+        let others: Vec<LayerId> = app
+            .editor
+            .doc()
+            .layers()
+            .iter()
+            .map(|l| l.id)
+            .filter(|i| *i != id)
+            .collect();
+        app.run(&lumenply_core::commands::SetVisible {
+            layer: others[0],
+            visible: false,
+        });
+        app.solo_layer(id);
+        assert!(app
+            .editor
+            .doc()
+            .layers()
+            .iter()
+            .all(|l| l.visible == (l.id == id)));
+        app.solo_layer(id);
+        assert!(
+            !app.editor.doc().layer(others[0]).unwrap().visible,
+            "the earlier hidden one stays hidden"
+        );
+        assert!(app.editor.doc().layer(others[1]).unwrap().visible);
         // Duplicate the document into a new, unsaved tab.
         let tabs = app.tab_infos().len();
         app.run_menu_action("duplicate-doc");

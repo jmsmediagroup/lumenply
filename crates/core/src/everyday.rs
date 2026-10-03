@@ -214,6 +214,69 @@ impl Command for StrokeSelection {
     }
 }
 
+/// Show and hide several layers as one undo step (Alt-click on an eye).
+pub struct SetVisibilities {
+    pub changes: Vec<(LayerId, bool)>,
+}
+
+impl SetVisibilities {
+    /// Alt-click on `layer`'s eye: it (with its groups and contents) alone
+    /// stays visible; every other layer is hidden.
+    pub fn solo(doc: &Document, layer: LayerId) -> SetVisibilities {
+        fn walk(
+            list: &[lumenply_doc::Layer],
+            target: LayerId,
+            keep: bool,
+            out: &mut Vec<(LayerId, bool)>,
+        ) -> bool {
+            let mut found = false;
+            for l in list {
+                let is = l.id == target;
+                let inside = match l.children() {
+                    Some(c) => walk(c, target, keep || is, out),
+                    None => false,
+                };
+                let on_path = is || inside;
+                out.push((l.id, keep || on_path));
+                found |= on_path;
+            }
+            found
+        }
+        let mut changes = Vec::new();
+        walk(doc.layers(), layer, false, &mut changes);
+        SetVisibilities { changes }
+    }
+
+    /// Every layer's visibility now, to restore later.
+    pub fn snapshot(doc: &Document) -> SetVisibilities {
+        let mut changes = Vec::new();
+        doc.for_each_layer(|l| changes.push((l.id, l.visible)));
+        SetVisibilities { changes }
+    }
+
+    /// Whether `doc` already shows exactly this.
+    pub fn matches(&self, doc: &Document) -> bool {
+        self.changes
+            .iter()
+            .all(|(id, v)| doc.layer(*id).is_some_and(|l| l.visible == *v))
+    }
+}
+
+impl Command for SetVisibilities {
+    fn label(&self) -> String {
+        "Show / hide layers".into()
+    }
+
+    fn apply(&self, doc: &mut Document) -> EditResult {
+        for (id, v) in &self.changes {
+            if let Some(l) = doc.layer_mut(*id) {
+                l.visible = *v;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Select ▸ Reselect (Shift+Cmd+D): the selection most recently cleared.
 pub struct Reselect;
 
@@ -366,6 +429,38 @@ mod tests {
             ed.doc().layer(id).unwrap().pixels().unwrap().get_pixel(30, 30).a,
             0.0
         );
+    }
+
+    #[test]
+    fn solo_shows_one_layer_with_its_groups_and_contents() {
+        let mut doc = Document::new(10, 10);
+        let a = doc.add_pixel_layer("a");
+        let b = doc.add_pixel_layer("b");
+        let g = doc.alloc_id();
+        let mut group = lumenply_doc::Layer::group(g, "g");
+        let c = doc.alloc_id();
+        group
+            .children_mut()
+            .unwrap()
+            .push(lumenply_doc::Layer::pixel(c, "c"));
+        doc.add_layer(group);
+        let solo = SetVisibilities::solo(&doc, c);
+        let v = |id| solo.changes.iter().find(|(i, _)| *i == id).unwrap().1;
+        assert_eq!((v(a), v(b), v(g), v(c)), (false, false, true, true));
+        let solo = SetVisibilities::solo(&doc, g);
+        let v = |id| solo.changes.iter().find(|(i, _)| *i == id).unwrap().1;
+        assert_eq!(
+            (v(a), v(g), v(c)),
+            (false, true, true),
+            "a group keeps its contents"
+        );
+        let before = SetVisibilities::snapshot(&doc);
+        let mut ed = crate::Editor::new(doc);
+        ed.execute(&SetVisibilities::solo(ed.doc(), a)).unwrap();
+        assert!(!ed.doc().layer(b).unwrap().visible && ed.doc().layer(a).unwrap().visible);
+        assert!(!before.matches(ed.doc()));
+        ed.execute(&before).unwrap();
+        assert!(ed.doc().layer(b).unwrap().visible);
     }
 
     #[test]

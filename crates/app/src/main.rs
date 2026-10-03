@@ -444,6 +444,9 @@ struct App {
     last_stroke_end: Option<(u64, f32, f32)>,
     /// The Hand tool's Zoom mode (Z): click zooms in, Alt-click out.
     hand_zoom: bool,
+    /// Alt-click on an eye: (document, soloed layer, visibility before), so
+    /// a second Alt-click restores it.
+    solo: Option<(u64, LayerId, lumenply_core::everyday::SetVisibilities)>,
     /// Channels / Paths / Navigator / Info display state (panels.rs).
     panels: panels::PanelState,
     /// Pattern library and picker (pattern_ui.rs).
@@ -618,6 +621,7 @@ impl App {
             typer: text_edit::TypeTool::default(),
             last_stroke_end: None,
             hand_zoom: false,
+            solo: None,
             panels: Default::default(),
             patterns: Default::default(),
         };
