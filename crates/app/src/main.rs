@@ -1450,6 +1450,11 @@ impl App {
                 let layers_full = tabs + layers::HEADER_H + rows * layers::ROW_PITCH + layers::FOOTER_H;
                 let layers_min = tabs + layers::HEADER_H + 3.0 * layers::ROW_PITCH + layers::FOOTER_H;
                 let layers_auto = layers_full.min(layers_min.max(avail * 0.45));
+                // ...less what the active layer's settings need to show
+                // in full (a curve and its presets) when there is room.
+                let essential = properties::props_essential_height(ctx);
+                let layers_auto =
+                    properties::dock_layers_height(avail, quick_h, essential, layers_auto, layers_min);
                 // The divider below Properties can be dragged; double-click
                 // returns to the automatic split.
                 let split_id = egui::Id::new("dock-layers-h");
@@ -1458,19 +1463,21 @@ impl App {
                     .data_mut(|d| d.get_persisted::<f32>(split_id))
                     .map_or(layers_auto, |h| h.clamp(layers_min, layers_max));
                 let props_max = (avail - quick_h - layers_want - 24.0).max(72.0);
-                let scroll_out = egui::ScrollArea::vertical()
-                    .id_salt("props")
-                    .max_height(props_max)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        // Keep the floating scroll bar off the values.
-                        egui::Frame::none()
-                            .inner_margin(egui::Margin {
-                                right: 8.0,
-                                ..Default::default()
-                            })
-                            .show(ui, |ui| self.properties_ui(ui));
-                    });
+                let scroll_out = properties::with_props_room(ctx, props_max, || {
+                    egui::ScrollArea::vertical()
+                        .id_salt("props")
+                        .max_height(props_max)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            // Keep the floating scroll bar off the values.
+                            egui::Frame::none()
+                                .inner_margin(egui::Margin {
+                                    right: 8.0,
+                                    ..Default::default()
+                                })
+                                .show(ui, |ui| self.properties_ui(ui));
+                        })
+                });
                 a11y_scroll(ui.ctx(), &scroll_out, "Properties");
                 let (bar, grip) =
                     ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), Sense::click_and_drag());
