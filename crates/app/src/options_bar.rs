@@ -205,6 +205,10 @@ impl App {
                         Tool::Eyedropper => {
                             hint_label(ui, tier, self.tool);
                         }
+                        Tool::Wand if self.quick.object => {
+                            self.wand_mode_switch(ui, tier == Tier::Tight);
+                            self.object_select_bar(ui, tier == Tier::Tight);
+                        }
                         Tool::Wand if self.quick.on => {
                             self.wand_mode_switch(ui, tier == Tier::Tight);
                             self.quick_select_bar(ui);

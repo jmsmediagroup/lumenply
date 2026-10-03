@@ -82,6 +82,13 @@ graph sits on render (core moves onto it in stage 3 of ADR 0025).
   `puppet:open|pin=X:Y|drag=I:X:Y|ok`, `adjx:open=sh|equalize|replace|match|adjd-<kind>`
   (Image ▸ Adjustments dialogs; `adjx:sh=…`, `adjx:pick=X:Y`, `adjx:ok`),
   `actions:show|record|stop|play=NAME|open=NAME|select=NAME`,
+  `ai:fake|fake-installed|fake-offline` (local AI on a fake engine: simple
+  colour rules, visible delays), `ai:consent=sam|birefnet`,
+  `ai:download=sam|birefnet` (first-use dialog, then its download),
+  `ai:fetch=…` (download as Preferences does), `ai:object` (Wand ▸ Object
+  Selection), `ai:select=X:Y[:shift|alt]`, `ai:box=X0:Y0:X1:Y1`,
+  `ai:subject`, `ai:remove-bg`, `ai:prefs` (Preferences ▸ AI models),
+  `ai:wait` (blocks until every AI job has finished and landed),
   `size:unit=in|cm|mm|px|pct|resample=on|off|width=V|res=V|new=N|doc-ppi=V`
   (Image Size / New; end dialog shots with `popups:sleep=400,popups:wait`),
   `proof-colors` / `gamut-warning` (palette ids: View ▸ Proof Colors / Gamut

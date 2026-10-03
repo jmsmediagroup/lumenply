@@ -1,8 +1,9 @@
-//! Quick Selection, the Magic Wand's sibling (Shift+W switches, as in
-//! Photoshop): paint over an object and the selection grows to its edges
-//! (`lumenply_core::quick_select`). A stroke in New mode replaces the
-//! selection and the tool then adds, so further strokes grow it; Alt
-//! subtracts, Shift adds.
+//! Quick Selection, the Magic Wand's sibling (Shift+W cycles the Wand's
+//! modes, as in Photoshop): paint over an object and the selection grows
+//! to its edges (`lumenply_core::quick_select`). A stroke in New mode
+//! replaces the selection and the tool then adds, so further strokes grow
+//! it; Alt subtracts, Shift adds. The third mode, Object Selection, lives
+//! in `ai_ui.rs`.
 
 use super::*;
 use crate::options_bar::{bar_slider, select_ops};
@@ -12,6 +13,8 @@ use lumenply_core::quick_select::QuickSelect;
 /// (document pixels) and the stroke being painted.
 pub(crate) struct QuickSelectState {
     pub(crate) on: bool,
+    /// Object Selection mode (AI, `ai_ui.rs`); `on` is false meanwhile.
+    pub(crate) object: bool,
     pub(crate) op: CombineOp,
     pub(crate) radius: f32,
     points: Vec<(f32, f32)>,
@@ -22,6 +25,7 @@ impl Default for QuickSelectState {
     fn default() -> Self {
         QuickSelectState {
             on: false,
+            object: false,
             op: CombineOp::Replace,
             radius: 20.0,
             points: Vec::new(),
@@ -123,25 +127,72 @@ impl App {
             .on_hover_text("Sample the merged image instead of the active layer only");
     }
 
-    /// Magic Wand ⇄ Quick Selection, as the first control of the Wand bar.
+    /// Magic Wand / Quick Selection / Object Selection, as the first
+    /// control of the Wand bar.
     pub(crate) fn wand_mode_switch(&mut self, ui: &mut egui::Ui, short: bool) {
-        let mut quick = self.quick.on;
+        let mut mode = self.wand_mode();
         if short {
-            segmented(ui, &mut quick, &[(false, "Wand"), (true, "Quick")]);
+            segmented(
+                ui,
+                &mut mode,
+                &[
+                    (WandMode::Wand, "Wand"),
+                    (WandMode::Quick, "Quick"),
+                    (WandMode::Object, "Object"),
+                ],
+            );
         } else {
             segmented(
                 ui,
-                &mut quick,
-                &[(false, "Magic wand"), (true, "Quick selection")],
+                &mut mode,
+                &[
+                    (WandMode::Wand, "Magic wand"),
+                    (WandMode::Quick, "Quick selection"),
+                    (WandMode::Object, "Object selection"),
+                ],
             );
         }
-        if quick != self.quick.on {
-            self.quick.on = quick;
-            self.quick.points.clear();
-            self.quick.trail.clear();
-        }
+        self.set_wand_mode(mode);
         ui.separator();
     }
+
+    pub(crate) fn wand_mode(&self) -> WandMode {
+        if self.quick.object {
+            WandMode::Object
+        } else if self.quick.on {
+            WandMode::Quick
+        } else {
+            WandMode::Wand
+        }
+    }
+
+    pub(crate) fn set_wand_mode(&mut self, mode: WandMode) {
+        if mode == self.wand_mode() {
+            return;
+        }
+        self.quick.on = mode == WandMode::Quick;
+        self.quick.object = mode == WandMode::Object;
+        self.quick.points.clear();
+        self.quick.trail.clear();
+    }
+
+    /// Shift+W: Magic Wand → Quick Selection → Object Selection → Magic Wand.
+    pub(crate) fn cycle_wand_mode(&mut self) {
+        let next = match self.wand_mode() {
+            WandMode::Wand => WandMode::Quick,
+            WandMode::Quick => WandMode::Object,
+            WandMode::Object => WandMode::Wand,
+        };
+        self.set_wand_mode(next);
+    }
+}
+
+/// The Wand tool's three ways of selecting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WandMode {
+    Wand,
+    Quick,
+    Object,
 }
 
 #[cfg(test)]
