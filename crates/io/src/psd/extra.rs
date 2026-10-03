@@ -582,6 +582,12 @@ fn style_key(s: GradientStyle) -> &'static [u8] {
     }
 }
 
+/// Photoshop's Angle gradient runs clockwise on screen and ours runs
+/// counter-clockwise from the same seam, which is the same as reversing it.
+fn angle_runs_backwards(style: GradientStyle) -> bool {
+    style == GradientStyle::Angle
+}
+
 /// The tagged-block key and payload of a fill layer.
 pub(super) fn fill_block(fill: &Fill) -> (&'static [u8; 4], Vec<u8>) {
     match fill {
@@ -633,7 +639,7 @@ pub(super) fn fill_block(fill: &Fill) -> (&'static [u8; 4], Vec<u8>) {
                 .with(b"Grad", Val::Obj(grad))
                 .with(b"Angl", Val::Unit(*b"#Ang", *angle as f64))
                 .with(b"Type", Val::Enum(b"GrdT".to_vec(), style_key(*style).to_vec()))
-                .with(b"Rvrs", Val::Bool(*reverse))
+                .with(b"Rvrs", Val::Bool(*reverse ^ angle_runs_backwards(*style)))
                 .with(b"Dthr", Val::Bool(false))
                 .with(b"Algn", Val::Bool(true))
                 .with(b"Scl ", Val::Unit(*b"#Prc", (*scale * 100.0) as f64))
@@ -758,7 +764,7 @@ pub(super) fn parse_fill(key: &[u8], data: &[u8]) -> Option<Fill> {
                 style,
                 angle: desc.num(b"Angl").unwrap_or(90.0) as f32,
                 scale: (desc.num(b"Scl ").unwrap_or(100.0) as f32 / 100.0).clamp(0.1, 10.0),
-                reverse: matches!(desc.get(b"Rvrs"), Some(Val::Bool(true))),
+                reverse: matches!(desc.get(b"Rvrs"), Some(Val::Bool(true))) ^ angle_runs_backwards(style),
                 offset: [pct(off, b"Hrzn"), pct(off, b"Vrtc")],
             })
         }
@@ -830,6 +836,55 @@ mod tests {
     fn round_trip(adj: &Adjustment) -> Adjustment {
         let (key, data) = adjustment_block(adj).expect("encodes");
         parse_adjustment(key, &data).expect("decodes")
+    }
+
+    #[test]
+    fn angle_gradients_sweep_clockwise_like_photoshop() {
+        let fill = |style, reverse| Fill::Gradient {
+            gradient: Gradient::default(),
+            style,
+            angle: 0.0,
+            scale: 1.0,
+            reverse,
+            offset: [0.0, 0.0],
+        };
+        let stored_reverse = |f: &Fill| {
+            let (_, data) = fill_block(f);
+            matches!(
+                parse_descriptor(&data).unwrap().get(b"Rvrs"),
+                Some(Val::Bool(true))
+            )
+        };
+        // A plain Photoshop Angle gradient is stored unreversed and reads as
+        // our reversed one; every other style keeps its flag.
+        assert!(!stored_reverse(&fill(GradientStyle::Angle, true)));
+        assert!(stored_reverse(&fill(GradientStyle::Angle, false)));
+        assert!(stored_reverse(&fill(GradientStyle::Linear, true)));
+        for style in [GradientStyle::Angle, GradientStyle::Radial] {
+            for reverse in [false, true] {
+                let (key, data) = fill_block(&fill(style, reverse));
+                match parse_fill(key, &data) {
+                    Some(Fill::Gradient {
+                        reverse: r, style: s, ..
+                    }) => {
+                        assert_eq!((s, r), (style, reverse))
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+        }
+        // On a 100 × 100 canvas, angle 0 (seam pointing right): Photoshop
+        // starts the ramp just below the seam and ends just above it.
+        let photoshop = Desc::new(b"null")
+            .with(b"Grad", Val::Obj(Desc::new(b"Grdn")))
+            .with(b"Angl", Val::Unit(*b"#Ang", 0.0))
+            .with(b"Type", Val::Enum(b"GrdT".to_vec(), b"Angl".to_vec()))
+            .with(b"Rvrs", Val::Bool(false));
+        let read = parse_fill(b"GdFl", &descriptor_block(&photoshop)).unwrap();
+        let s = read.sampler(lumenply_tiles::Rect::new(0, 0, 100, 100));
+        let (below, above) = (s.position(90, 51), s.position(90, 48));
+        assert!(below < 0.02, "{below}");
+        assert!(above > 0.98, "{above}");
     }
 
     #[test]
