@@ -885,7 +885,7 @@ impl Session {
         &self.tree
     }
 
-    fn screen(&self) -> egui::Rect {
+    pub(crate) fn screen(&self) -> egui::Rect {
         egui::Rect::from_min_size(Pos2::ZERO, self.opts.size)
     }
 
@@ -1353,6 +1353,15 @@ impl Session {
         self.step("action", format!("Click {what}"), |s| {
             s.glide(p)?;
             s.click_here(PointerButton::Primary, 1)?;
+            s.settle(20)
+        })
+    }
+
+    /// Right-click at a point on screen (in points), like [`Session::click_at`].
+    pub(crate) fn right_click_at(&mut self, p: Pos2, what: &str) -> UiResult {
+        self.step("action", format!("Right-click {what}"), |s| {
+            s.glide(p)?;
+            s.click_here(PointerButton::Secondary, 1)?;
             s.settle(20)
         })
     }
