@@ -846,6 +846,13 @@ fn image_adjustments(s: &mut Session) -> UiResult {
     expect_shown(s, "Esc leaves the canvas as it was", grey(3), [192; 3], 3)?;
     expect_original(s, "and the pixels")?;
 
+    // Photoshop's Cmd+B opens Color Balance.
+    s.describe("Open Color Balance with Cmd+B");
+    s.key("Cmd+B")?;
+    expect_dialog(s, "Color Balance")?;
+    s.key("Esc")?;
+    s.wait_idle()?;
+
     // Invert (Cmd+I) and Desaturate (Shift+Cmd+U) apply at once.
     s.describe("Invert with Cmd+I");
     s.key("Cmd+I")?;

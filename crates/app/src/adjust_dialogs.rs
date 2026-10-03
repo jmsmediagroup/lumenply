@@ -1204,6 +1204,31 @@ mod tests {
     }
 
     #[test]
+    fn color_balance_and_auto_color_have_photoshops_keys() {
+        use egui::Modifiers as M;
+        let prefs = crate::session::Prefs::default();
+        let chord = |id| crate::session::resolve_chord(&prefs, id);
+        assert_eq!(chord("adjd-color-balance"), Some((M::COMMAND, Key::B)));
+        assert_eq!(chord("auto-color"), Some((M::COMMAND | M::SHIFT, Key::B)));
+        // No two actions share a default chord.
+        let mut all: Vec<_> = crate::session::SHORTCUTS
+            .iter()
+            .map(|(_, _, c, s, k)| (*c, *s, *k))
+            .collect();
+        let n = all.len();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(all.len(), n, "a default chord is used twice");
+        // Cmd+B opens the Color Balance dialog.
+        let mut app = small_app();
+        app.run_menu_action("adjd-color-balance");
+        assert!(matches!(
+            app.adjx.as_ref().map(|s| &s.kind),
+            Some(AdjxKind::Adjust(Adjustment::ColorBalance { .. }))
+        ));
+    }
+
+    #[test]
     fn auto_commands_name_their_layer_in_one_step() {
         // A grey ramp from 64 to 190: every auto command has range to add.
         let mut ramp = Raster::new(64, 8);

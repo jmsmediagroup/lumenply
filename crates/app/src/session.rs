@@ -59,6 +59,9 @@ pub(crate) const SHORTCUTS: &[(&str, &str, bool, bool, &str)] = &[
     ("adjd-curves", "Curves", true, false, "M"),
     ("adjd-hue-saturation", "Hue/Saturation", true, false, "U"),
     ("adjd-invert", "Invert", true, false, "I"),
+    // Photoshop's: Shift+Cmd+B holds Cmd+B, so it goes first.
+    ("auto-color", "Auto color", true, true, "B"),
+    ("adjd-color-balance", "Color Balance", true, false, "B"),
     // Before "proof-colors": Shift+Cmd+Y contains Cmd+Y.
     ("gamut-warning", "Gamut warning", true, true, "Y"),
     ("proof-colors", "Proof colors", true, false, "Y"),
