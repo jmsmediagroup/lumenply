@@ -13,6 +13,9 @@ pub(crate) enum ViewCmd {
     /// One step in or out about the canvas centre (the zoom pill's step).
     ZoomIn,
     ZoomOut,
+    /// View ▸ Print size: an inch of the document over about an inch of
+    /// screen (image_size_ui.rs).
+    PrintSize,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -384,7 +387,7 @@ impl App {
         match cmd {
             ViewCmd::ZoomIn => return self.zoom_at(rect, rect.center(), 1.25),
             ViewCmd::ZoomOut => return self.zoom_at(rect, rect.center(), 1.0 / 1.25),
-            ViewCmd::Fit | ViewCmd::Actual => {}
+            ViewCmd::Fit | ViewCmd::Actual | ViewCmd::PrintSize => {}
         }
         let doc = self.editor.doc();
         let size = Vec2::new(doc.width as f32, doc.height as f32);
@@ -393,6 +396,7 @@ impl App {
                 .min((rect.height() - 80.0) / size.y)
                 .clamp(0.05, 32.0),
             ViewCmd::Actual => 1.0,
+            ViewCmd::PrintSize => crate::image_size_ui::print_size_zoom(doc.resolution),
             ViewCmd::ZoomIn | ViewCmd::ZoomOut => return,
         };
         self.pan = (rect.size() - size * self.zoom) / 2.0;

@@ -303,6 +303,43 @@ pub(crate) fn matching_preset(w: u32, h: u32, ppi: f32) -> Option<usize> {
         .position(|&(_, pw, ph, pp)| (pw, ph) == (w, h) && pp == ppi)
 }
 
+/// Logical screen points per inch, estimated: no portable API reports a
+/// display's physical size. Retina Macs at default scaling show about
+/// 110–127 points per inch; Windows and Linux at 100 % scaling are
+/// nominally 96.
+pub(crate) fn screen_points_per_inch() -> f32 {
+    if cfg!(target_os = "macos") {
+        110.0
+    } else {
+        96.0
+    }
+}
+
+/// The zoom (document pixels per screen point) at which the document shows
+/// at about its printed size.
+pub(crate) fn print_size_zoom(ppi: f32) -> f32 {
+    (screen_points_per_inch() / ppi.max(1.0)).clamp(0.05, 32.0)
+}
+
+impl App {
+    /// View ▸ Print size.
+    pub(crate) fn run_resolution_action(&mut self, id: &str) -> bool {
+        match id {
+            "print-size" => {
+                self.view_cmd = Some(ViewCmd::PrintSize);
+                let doc = self.editor.doc();
+                self.status = format!(
+                    "Print size (approximate): {}, taking the screen as {} points per inch",
+                    print_size_text(doc.width, doc.height, doc.resolution),
+                    screen_points_per_inch()
+                );
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 /// A white one-layer document at `ppi`, as File ▸ New makes it.
 pub(crate) fn blank_at(w: u32, h: u32, ppi: f32) -> Editor {
     let mut doc = crate::blank(w, h).doc().clone();
@@ -683,12 +720,25 @@ mod tests {
         frame(&mut app, &ctx, &[Key::Enter]);
         assert!(app.dialog.is_none());
         assert_eq!(app.editor.history().len(), steps);
+        // View ▸ Print size: an inch of document per screen inch.
+        app.run_menu_action("print-size");
+        frame(&mut app, &ctx, &[]);
+        let want = screen_points_per_inch() / 64.0;
+        assert!((app.zoom - want).abs() < 1e-6, "{} vs {want}", app.zoom);
         // File ▸ New at 300 ppi opens a 300 ppi document.
         app.dialog = Some(Dialog::New(1200, 1800, 300.0));
         frame(&mut app, &ctx, &[]);
         frame(&mut app, &ctx, &[Key::Enter]);
         let d = app.editor.doc();
         assert_eq!((d.width, d.height, d.resolution), (1200, 1800, 300.0));
+    }
+
+    #[test]
+    fn print_size_zoom_maps_an_inch_to_an_inch() {
+        let sppi = screen_points_per_inch();
+        assert_eq!(print_size_zoom(sppi), 1.0);
+        assert_eq!(print_size_zoom(sppi * 2.0), 0.5);
+        assert_eq!(print_size_zoom(30_000.0), 0.05, "clamped like other zooms");
     }
 
     #[test]

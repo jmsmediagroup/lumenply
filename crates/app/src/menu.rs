@@ -654,6 +654,7 @@ impl App {
         self.act(ui, "Zoom out", "zoom-out");
         self.act(ui, "Fit on screen", "fit");
         self.act(ui, "Actual pixels", "actual");
+        self.act(ui, "Print size (approximate)", "print-size");
         menu_separator(ui);
         for (label, id) in [
             ("Rulers", "rulers"),

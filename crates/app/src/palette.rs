@@ -116,6 +116,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Zoom out", "zoom-out"),
     ("Fit on screen", "fit"),
     ("Actual pixels", "actual"),
+    ("Print size (approximate)", "print-size"),
     ("Show or hide the history strip", "toggle-history"),
     ("About Lumenply", "about"),
     ("Liquify...", "liquify"),
@@ -745,7 +746,7 @@ impl App {
         {
             return;
         }
-        if self.run_panel_action(id) || self.run_everyday_action(id) {
+        if self.run_panel_action(id) || self.run_everyday_action(id) || self.run_resolution_action(id) {
             return;
         }
         match id {
@@ -980,7 +981,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 158); // + content-aware scale, perspective crop
+        assert_eq!(n, 159); // + content-aware scale, perspective crop, print size
     }
 
     #[test]
