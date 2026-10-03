@@ -1205,6 +1205,8 @@ impl App {
             }
         }
         if confirmed {
+            // While an action records, the confirmed settings become a step.
+            self.record_dialog(&d);
             match &d {
                 Dialog::ConfirmClose | Dialog::ConfirmCloseTab(_) | Dialog::Recover | Dialog::About => {}
                 // The previewed step already is the result.

@@ -72,6 +72,7 @@ impl App {
 
     pub(crate) fn add_adjustment(&mut self, adj: Adjustment) {
         let new_id = self.editor.doc().next_id();
+        self.record_adjust(&adj, new_id);
         let mut cmd = AddAdjustmentLayer::new(adj);
         cmd.above = self.active;
         self.run(&cmd);

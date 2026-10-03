@@ -33,6 +33,7 @@ impl App {
             || self.debug_cas(tok)
             || self.debug_pcrop(tok)
             || self.debug_adjx(ctx, tok)
+            || self.debug_actions(tok)
     }
 
     /// Selections and what acts on them (`select:...`):

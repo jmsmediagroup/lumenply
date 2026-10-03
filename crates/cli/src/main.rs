@@ -109,6 +109,15 @@ enum Cmd {
         /// PNG/WebP: place on white instead of keeping transparency.
         #[arg(long, default_value_t = false)]
         flatten: bool,
+        /// Play an action on each file first (before --resize): a built-in
+        /// name ("Web export prep", "Black & white contrast", "Vintage
+        /// fade") or a .json file holding one action.
+        #[arg(long)]
+        action: Option<String>,
+        /// Look the --action name up in this JSON set (such as the app's
+        /// actions.json in ~/.lumenply).
+        #[arg(long)]
+        action_file: Option<PathBuf>,
     },
 }
 
@@ -122,7 +131,13 @@ fn main() -> Result<()> {
             resize,
             auto,
             flatten,
+            action,
+            action_file,
         } => {
+            let action = action
+                .as_deref()
+                .map(|a| batch::resolve_action(a, action_file.as_deref()))
+                .transpose()?;
             let resize = resize.as_deref().map(batch::Resize::parse).transpose()?;
             let flatten = flatten || matches!(format.to_ascii_lowercase().as_str(), "jpg" | "jpeg");
             let opts = batch::Options {
@@ -132,6 +147,7 @@ fn main() -> Result<()> {
                 resize,
                 auto,
                 flatten,
+                action,
             };
             let failed = batch::run(&inputs, &opts)?;
             if failed > 0 {

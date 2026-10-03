@@ -2496,6 +2496,8 @@ dependencies = [
  "lumenply-render",
  "lumenply-tiles",
  "rayon",
+ "serde",
+ "serde_json",
  "thiserror 1.0.69",
 ]
 

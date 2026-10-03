@@ -75,7 +75,8 @@ Dependencies point strictly downward: app/cli → core → render → doc → ti
   `text:box=X:Y:W:H|edit|select=A:B|caret=I|commit`, `refine:…` (Select and
   Mask), `retouch:…`, `export-as:…`, `panels:tab=channels|view=red|navigator|info`,
   `puppet:open|pin=X:Y|drag=I:X:Y|ok`, `adjx:open=sh|equalize|replace|match|adjd-<kind>`
-  (Image ▸ Adjustments dialogs; `adjx:sh=…`, `adjx:pick=X:Y`, `adjx:ok`); drags as
+  (Image ▸ Adjustments dialogs; `adjx:sh=…`, `adjx:pick=X:Y`, `adjx:ok`),
+  `actions:show|record|stop|play=NAME|open=NAME|select=NAME`; drags as
   `popups:press=X:Y,popups:move=X:Y,popups:release=X:Y`, typing as
   `popups:type=…`/`popups:key=Shift+W`; tokens that toggle
   view prefs such as `rulers`/`grid` save prefs — another reason for a scratch

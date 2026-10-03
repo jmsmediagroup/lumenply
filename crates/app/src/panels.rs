@@ -595,6 +595,8 @@ impl App {
         let (nav, info) = (self.prefs.panels.navigator, self.prefs.panels.info);
         self.act_check(ui, "Navigator", "navigator", nav);
         self.act_check(ui, "Info", "info-panel", info);
+        let actions = self.actions.shown;
+        self.act_check(ui, "Actions", crate::actions_panel::ACTIONS_PANEL, actions);
         menu_separator(ui);
         let shown = !self.prefs.history_collapsed;
         self.act_check(ui, "History strip", "toggle-history", shown);

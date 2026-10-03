@@ -240,6 +240,13 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Threshold (apply to pixels)...", "adjd-threshold"),
     ("Gradient Map (apply to pixels)...", "adjd-gradient-map"),
     ("Selective Color (apply to pixels)...", "adjd-selective-color"),
+    (
+        "Show or hide the Actions panel",
+        crate::actions_panel::ACTIONS_PANEL,
+    ),
+    ("Record an action", crate::actions_panel::ACTION_RECORD),
+    ("Stop recording the action", crate::actions_panel::ACTION_STOP),
+    ("Play the selected action", crate::actions_panel::ACTION_PLAY),
 ];
 
 impl App {
@@ -623,6 +630,9 @@ impl App {
         if let Some(block) = self.adjx_action_block(id) {
             return block;
         }
+        if let Some(block) = self.actions_action_block(id) {
+            return block;
+        }
         match id {
             "export-lut" if !self.has_visible_adjustments() => Some("Add an adjustment layer first"),
             "undo" if !self.editor.can_undo() => Some("Nothing to undo"),
@@ -763,6 +773,16 @@ impl App {
     /// Shared runner for actions reachable from menus, the palette and
     /// keys. A blocked action reports why in the status bar.
     pub(crate) fn run_menu_action(&mut self, id: &str) {
+        // While an action records, a recordable edit becomes a step.
+        let recorded = self.action_block(id).is_none() && self.record_menu(id);
+        self.run_menu_action_unrecorded(id);
+        if recorded {
+            self.record_menu_done();
+        }
+    }
+
+    /// [`App::run_menu_action`] without recording (action playback).
+    pub(crate) fn run_menu_action_unrecorded(&mut self, id: &str) {
         if let Some(why) = self.action_block(id) {
             self.status = why.into();
             return;
@@ -775,6 +795,9 @@ impl App {
             return;
         }
         if self.run_panel_action(id) || self.run_everyday_action(id) || self.run_adjx_action(id) {
+            return;
+        }
+        if self.run_actions_panel_action(id) {
             return;
         }
         match id {
@@ -1008,7 +1031,7 @@ mod tests {
         labels.dedup();
         assert_eq!(ids.len(), n, "duplicate action id");
         assert_eq!(labels.len(), n, "duplicate action label");
-        assert_eq!(n, 181); // + Image ▸ Adjustments (5 + 15 applied kinds) and auto tone
+        assert_eq!(n, 185); // + Actions panel, record, stop, play
     }
 
     #[test]

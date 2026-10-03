@@ -5,7 +5,10 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use lumenply_core::actions::{self, Action};
+use lumenply_core::commands::AddPixelLayer;
+use lumenply_core::Editor;
 use lumenply_render::develop::{auto_develop, develop, Develop};
 use lumenply_render::resample::resample;
 use lumenply_tiles::{Raster, Rgba};
@@ -70,6 +73,65 @@ pub struct Options {
     pub resize: Option<Resize>,
     pub auto: bool,
     pub flatten: bool,
+    /// Played on each file before resizing and encoding.
+    pub action: Option<Action>,
+}
+
+/// `--action NAME|FILE` (with `--action-file FILE` to look NAME up in a
+/// set, such as the app's `actions.json`): a built-in by name, else a JSON
+/// file holding one action.
+pub fn resolve_action(spec: &str, file: Option<&Path>) -> Result<Action> {
+    let read = |p: &Path| -> Result<Vec<Action>> {
+        let text = std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
+        actions::from_json(&text).map_err(|e| anyhow!("{}: {e}", p.display()))
+    };
+    let pick = |list: Vec<Action>, from: &str| {
+        let names: Vec<String> = list.iter().map(|a| format!("\"{}\"", a.name)).collect();
+        list.into_iter()
+            .find(|a| a.name.eq_ignore_ascii_case(spec))
+            .with_context(|| format!("no action \"{spec}\" in {from} (it has {})", names.join(", ")))
+    };
+    if let Some(f) = file {
+        return pick(read(f)?, &f.display().to_string());
+    }
+    let path = Path::new(spec);
+    if path.is_file() {
+        let mut list = read(path)?;
+        if list.len() != 1 {
+            bail!(
+                "{} holds {} actions; name one with --action NAME --action-file {}",
+                path.display(),
+                list.len(),
+                path.display()
+            );
+        }
+        return Ok(list.remove(0));
+    }
+    pick(actions::builtin_actions(), "the built-in actions")
+}
+
+/// Any file Lumenply opens, as a document an action can play on: projects
+/// and PSDs keep their layers, images become one "Background" layer.
+fn open_doc(path: &Path, auto: bool) -> Result<lumenply_doc::Document> {
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    if [".lumen", ".nge", ".psd", ".psb"]
+        .iter()
+        .any(|e| lower.ends_with(e))
+    {
+        return super::load_any(&path.to_path_buf());
+    }
+    let raster = open_flat(path, auto)?;
+    let mut ed = Editor::new(lumenply_doc::Document::new(raster.width, raster.height));
+    ed.execute(&AddPixelLayer::from_raster("Background", raster, 0, 0))?;
+    Ok(ed.doc().clone())
+}
+
+/// Open `path`, play `action` on it, and return the flattened result.
+fn open_with_action(path: &Path, auto: bool, action: &Action) -> Result<Raster> {
+    let mut ed = Editor::new(open_doc(path, auto)?);
+    actions::play(&mut actions::CoreHost::new(&mut ed), action)
+        .map_err(|e| anyhow!("action \"{}\": {e}", action.name))?;
+    Ok(lumenply_render::composite_raster(ed.doc()))
 }
 
 /// The flattened image of any file Lumenply opens.
@@ -123,7 +185,10 @@ pub fn run(inputs: &[PathBuf], o: &Options) -> Result<usize> {
     for input in inputs {
         let t = Instant::now();
         let result = (|| -> Result<PathBuf> {
-            let mut img = open_flat(input, o.auto)?;
+            let mut img = match &o.action {
+                Some(a) => open_with_action(input, o.auto, a)?,
+                None => open_flat(input, o.auto)?,
+            };
             if let Some(rs) = o.resize {
                 let (w, h) = rs.apply(img.width, img.height);
                 img = resample(&img, w, h);
@@ -207,11 +272,73 @@ mod tests {
             resize: Some(Resize::Percent(0.5)),
             auto: false,
             flatten: true,
+            action: None,
         };
         let failed = run(&[src, missing], &opts).unwrap();
         assert_eq!(failed, 1);
         let img = image::open(out.join("a.jpg")).unwrap();
         assert_eq!((img.width(), img.height()), (20, 10));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_batch_plays_an_action_before_resizing() {
+        use lumenply_core::actions::Step;
+        let dir = std::env::temp_dir().join(format!("lumenply-batch-action-{}", std::process::id()));
+        let out = dir.join("out");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut r = Raster::new(60, 30);
+        for p in &mut r.pixels {
+            *p = Rgba::new(0.0, 0.0, 0.0, 1.0);
+        }
+        let (a, b) = (dir.join("a.png"), dir.join("b.png"));
+        lumenply_io::save_png(&a, &r).unwrap();
+        lumenply_io::save_png(&b, &Raster::new(30, 60)).unwrap();
+        // Rotate, invert (as an adjustment layer), then fit in 20 px.
+        let action = Action {
+            name: "Test".into(),
+            steps: vec![
+                Step::Menu { id: "rot-cw".into() },
+                Step::Adjust {
+                    adjustment: lumenply_doc::Adjustment::Invert,
+                },
+                Step::FitImage { long_edge: 20 },
+            ],
+            builtin: false,
+        };
+        let json = dir.join("test.json");
+        std::fs::write(&json, actions::to_json(std::slice::from_ref(&action))).unwrap();
+        let loaded = resolve_action(json.to_str().unwrap(), None).unwrap();
+        assert_eq!(loaded, action);
+        assert_eq!(resolve_action("vintage fade", None).unwrap().name, "Vintage fade");
+        assert!(resolve_action("Nope", None)
+            .unwrap_err()
+            .to_string()
+            .contains("Vintage fade"));
+        assert_eq!(resolve_action("test", Some(&json)).unwrap(), action);
+        let opts = Options {
+            out: out.clone(),
+            format: "png".into(),
+            quality: 90,
+            resize: Some(Resize::Percent(0.5)),
+            auto: false,
+            flatten: false,
+            action: Some(loaded),
+        };
+        assert_eq!(run(&[a, b], &opts).unwrap(), 0);
+        // 60×30 rotates to 30×60, fits to 10×20, then 50% gives 5×10.
+        let img = image::open(out.join("a.png")).unwrap().to_rgba8();
+        assert_eq!((img.width(), img.height()), (5, 10));
+        assert_eq!(
+            img.get_pixel(2, 5).0,
+            [255, 255, 255, 255],
+            "black inverted to white"
+        );
+        // 30×60 rotates to 60×30, fits to 20×10, then 50% gives 10×5;
+        // transparent pixels stay transparent under Invert.
+        let img = image::open(out.join("b.png")).unwrap().to_rgba8();
+        assert_eq!((img.width(), img.height()), (10, 5));
+        assert_eq!(img.get_pixel(1, 1).0[3], 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

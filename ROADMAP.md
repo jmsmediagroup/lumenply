@@ -577,6 +577,14 @@ None of these could be tested in the container.
       (camera tone curve, `--auto` exposure/whites/blacks), PSD and projects
       to PNG / JPEG / WebP with `--resize 50%|2048|1920x1080` (Lanczos, never
       enlarging a fit), per-file report, non-zero exit when any file fails
+- [x] Actions (ADR 0023): Window ▸ Actions with record/stop/play/new/rename/
+      delete; steps listed, with "not recordable yet" notes instead of silent
+      gaps; playing is one undo step that rolls back and names the failing
+      step; three built-ins; saved to actions.json; `lumenply batch --action
+      NAME|FILE [--action-file SET.json]`
+- [ ] Actions: record strokes, transforms, the Crop tool, text and the Image ▸
+      Adjustments dialogs (canvas-relative steps); edit, reorder and toggle
+      steps; import/export sets; File ▸ Automate ▸ Batch in the app
 
 - [ ] Scripting: Python via PyO3 on the command API; macro recording from history
 - [ ] Sandboxed WASM plugins (wasmtime)
