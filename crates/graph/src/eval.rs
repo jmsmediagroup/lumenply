@@ -30,6 +30,16 @@ pub struct Ctx<'a> {
     /// Image and empty nodes are read straight from the blob store rather
     /// than through the cache (with transient composites on).
     lean: bool,
+    patterns: &'a PatternImages,
+}
+
+/// Pattern images read from their blobs, by blob id.
+#[derive(Default)]
+pub(crate) struct PatternImages(Mutex<HashMap<BlobId, Arc<lumenply_tiles::Raster>>>);
+
+impl PatternImages {
+    /// Most images kept; past this the memo starts over.
+    const LIMIT: usize = 64;
 }
 
 impl Ctx<'_> {
@@ -101,6 +111,22 @@ impl Ctx<'_> {
 
     pub fn blob(&self, id: &BlobId) -> Option<&Arc<TileStore>> {
         self.blobs.get(id)
+    }
+
+    /// A pattern's image from the blob an op names, read once per blob.
+    pub fn pattern(&self, pixels: &crate::PatternPixels) -> Option<Arc<lumenply_tiles::Raster>> {
+        if let Some(image) = self.patterns.0.lock().unwrap().get(&pixels.blob) {
+            if (image.width, image.height) == (pixels.size[0], pixels.size[1]) {
+                return Some(image.clone());
+            }
+        }
+        let image = Arc::new(pixels.image(self.blobs)?);
+        let mut memo = self.patterns.0.lock().unwrap();
+        if memo.len() >= PatternImages::LIMIT {
+            memo.clear();
+        }
+        memo.insert(pixels.blob, image.clone());
+        Some(image)
     }
 
     /// Compute every tile `root` needs over `rect` from the bottom up, one
@@ -193,6 +219,8 @@ pub struct Renderer {
     transient: AtomicBool,
     /// The content keys earlier renders saw.
     seen: Mutex<Seen>,
+    /// Pattern images read from blobs.
+    patterns: PatternImages,
 }
 
 /// Content keys renders have seen, each with the last render that did.
@@ -347,6 +375,7 @@ impl Renderer {
             paint: &self.paint,
             transient: HashSet::new(),
             lean: false,
+            patterns: &self.patterns,
         }
     }
 

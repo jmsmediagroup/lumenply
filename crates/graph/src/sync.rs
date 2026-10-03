@@ -36,7 +36,7 @@ use crate::blob::{op_blob_refs, BlobId, BlobStore, TileHasher};
 use crate::eval::Renderer;
 use crate::lower::Step;
 use crate::model::{Graph, Node, NodeId};
-use crate::ops::{ClipMember, LayerProps, Op};
+use crate::ops::{ClipMember, Op};
 
 /// What a graph version holds besides its graph: the document state that
 /// isn't pixels. Pixel data in it (the selection, saved selections, a few
@@ -474,7 +474,7 @@ impl Sx<'_> {
                 in_graph = g;
                 Node::new(
                     Op::Layer {
-                        props: LayerProps::of(layer),
+                        props: self.lowering().props(layer),
                     },
                     vec![Some(below), Some(c), mask],
                 )
@@ -515,7 +515,7 @@ impl Sx<'_> {
                 }
                 _ => {
                     members.push(ClipMember::Layer {
-                        props: Box::new(LayerProps::of(m)),
+                        props: Box::new(self.lowering().props(m)),
                     });
                     let (c, children, g) = self.content(m);
                     inputs.push(Some(c));
@@ -526,7 +526,7 @@ impl Sx<'_> {
         }
         let node = Node::new(
             Op::ClipGroup {
-                base: LayerProps::of(base),
+                base: self.lowering().props(base),
                 members,
             },
             inputs,

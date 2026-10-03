@@ -110,6 +110,11 @@ impl Cx<'_> {
         self.own_content(layer)
     }
 
+    /// How `layer` composites (see [`LayerProps::lowered`]).
+    fn props(&mut self, layer: &Layer) -> LayerProps {
+        LayerProps::lowered(layer, self.blobs, self.hasher)
+    }
+
     fn layer(&mut self, layer: &Layer, below: NodeId) -> NodeId {
         let mask = self.mask(layer);
         let node = match &layer.content {
@@ -150,7 +155,7 @@ impl Cx<'_> {
                 let content = self.content(layer);
                 Node::new(
                     Op::Layer {
-                        props: LayerProps::of(layer),
+                        props: self.props(layer),
                     },
                     vec![Some(below), Some(content), mask],
                 )
@@ -181,7 +186,7 @@ impl Cx<'_> {
                 }
                 _ => {
                     members.push(ClipMember::Layer {
-                        props: Box::new(LayerProps::of(m)),
+                        props: Box::new(self.props(m)),
                     });
                     let content = self.content(m);
                     inputs.push(Some(content));
@@ -191,7 +196,7 @@ impl Cx<'_> {
         }
         let node = Node::new(
             Op::ClipGroup {
-                base: LayerProps::of(base),
+                base: self.props(base),
                 members,
             },
             inputs,
@@ -239,5 +244,10 @@ impl Step<'_> {
     /// A layer's mask node, as [`lower`] makes it (`None`: no enabled mask).
     pub fn mask(&mut self, layer: &Layer) -> Option<NodeId> {
         self.run(|cx| cx.mask(layer))
+    }
+
+    /// How `layer` composites, as [`lower`] puts it in its op.
+    pub fn props(&mut self, layer: &Layer) -> LayerProps {
+        LayerProps::lowered(layer, self.blobs, self.hasher)
     }
 }

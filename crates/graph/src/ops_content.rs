@@ -70,12 +70,49 @@ impl PatternPixels {
         }
     }
 
+    /// [`PatternPixels::store`] for a shared image, memoised by the
+    /// image's address in `hasher`: a layer whose overlay didn't change is
+    /// lowered again on every edit, and its pattern isn't copied and
+    /// hashed each time.
+    pub fn store_shared(image: &Arc<Raster>, blobs: &mut BlobStore, hasher: &TileHasher) -> PatternPixels {
+        let addr = Arc::as_ptr(image) as usize;
+        let known = hasher
+            .patterns
+            .lock()
+            .unwrap()
+            .get(&addr)
+            .and_then(|(kept, p, store)| {
+                // The memo keeps the image alive, so its address can't have
+                // been reused by another.
+                Arc::ptr_eq(kept, image).then(|| (*p, store.clone()))
+            });
+        if let Some((p, store)) = known {
+            if !blobs.contains(&p.blob) {
+                blobs.insert_trusted(p.blob, (*store).clone());
+            }
+            return p;
+        }
+        let p = Self::store(image, blobs, hasher);
+        if let Some(store) = blobs.get(&p.blob).cloned() {
+            hasher
+                .patterns
+                .lock()
+                .unwrap()
+                .insert(addr, (image.clone(), p, store));
+        }
+        p
+    }
+
     /// The pattern image, read back from the blob store.
     pub fn image(&self, blobs: &BlobStore) -> Option<Raster> {
         let store = blobs.get(&self.blob)?;
         Some(store.to_raster(Rect::new(0, 0, self.size[0], self.size[1])))
     }
 }
+
+/// Pattern images already stored as blobs, by the image's address (see
+/// [`PatternPixels::store_shared`]).
+pub(crate) type PatternMemo = std::sync::Mutex<HashMap<usize, (Arc<Raster>, PatternPixels, Arc<TileStore>)>>;
 
 /// A smart filter that changes nothing (opacity 0 or not a number, as the
 /// layer tree skips it) hands its input through.

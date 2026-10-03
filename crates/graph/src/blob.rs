@@ -76,6 +76,9 @@ pub fn tile_hash(tile: &Tile) -> Hash {
 #[derive(Default)]
 pub struct TileHasher {
     memo: Mutex<HashMap<usize, (Arc<Tile>, Hash)>>,
+    /// Pattern images stored as blobs (see
+    /// [`crate::PatternPixels::store_shared`]).
+    pub(crate) patterns: crate::ops_content::PatternMemo,
 }
 
 impl TileHasher {
@@ -138,12 +141,16 @@ impl TileHasher {
         Hash(*h.finalize().as_bytes())
     }
 
-    /// Forget tiles nothing else uses any more.
+    /// Forget tiles (and pattern images) nothing else uses any more.
     pub fn prune(&self) {
         self.memo
             .lock()
             .unwrap()
             .retain(|_, (t, _)| Arc::strong_count(t) > 1);
+        self.patterns
+            .lock()
+            .unwrap()
+            .retain(|_, (image, _, _)| Arc::strong_count(image) > 1);
     }
 }
 

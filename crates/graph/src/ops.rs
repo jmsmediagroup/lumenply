@@ -49,6 +49,12 @@ pub struct LayerProps {
     pub fill_opacity: f32,
     #[serde(default, skip_serializing_if = "LayerEffects::is_empty")]
     pub effects: LayerEffects,
+    /// The pixels of the Pattern Overlay effect's pattern, as a blob, the
+    /// way `fill` and `shape` ops name theirs: in a lowered graph the
+    /// effect's own pattern reference carries none, so the content key
+    /// covers the pixels and a project file stores them as a blob.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern_pixels: Option<crate::ops_content::PatternPixels>,
 }
 
 impl Default for LayerProps {
@@ -59,11 +65,15 @@ impl Default for LayerProps {
             blend: BlendMode::Normal,
             fill_opacity: 1.0,
             effects: LayerEffects::default(),
+            pattern_pixels: None,
         }
     }
 }
 
 impl LayerProps {
+    /// The layer's settings as they are, a Pattern Overlay's pixels still
+    /// on its reference (the lowering moves them to a blob, see
+    /// [`LayerProps::pattern_pixels`]).
     pub fn of(layer: &Layer) -> Self {
         LayerProps {
             visible: layer.visible,
@@ -71,7 +81,22 @@ impl LayerProps {
             blend: layer.blend,
             fill_opacity: layer.fill_opacity,
             effects: layer.effects.clone(),
+            pattern_pixels: None,
         }
+    }
+
+    /// [`LayerProps::of`] with the Pattern Overlay's pixels moved from the
+    /// effect's reference into `blobs`.
+    pub fn lowered(layer: &Layer, blobs: &mut crate::BlobStore, hasher: &crate::TileHasher) -> Self {
+        let mut props = Self::of(layer);
+        if let Some(po) = &mut props.effects.pattern_overlay {
+            if let Some(image) = po.pattern.image.take() {
+                props.pattern_pixels = Some(crate::ops_content::PatternPixels::store_shared(
+                    &image, blobs, hasher,
+                ));
+            }
+        }
+        props
     }
 
     fn apply_to(&self, layer: &mut Layer) {
@@ -309,10 +334,14 @@ fn mask_over(ctx: &Ctx, node: Option<crate::NodeId>, area: Rect) -> Option<Mask>
     })
 }
 
-/// A throwaway layer for the reference compositor.
-fn temp_layer(content: LayerContent, props: &LayerProps, mask: Option<Mask>) -> Layer {
+/// A throwaway layer for the reference compositor, its Pattern Overlay's
+/// pixels read from the blob its op names.
+fn temp_layer(ctx: &Ctx, content: LayerContent, props: &LayerProps, mask: Option<Mask>) -> Layer {
     let mut l = Layer::with_content(0, "", content);
     props.apply_to(&mut l);
+    if let (Some(pixels), Some(po)) = (&props.pattern_pixels, &mut l.effects.pattern_overlay) {
+        po.pattern.image = ctx.pattern(pixels);
+    }
     l.mask = mask;
     l
 }
@@ -525,7 +554,7 @@ pub(crate) fn eval_tile(ctx: &Ctx, id: crate::NodeId, node: &Node, coord: TileCo
                     return backdrop;
                 }
             }
-            let layer = temp_layer(LayerContent::Pixel(store), props, mask);
+            let layer = temp_layer(ctx, LayerContent::Pixel(store), props, mask);
             lumenply_render::render_tile_over(owned(backdrop), &[layer], coord, ctx.canvas).map(Arc::new)
         }
         Op::Adjustment {
@@ -563,7 +592,7 @@ pub(crate) fn eval_tile(ctx: &Ctx, id: crate::NodeId, node: &Node, coord: TileCo
                 opacity: *opacity,
                 ..LayerProps::default()
             };
-            let layer = temp_layer(LayerContent::Filter(filter.clone()), &props, mask);
+            let layer = temp_layer(ctx, LayerContent::Filter(filter.clone()), &props, mask);
             let mut dst = owned(backdrop);
             lumenply_render::live_filter_into(
                 &mut dst,
@@ -610,6 +639,7 @@ pub(crate) fn eval_tile(ctx: &Ctx, id: crate::NodeId, node: &Node, coord: TileCo
                 None => return backdrop,
             };
             let mut layers = vec![temp_layer(
+                ctx,
                 LayerContent::Pixel(base_store),
                 base,
                 mask_over(ctx, input(2), area),
@@ -622,7 +652,7 @@ pub(crate) fn eval_tile(ctx: &Ctx, id: crate::NodeId, node: &Node, coord: TileCo
                         let store = input(content_port)
                             .map(|c| ctx.area(c, content_area(ctx, c, &props.effects, coord).union(&area)))
                             .unwrap_or_default();
-                        temp_layer(LayerContent::Pixel(store), props, mask)
+                        temp_layer(ctx, LayerContent::Pixel(store), props, mask)
                     }
                     ClipMember::Adjustment {
                         adjustment,
@@ -636,7 +666,7 @@ pub(crate) fn eval_tile(ctx: &Ctx, id: crate::NodeId, node: &Node, coord: TileCo
                             blend: *blend,
                             ..LayerProps::default()
                         };
-                        temp_layer(LayerContent::Adjustment(adjustment.clone()), &props, mask)
+                        temp_layer(ctx, LayerContent::Adjustment(adjustment.clone()), &props, mask)
                     }
                 };
                 l.clip = true;

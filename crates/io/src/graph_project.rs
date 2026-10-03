@@ -25,9 +25,12 @@
 //! damaged entry loses that blob, not the file (ADR 0002). Render hints are
 //! a cache: a damaged hint is dropped the same way and only costs time.
 //!
-//! Pattern overlay effects keep their pattern's pixels outside the graph's
-//! JSON (`PatternRef::image` is derived state), so the manifest's
-//! `patterns` table stores them as blobs and loading puts them back.
+//! A Pattern Overlay effect's pattern pixels are a blob its `layer` or
+//! `clip-group` op names (`pattern_pixels`), like any other. Files written
+//! before that kept them on the effect's reference, outside the JSON, and
+//! stored them in the manifest's `patterns` table; loading still reads it
+//! and puts the pixels back on those references. A graph whose overlays
+//! carry pixels only in memory is still saved that way.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -129,9 +132,11 @@ struct Manifest {
     patterns: Vec<PatternRecord>,
 }
 
-/// A pattern that a pattern overlay in the graph uses. `PatternRef` keeps
-/// its pixels as derived state that the graph's JSON leaves out, so the
-/// file stores them as a blob and loading puts them back.
+/// A pattern that a pattern overlay in the graph uses without naming its
+/// pixels by blob (files from before `pattern_pixels`, see the module
+/// docs): `PatternRef` keeps them as derived state that the graph's JSON
+/// leaves out, so the file stores them as a blob and loading puts them
+/// back.
 #[derive(Serialize, Deserialize)]
 struct PatternRecord {
     id: String,
