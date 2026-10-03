@@ -131,7 +131,7 @@ impl App {
             }
             finished |= text_color_button(ui, &mut t.color);
             let t = crate::text_edit::route_text_edit(&before, &shown, t, sel);
-            self.commit_text(id, &before, t, finished);
+            self.commit_text(ui.ctx(), id, &before, t, finished);
             bar_separator(ui);
             self.new_text_button(ui);
             if self.text_editing() {
@@ -325,20 +325,38 @@ impl App {
             }
             None => crate::text_edit::route_text_edit(&before, &shown, t, sel),
         };
-        self.commit_text(id, &before, t, finished);
+        self.commit_text(ui.ctx(), id, &before, t, finished);
         if rasterize {
             self.run(&RasterizeLayer { layer: id });
         }
     }
 
     /// Apply a frame's edits to a text layer, coalescing a drag or a run
-    /// of keystrokes into one undo step.
-    fn commit_text(&mut self, id: LayerId, before: &TextLayer, t: TextLayer, finished: bool) {
+    /// of keystrokes into one undo step. While the layer is being edited on
+    /// the canvas, the edit joins the session's step: the whole session,
+    /// typing and restyling alike, undoes (or cancels) as one.
+    fn commit_text(
+        &mut self,
+        ctx: &egui::Context,
+        id: LayerId,
+        before: &TextLayer,
+        t: TextLayer,
+        finished: bool,
+    ) {
+        let session = self.text_session_key(id);
         if t != *before {
-            self.run_coalescing(&SetText { layer: id, text: t }, &format!("text-{id}"));
+            let key = session.clone().unwrap_or_else(|| format!("text-{id}"));
+            self.run_coalescing(&SetText { layer: id, text: t }, &key);
         }
-        if finished {
+        if !finished {
+            return;
+        }
+        if session.is_none() {
             self.editor.end_coalescing();
+        } else if !ctx.wants_keyboard_input() && !ctx.memory(|m| m.any_popup_open()) {
+            // A click on Bold, an alignment or a typed size took the
+            // keyboard: give it back, so typing goes on into the text.
+            self.refocus_text_session();
         }
     }
 
@@ -417,7 +435,10 @@ impl App {
 /// True when a drag released, a typed value was committed, or a click
 /// changed the value: the end of one undoable edit.
 fn edit_finished(r: &egui::Response) -> bool {
-    r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())
+    // A number being typed changes with every keystroke ("9", then "96"):
+    // the edit ends when the field lets go of the keyboard, not before.
+    let typing = r.ctx.memory(|m| m.has_focus(r.id));
+    r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged() && !typing)
 }
 
 fn muted(ui: &mut egui::Ui, text: &str) {
@@ -632,6 +653,10 @@ fn text_color_button(ui: &mut egui::Ui, color: &mut [f32; 4]) -> bool {
         lumenply_io::linear_to_srgb(color[2]) as f32 / 255.0,
     ];
     let r = crate::color_picker::color_edit_button_rgb(ui, &mut rgb).on_hover_text("Text colour");
+    a11y_name(
+        &r,
+        &format!("Text colour {}", crate::color_picker::format_hex(rgb)),
+    );
     if r.changed() {
         *color = linear_rgba(rgb, color[3]);
     }
@@ -694,7 +719,15 @@ pub(crate) fn font_picker(ui: &mut egui::Ui, salt: &str, font: &mut String, widt
 
     // The button: a field showing the family, elided, with a chevron.
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, ROW_H), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("Font {font}")));
+    let name = if font.is_empty() {
+        format!("{BUNDLED_FAMILY} (bundled)")
+    } else {
+        font_display_name(font)
+    };
+    // Spoken as "Font family, <the family shown>".
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("Font family, {name}"))
+    });
     let open = ui.memory(|m| m.is_popup_open(popup_id));
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
@@ -706,11 +739,6 @@ pub(crate) fn font_picker(ui: &mut egui::Ui, salt: &str, font: &mut String, widt
             LINE
         };
         p.rect(rect, 6.0, GROUND, Stroke::new(1.0, edge));
-        let name = if font.is_empty() {
-            format!("{BUNDLED_FAMILY} (bundled)")
-        } else {
-            font_display_name(font)
-        };
         let mut job = egui::text::LayoutJob::default();
         let body = egui::TextStyle::Body.resolve(ui.style());
         job.append(
@@ -887,6 +915,171 @@ mod tests {
         })
         .unwrap();
         (ed.doc().clone(), bg, hello, ghost)
+    }
+
+    /// The app with "Hello" (40 px) as the active text layer, Text tool up.
+    fn text_app() -> (App, egui::Context, LayerId) {
+        use crate::shape_tool::test_frames::{app_with, frame};
+        let (mut app, ctx) = app_with(400, 200, Tool::Text);
+        let id = app.editor.doc().next_id();
+        app.run(&AddTextLayer {
+            text: TextLayer::new("Hello", 20.0, 100.0, 40.0, BLACK),
+            above: None,
+        });
+        app.set_active(Some(id));
+        frame(&mut app, &ctx, Vec::new(), egui::Modifiers::NONE);
+        (app, ctx, id)
+    }
+
+    #[test]
+    fn a_size_typed_in_the_options_bar_is_one_undo_step() {
+        use crate::shape_tool::test_frames::{click, frame, key};
+        let (mut app, ctx, id) = text_app();
+        let steps = app.editor.history().len();
+        assert!(click(&mut app, &ctx, "Font size"));
+        key(&mut app, &ctx, Key::A, egui::Modifiers::COMMAND);
+        for c in ["9", "6"] {
+            frame(
+                &mut app,
+                &ctx,
+                vec![egui::Event::Text(c.into())],
+                egui::Modifiers::NONE,
+            );
+        }
+        key(&mut app, &ctx, Key::Enter, egui::Modifiers::NONE);
+        frame(&mut app, &ctx, Vec::new(), egui::Modifiers::NONE);
+        let size = app
+            .editor
+            .doc()
+            .layer(id)
+            .and_then(|l| l.text_layer())
+            .map(|t| t.size);
+        assert_eq!(size, Some(96.0));
+        // "9" on the way to "96" is not a step of its own, and the Enter
+        // that confirmed the field does not start editing the text.
+        assert_eq!(app.editor.history().len(), steps + 1);
+        assert!(!app.text_editing());
+        assert!(app.editor.undo().is_some());
+        let size = app
+            .editor
+            .doc()
+            .layer(id)
+            .and_then(|l| l.text_layer())
+            .map(|t| t.size);
+        assert_eq!(size, Some(40.0));
+    }
+
+    #[test]
+    fn a_size_typed_for_selected_letters_keeps_the_selection_and_the_text() {
+        use crate::shape_tool::test_frames::{click, frame, key};
+        let (mut app, ctx, id) = text_app();
+        app.begin_text_edit(&ctx, id, EditStart::End);
+        frame(&mut app, &ctx, Vec::new(), egui::Modifiers::NONE);
+        if let Some(s) = app.typer.session.as_mut() {
+            s.buf.select(1, 4);
+        }
+        assert!(click(&mut app, &ctx, "Font size"));
+        key(&mut app, &ctx, Key::A, egui::Modifiers::COMMAND);
+        for c in ["6", "0"] {
+            frame(
+                &mut app,
+                &ctx,
+                vec![egui::Event::Text(c.into())],
+                egui::Modifiers::NONE,
+            );
+        }
+        key(&mut app, &ctx, Key::Enter, egui::Modifiers::NONE);
+        frame(&mut app, &ctx, Vec::new(), egui::Modifiers::NONE);
+        let t = app.editor.doc().layer(id).unwrap().text_layer().unwrap().clone();
+        // The Enter closed the field; it typed no line break into the text.
+        assert_eq!(t.text, "Hello");
+        assert_eq!(
+            (t.style_at(0).size, t.style_at(1).size, t.style_at(4).size),
+            (40.0, 60.0, 40.0)
+        );
+        let sel = app.typer.session.as_ref().map(|s| s.buf.range());
+        assert_eq!(sel, Some((1, 4)), "still selected, still editing");
+        // The keyboard is back on the text: typing replaces the selection.
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("i".into())],
+            egui::Modifiers::NONE,
+        );
+        let t = app.editor.doc().layer(id).unwrap().text_layer().unwrap();
+        assert_eq!(t.text, "Hio");
+    }
+
+    #[test]
+    fn esc_in_the_colour_picker_closes_it_and_the_edit_goes_on() {
+        use crate::shape_tool::test_frames::{click, find, frame, key};
+        let (mut app, ctx, id) = text_app();
+        app.begin_text_edit(&ctx, id, EditStart::End);
+        frame(&mut app, &ctx, Vec::new(), egui::Modifiers::NONE);
+        if let Some(s) = app.typer.session.as_mut() {
+            s.buf.select(0, 2);
+        }
+        assert!(click(&mut app, &ctx, "Text colour*"));
+        assert!(find(&mut app, &ctx, "Hex colour").is_some(), "the picker is open");
+        key(&mut app, &ctx, Key::Escape, egui::Modifiers::NONE);
+        frame(&mut app, &ctx, Vec::new(), egui::Modifiers::NONE);
+        assert!(
+            find(&mut app, &ctx, "Hex colour").is_none(),
+            "Esc closed the picker"
+        );
+        assert!(app.text_editing(), "and left the text in editing");
+        let sel = app.typer.session.as_ref().map(|s| s.buf.range());
+        assert_eq!(sel, Some((0, 2)));
+        // The keyboard is back on the text: typing replaces the selection.
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("J".into())],
+            egui::Modifiers::NONE,
+        );
+        let t = app.editor.doc().layer(id).unwrap().text_layer().unwrap();
+        assert_eq!(t.text, "Jllo");
+        // A second Esc commits.
+        key(&mut app, &ctx, Key::Escape, egui::Modifiers::NONE);
+        assert!(!app.text_editing());
+    }
+
+    #[test]
+    fn restyling_during_an_edit_joins_the_edit_and_keeps_a_given_name() {
+        use crate::shape_tool::test_frames::{click, frame, key};
+        let (mut app, ctx, id) = text_app();
+        app.run(&RenameLayer {
+            layer: id,
+            name: "Greeting".into(),
+        });
+        let steps = app.editor.history().len();
+        app.begin_text_edit(&ctx, id, EditStart::End);
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("!".into())],
+            egui::Modifiers::NONE,
+        );
+        // Bold from the options bar mid-edit, then more typing.
+        assert!(click(&mut app, &ctx, "Bold"));
+        assert!(app.text_editing(), "the edit goes on");
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("?".into())],
+            egui::Modifiers::NONE,
+        );
+        key(&mut app, &ctx, Key::Escape, egui::Modifiers::NONE);
+        let l = app.editor.doc().layer(id).unwrap();
+        let t = l.text_layer().unwrap();
+        assert_eq!(
+            (t.text.as_str(), t.bold, l.name.as_str()),
+            ("Hello!?", true, "Greeting")
+        );
+        assert_eq!(app.editor.history().len(), steps + 1, "the session is one step");
+        assert!(app.editor.undo().is_some());
+        let t = app.editor.doc().layer(id).unwrap().text_layer().unwrap();
+        assert_eq!((t.text.as_str(), t.bold), ("Hello", false));
     }
 
     #[test]

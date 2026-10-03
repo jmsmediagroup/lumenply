@@ -404,6 +404,10 @@ pub(crate) struct TypeTool {
     canvas_id: Option<egui::Id>,
     /// Makes every session's coalescing key unique.
     serial: u64,
+    /// Another widget (a size field, the Properties text box, a popup such
+    /// as the colour picker) held the keyboard last frame: an Enter or Esc
+    /// now was meant for it.
+    keys_elsewhere: bool,
 }
 
 /// Where the caret goes when editing starts.
@@ -424,6 +428,22 @@ impl App {
     /// A text session is open (it takes keys while the canvas has focus).
     pub(crate) fn text_editing(&self) -> bool {
         self.typer.session.is_some()
+    }
+
+    /// The coalescing key of the editing session open on layer `id`.
+    pub(crate) fn text_session_key(&self, id: LayerId) -> Option<String> {
+        self.typer
+            .session
+            .as_ref()
+            .filter(|s| s.layer == id)
+            .map(|s| s.key.clone())
+    }
+
+    /// Hand the keyboard back to the open session on the next frame.
+    pub(crate) fn refocus_text_session(&mut self) {
+        if let Some(s) = self.typer.session.as_mut() {
+            s.focus_pending = true;
+        }
     }
 
     fn next_text_key(&mut self) -> String {
@@ -713,7 +733,7 @@ impl App {
     }
 
     /// Handle this frame's keyboard, text and clipboard events.
-    fn text_keys(&mut self, ctx: &egui::Context) {
+    fn text_keys(&mut self, ctx: &egui::Context, esc_elsewhere: bool) {
         let (events, now) = ctx.input(|i| (i.events.clone(), i.time));
         let mac = cfg!(target_os = "macos");
         for e in events {
@@ -745,7 +765,9 @@ impl App {
                     modifiers,
                     ..
                 } => {
-                    if let Some(a) = key_action(key, modifiers, mac) {
+                    if key == Key::Escape && esc_elsewhere {
+                        // It closed a popup or a field, not the edit.
+                    } else if let Some(a) = key_action(key, modifiers, mac) {
                         self.text_key(now, a);
                     } else if let Some((id, commit)) = passthrough_action(&self.prefs, key, modifiers) {
                         // View keys work mid-edit; file keys commit first.
@@ -860,11 +882,19 @@ impl App {
         self.typer.canvas_id = Some(resp.id);
         let (mods, now) = ctx.input(|i| (i.modifiers, i.time));
 
+        // An Enter or Esc that a size field or the Properties text box
+        // held the keyboard for belongs to that field, not to the canvas.
+        let field_keys = std::mem::take(&mut self.typer.keys_elsewhere);
         // Keyboard focus: the session takes keys while the canvas has it.
+        let mut just_focused = false;
+        // Nothing holds the keyboard (a popup or a field just let go of
+        // it): it comes back to the text being edited.
+        let unclaimed = ctx.memory(|m| m.focused().is_none() && !m.any_popup_open());
         match self.typer.session.as_mut() {
-            Some(s) if s.focus_pending => {
+            Some(s) if s.focus_pending || (unclaimed && field_keys) => {
                 resp.request_focus();
                 s.focus_pending = false;
+                just_focused = field_keys;
             }
             None if holds_keys(resp) => resp.surrender_focus(),
             _ => {}
@@ -872,12 +902,13 @@ impl App {
         // egui drops focus on an Esc it was not told to keep (the frame
         // right after focus moved): that Esc still means "commit".
         if self.typer.session.is_some()
+            && !field_keys
             && ctx.memory(|m| m.focused().is_none())
             && ctx.input(|i| i.key_pressed(Key::Escape))
         {
             self.commit_text_edit();
         }
-        if self.typer.session.is_some() && holds_keys(resp) {
+        if self.typer.session.is_some() && holds_keys(resp) && !just_focused {
             ctx.memory_mut(|m| {
                 m.set_focus_lock_filter(
                     resp.id,
@@ -889,8 +920,9 @@ impl App {
                     },
                 )
             });
-            self.text_keys(ctx);
+            self.text_keys(ctx, field_keys);
         } else if self.typer.session.is_none()
+            && !field_keys
             && !ctx.wants_keyboard_input()
             && self.active_text().is_some()
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter))
@@ -972,6 +1004,11 @@ impl App {
         if self.typer.session.is_none() && holds_keys(resp) {
             resp.surrender_focus();
         }
+        // Read next frame, before the bar and Properties (drawn before the
+        // canvas) have used this frame's keys: an open popup (the colour
+        // picker, the font list) or a focused field owns the next Esc.
+        self.typer.keys_elsewhere =
+            (ctx.wants_keyboard_input() && !holds_keys(resp)) || ctx.memory(|m| m.any_popup_open());
         // Caret blink and the IME candidate window follow the caret.
         if let Some(s) = &self.typer.session {
             if holds_keys(resp) {
