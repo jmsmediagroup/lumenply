@@ -386,7 +386,15 @@ impl App {
                 self.path = Some(PathBuf::from(path));
                 self.saved_rev = self.editor.history().len();
                 self.recent = session::push_recent(path);
-                session::remove_autosave();
+                if self.any_unsaved() {
+                    // Other documents still need their backups: rewrite
+                    // the set now, without this one.
+                    self.last_autosave = std::time::Instant::now()
+                        .checked_sub(self.prefs.autosave_every())
+                        .unwrap_or(self.last_autosave);
+                } else {
+                    session::remove_autosave();
+                }
                 self.status = format!("Saved {path}");
             }
             Err(e) => self.status = format!("Could not save: {e}"),
@@ -882,10 +890,15 @@ impl App {
                             a11y_scroll(ui.ctx(), &scroll_out, "Shortcuts");
                         }
                         Dialog::Recover => {
-                            note(
-                                ui,
-                                "The previous session left an autosaved backup, probably after a crash.",
-                            );
+                            let n = session::autosave_backups().len();
+                            let text = if n > 1 {
+                                format!(
+                                    "The previous session left autosaved backups of {n} documents, probably after a crash."
+                                )
+                            } else {
+                                "The previous session left an autosaved backup, probably after a crash.".to_string()
+                            };
+                            note(ui, &text);
                             footer(ui, |ui| {
                                 if ui.add(primary_button("Recover")).clicked() || enter {
                                     self.recover_autosave();

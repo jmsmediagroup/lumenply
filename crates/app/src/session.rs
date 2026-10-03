@@ -239,6 +239,12 @@ pub(crate) fn autosave_source_file() -> Option<PathBuf> {
     data_dir().map(|d| d.join("autosave.src"))
 }
 
+/// Folder of per-document backups: `<n>.lumen` plus `<n>.src` (where the
+/// document came from) for each unsaved open document.
+pub(crate) fn autosave_dir() -> Option<PathBuf> {
+    data_dir().map(|d| d.join("autosave"))
+}
+
 pub(crate) fn remove_autosave() {
     // "autosave.nge" is the backup's pre-rename name; a migrated directory
     // may still hold one, and nothing else ever cleans it up.
@@ -249,26 +255,84 @@ pub(crate) fn remove_autosave() {
     {
         let _ = std::fs::remove_file(p);
     }
+    if let Some(dir) = autosave_dir() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
-/// Write the document (and where it came from) as the autosave backup, off
-/// the UI thread. The project save is atomic, so a crash mid-write never
-/// leaves a corrupt backup.
-pub(crate) fn autosave(doc: Document, source: Option<PathBuf>) {
-    let (Some(dir), Some(file), Some(src)) = (data_dir(), autosave_file(), autosave_source_file()) else {
+/// Back up every unsaved open document (and where each came from), off
+/// the UI thread, replacing the previous set. Project saves are atomic, so
+/// a crash mid-write never leaves a corrupt backup.
+pub(crate) fn autosave_all(docs: Vec<(Document, Option<PathBuf>)>) {
+    std::thread::spawn(move || write_backups(&docs));
+}
+
+/// [`autosave_all`]'s work, on the calling thread.
+pub(crate) fn write_backups(docs: &[(Document, Option<PathBuf>)]) {
+    let (Some(dir), Some(single), Some(single_src)) =
+        (autosave_dir(), autosave_file(), autosave_source_file())
+    else {
         return;
     };
-    std::thread::spawn(move || {
+    {
         if std::fs::create_dir_all(&dir).is_err() {
             return;
         }
-        if project::save(&file, &doc).is_ok() {
-            let text = source
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let _ = std::fs::write(src, text);
+        for (i, (doc, source)) in docs.iter().enumerate() {
+            if project::save(dir.join(format!("{i}.lumen")), doc).is_ok() {
+                let text = source
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let _ = std::fs::write(dir.join(format!("{i}.src")), text);
+            }
         }
-    });
+        // Slots past this set, and the single backup older versions wrote,
+        // are stale now.
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for e in entries.flatten() {
+                let p = e.path();
+                let slot = p
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.parse::<usize>().ok());
+                if slot.is_some_and(|n| n >= docs.len()) {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+        }
+        let _ = std::fs::remove_file(single);
+        let _ = std::fs::remove_file(single_src);
+    }
+}
+
+/// Every backup a previous session left: the documents and where each
+/// came from, in tab order.
+pub(crate) fn autosave_backups() -> Vec<(PathBuf, Option<PathBuf>)> {
+    let mut out = Vec::new();
+    if let Some(f) = autosave_file().filter(|f| f.exists()) {
+        out.push((f, autosave_source()));
+    }
+    if let Some(dir) = autosave_dir() {
+        let mut slots: Vec<(usize, PathBuf)> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "lumen"))
+            .filter_map(|p| Some((p.file_stem()?.to_str()?.parse().ok()?, p)))
+            .collect();
+        slots.sort();
+        for (_, p) in slots {
+            let src = std::fs::read_to_string(p.with_extension("src"))
+                .ok()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .map(PathBuf::from);
+            out.push((p, src));
+        }
+    }
+    out
 }
 
 /// The original path of the autosaved document, if it had one.

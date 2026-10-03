@@ -619,7 +619,7 @@ impl App {
             app.place_image(p);
         }
         app.restore_brush();
-        if session::autosave_file().is_some_and(|p| p.exists()) {
+        if !session::autosave_backups().is_empty() {
             app.dialog = Some(Dialog::Recover);
         }
         app
@@ -896,6 +896,19 @@ impl App {
     }
 
     /// True when any open tab has unsaved changes.
+    /// Every open document with unsaved changes (the active one first),
+    /// with where it came from: what an autosave backs up.
+    fn unsaved_docs(&self) -> Vec<(lumenply_doc::Document, Option<PathBuf>)> {
+        let mut out = Vec::new();
+        if self.editor.history().len() != self.saved_rev {
+            out.push((self.editor.doc().clone(), self.path.clone()));
+        }
+        for t in self.tabs.iter().filter(|t| t.unsaved()) {
+            out.push((t.editor.doc().clone(), t.path.clone()));
+        }
+        out
+    }
+
     fn any_unsaved(&self) -> bool {
         self.editor.history().len() != self.saved_rev || self.tabs.iter().any(|t| t.unsaved())
     }
@@ -1450,11 +1463,20 @@ impl App {
         }
         self.dialogs(ctx);
         self.palette_ui(ctx);
-        let unsaved = self.editor.history().len() != self.saved_rev;
-        if unsaved && self.drag.is_none() && self.last_autosave.elapsed() > self.prefs.autosave_every() {
+        if !self.no_doc
+            && self.any_unsaved()
+            && self.drag.is_none()
+            && self.last_autosave.elapsed() > self.prefs.autosave_every()
+        {
             self.last_autosave = std::time::Instant::now();
-            session::autosave(self.editor.doc().clone(), self.path.clone());
-            self.status = "Autosaved a backup".into();
+            let docs = self.unsaved_docs();
+            let n = docs.len();
+            session::autosave_all(docs);
+            self.status = if n == 1 {
+                "Autosaved a backup".into()
+            } else {
+                format!("Autosaved backups of {n} documents")
+            };
         }
         if self.dirty && !self.no_doc {
             let area = self.dirty_rect;

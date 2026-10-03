@@ -440,7 +440,8 @@ None of these could be tested in the container.
 - [x] Multiple open documents: tab strip in the top bar (switch, close with
       per-tab unsaved confirm, + for new; opening an already-open file
       focuses its tab; per-document zoom/pan/active layer; quitting checks
-      every tab). Autosave still covers the active document only
+      every tab). Autosave backs up every unsaved tab (one slot each,
+      stale slots dropped) and crash recovery reopens them all
 - [x] Command palette (Ctrl+K) searching every menu action
 - [x] New layer from selection (`NewLayerFromSelection` command; selection
       action bar "New layer" and palette "Layer via copy")
