@@ -25,7 +25,10 @@ cargo test --release -p lumenply-app --features uitest uitest_ -- --ignored
 `--uitest --help` lists the options: `--list`, `--size WxH` (default 1440x900),
 `--ppp N` (1 or 2), `--fps N` (30), `--every N` (record every Nth frame), `--hold S`
 (how long each step's last frame stays on, 0.6 s), `--video-scale X`, `--no-video`,
-`--stop-on-fail`. Two helpers for writing scenarios:
+`--stop-on-fail`, `--models-from DIR` (or `LUMENPLY_UITEST_MODELS`: AI models in
+`DIR/<model>/` are linked into the scratch profile before launch, so the session
+starts with them installed; under `cargo test` sessions then run the real AI
+engine). Two helpers for writing scenarios:
 
 - `--uitest --tree [APP ARGS]` launches (`--demo` opens the demo) and prints every named
   control, with its role and position.

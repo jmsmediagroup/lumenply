@@ -476,7 +476,9 @@ fn ai_object_selection(s: &mut Session) -> UiResult {
     s.describe("Click the dog's face");
     let t = Instant::now();
     s.canvas_click((850.0, 520.0), "")?;
-    s.wait_idle()?;
+    // The first click after a fresh install waits for CoreML to compile
+    // the model: 21-35 s on a busy machine.
+    s.wait_idle_for(120)?;
     s.note(&format!(
         "First click (loads the model, analyses the image): {:.1} s",
         t.elapsed().as_secs_f32()
