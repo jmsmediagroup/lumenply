@@ -11,6 +11,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-f59e0b"></a>
   <img alt="Version 0.9.0 public beta" src="https://img.shields.io/badge/version-0.9.0%20public%20beta-1f2937">
+  <a href="https://github.com/jmsmediagroup/lumenply/releases/latest"><img alt="GitHub downloads" src="https://img.shields.io/github/downloads/jmsmediagroup/lumenply/total?label=downloads"></a>
   <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-b7410e">
   <img alt="1,188 automated tests" src="https://img.shields.io/badge/tests-1%2C188-16a34a">
 </p>
