@@ -14,6 +14,10 @@ else
   cargo build --release -p lumenply-app
   BIN=${CARGO_TARGET_DIR:-target}/release/lumenply-app
 fi
+case "$BIN" in
+  /*) ;;
+  *) BIN="$PWD/$BIN" ;;
+esac
 APP="$OUT/Lumenply.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
