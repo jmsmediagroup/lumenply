@@ -24,6 +24,20 @@
   <a href="docs/media/lumenply-demo.mp4">Watch it in full quality (MP4)</a>.</sub>
 </p>
 
+<h2 align="center">Download Lumenply. It's free.</h2>
+
+<p align="center">
+  <a href="https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-macOS.dmg"><img src="docs/media/download-macos.png" width="300" alt="Download Lumenply for macOS: Apple Silicon and Intel, .dmg"></a>
+  <a href="https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Windows-Setup.exe"><img src="docs/media/download-windows.png" width="300" alt="Download Lumenply for Windows 10 and 11: installer"></a>
+  <a href="https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Linux-x86_64.AppImage"><img src="docs/media/download-linux.png" width="300" alt="Download Lumenply for Linux: x86_64 AppImage"></a>
+</p>
+
+<p align="center">
+  <sub>Version 0.9.0 public beta · no account, no subscription ·
+  <a href="https://github.com/jmsmediagroup/lumenply/releases/latest">all downloads and release notes</a> ·
+  <a href="#install">first-launch help</a></sub>
+</p>
+
 ---
 
 **Lumenply** is a free raster image editor and **Photoshop alternative** for photographers,
@@ -34,7 +48,7 @@ Remove Background locally on your computer**. Your photos never leave your machi
 
 - [Why Lumenply](#why-lumenply)
 - [Features](#features)
-- [Get Lumenply](#get-lumenply)
+- [Download and install](#install)
 - [Coming from Photoshop or GIMP](#coming-from-photoshop-or-gimp)
 - [FAQ](#faq)
 - [How it's built](#how-its-built)
@@ -116,10 +130,27 @@ Remove Background locally on your computer**. Your photos never leave your machi
 
 More screenshots are in [docs/screenshots](docs/screenshots).
 
-## Get Lumenply
+## Install
 
-Lumenply is in **public beta (0.9.0)**. Prebuilt downloads arrive with 1.0; until then it
-builds from source with one command.
+| System | Download | How |
+| --- | --- | --- |
+| **macOS** 11 or later (Apple Silicon and Intel) | [Lumenply-macOS.dmg](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-macOS.dmg) | Open the disk image and drag **Lumenply** to **Applications**. |
+| **Windows** 10 and 11 (64-bit) | [Lumenply-Windows-Setup.exe](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Windows-Setup.exe) | Run the installer; Lumenply appears in the Start menu. No admin rights needed. Prefer no install? Get the [portable zip](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Windows-Portable.zip). |
+| **Linux** x86_64 | [Lumenply-Linux-x86_64.AppImage](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Linux-x86_64.AppImage) | `chmod +x Lumenply-Linux-x86_64.AppImage`, then run it. Also as a [tar.gz](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Linux-x86_64.tar.gz). |
+
+**First launch.** The beta isn't signed with a paid developer certificate yet, so your system
+asks once:
+
+- **macOS:** if it says Apple could not verify Lumenply, open **System Settings ▸ Privacy &
+  Security**, scroll down and click **Open Anyway**.
+- **Windows:** if SmartScreen says it protected your PC, click **More info ▸ Run anyway**.
+
+The AI tools download their models the first time you use them, after asking, and then work
+offline. AI runs on CoreML (macOS), DirectML (Windows) or the CPU, chosen automatically.
+Lumenply is developed and tested on macOS; Windows and Linux builds are new in this beta, so
+please [report anything odd](https://github.com/jmsmediagroup/lumenply/issues).
+
+### Build from source
 
 1. Install Rust 1.85 or newer from [rustup.rs](https://rustup.rs). On Linux, also install
    `libxkbcommon-dev libgl-dev libx11-dev`.
@@ -132,11 +163,8 @@ cargo run --release -p lumenply-app -- --demo        # opens the editor with a d
 cargo run --release -p lumenply-app -- photo.psd     # or open your own PSD, image or .lumen
 ```
 
-On macOS, `scripts/bundle-macos.sh` builds `Lumenply.app` with its icon and file types.
-
-**Platforms:** developed and tested on macOS (Apple Silicon). The same code builds for Windows
-and Linux; testing there is under way ([ROADMAP.md](ROADMAP.md)). AI runs on CoreML (macOS),
-DirectML (Windows), CUDA (NVIDIA) or the CPU, chosen automatically.
+`scripts/bundle-macos.sh` builds `Lumenply.app`; `.github/workflows/release.yml` builds every
+download.
 
 ### Command line
 

@@ -17,8 +17,8 @@ version = "0.9.0"
 edition = "2021"
 rust-version = "1.85"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/CHANGE-ME/nge"
-authors = ["NGE contributors"]
+repository = "https://github.com/jmsmediagroup/lumenply"
+authors = ["Lumenply contributors"]
 
 [workspace.dependencies]
 lumenply-tiles = { path = "crates/tiles" }

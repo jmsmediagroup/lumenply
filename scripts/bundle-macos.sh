@@ -1,13 +1,19 @@
 #!/bin/sh
 # Builds Lumenply.app (release) with its icon and file associations.
 # Usage: scripts/bundle-macos.sh [output dir, default target/release]
-# Unsigned: the first launch needs right-click > Open (Gatekeeper).
+# LUMENPLY_BIN=path uses that binary (a universal one from CI) instead of
+# building. Ad-hoc signed only: without a Developer ID the first launch
+# needs System Settings > Privacy & Security > Open Anyway.
 set -eu
 cd "$(dirname "$0")/.."
 OUT=${1:-target/release}
 VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-cargo build --release -p lumenply-app
-BIN=${CARGO_TARGET_DIR:-target}/release/lumenply-app
+if [ -n "${LUMENPLY_BIN:-}" ]; then
+  BIN=$LUMENPLY_BIN
+else
+  cargo build --release -p lumenply-app
+  BIN=${CARGO_TARGET_DIR:-target}/release/lumenply-app
+fi
 APP="$OUT/Lumenply.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -61,4 +67,7 @@ $(doc_type "Camera RAW" Viewer Alternate dng cr2 cr3 crw nef nrw arw srf sr2 raf
 </plist>
 PLIST
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
+# Apple Silicon refuses unsigned code; an ad-hoc signature over the whole
+# bundle keeps it consistent after the Info.plist and icon were added.
+codesign --force --deep --sign - "$APP"
 echo "built $APP ($VERSION)"

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Lumenply
+GenericName=Photo Editor
+Comment=Free, open-source photo editor with layers, PSD support and on-device AI
+Exec=lumenply %F
+Icon=lumenply
+Terminal=false
+Categories=Graphics;Photography;RasterGraphics;2DGraphics;
+Keywords=photo;image;editor;photoshop;psd;layers;retouch;
+MimeType=image/png;image/jpeg;image/tiff;image/webp;image/vnd.adobe.photoshop;image/openraster;

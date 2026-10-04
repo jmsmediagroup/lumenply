@@ -1,0 +1,131 @@
+name: Release
+
+# Builds the downloads for macOS, Windows and Linux. A tag such as v0.9.0
+# publishes them as a GitHub release; a manual run only keeps them as
+# workflow artifacts (for testing the packaging).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: macOS (universal)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build both architectures
+        run: |
+          cargo build --release -p lumenply-app --target aarch64-apple-darwin
+          cargo build --release -p lumenply-app --target x86_64-apple-darwin
+          lipo -create -output lumenply-app-universal \
+            target/aarch64-apple-darwin/release/lumenply-app \
+            target/x86_64-apple-darwin/release/lumenply-app
+          lipo -info lumenply-app-universal
+      - name: Bundle and wrap in a disk image
+        run: |
+          mkdir -p dist
+          LUMENPLY_BIN=lumenply-app-universal scripts/bundle-macos.sh dist
+          scripts/make-dmg.sh dist/Lumenply.app dist/Lumenply-macOS.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/Lumenply-macOS.dmg
+
+  windows:
+    name: Windows (x64)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p lumenply-app
+      - name: Stage the app
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/win | Out-Null
+          Copy-Item target/release/lumenply-app.exe dist/win/Lumenply.exe
+          # Runtime libraries ONNX Runtime copied beside the build (DirectML).
+          Get-ChildItem target/release -Filter *.dll | Copy-Item -Destination dist/win
+          Copy-Item LICENSE dist/win/LICENSE.txt
+          Get-ChildItem dist/win
+          Compress-Archive -Path dist/win/* -DestinationPath dist/Lumenply-Windows-Portable.zip
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches.Groups[1].Value
+          $env:LUMENPLY_VERSION = $version
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) { choco install innosetup -y --no-progress }
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc packaging/windows/lumenply.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/Lumenply-Windows-Setup.exe
+            dist/Lumenply-Windows-Portable.zip
+
+  linux:
+    name: Linux (x86_64)
+    # The oldest supported runner: its glibc sets the oldest distro that runs it.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libgl-dev libx11-dev libwayland-dev libfuse2
+      - run: cargo build --release -p lumenply-app
+      - name: AppImage and tarball
+        run: |
+          set -eu
+          mkdir -p dist AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          cp target/release/lumenply-app AppDir/usr/bin/lumenply
+          target/release/lumenply-app --write-icon AppDir/usr/share/icons/hicolor/256x256/apps/lumenply.png 256
+          cp packaging/linux/lumenply.desktop AppDir/usr/share/applications/
+          curl -sSLo linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy
+          OUTPUT=dist/Lumenply-Linux-x86_64.AppImage ./linuxdeploy --appimage-extract-and-run \
+            --appdir AppDir \
+            --desktop-file AppDir/usr/share/applications/lumenply.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/lumenply.png \
+            --output appimage
+          mkdir -p tarball/lumenply
+          cp target/release/lumenply-app tarball/lumenply/lumenply
+          cp packaging/linux/lumenply.desktop AppDir/usr/share/icons/hicolor/256x256/apps/lumenply.png LICENSE tarball/lumenply/
+          tar -C tarball -czf dist/Lumenply-Linux-x86_64.tar.gz lumenply
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/Lumenply-Linux-x86_64.AppImage
+            dist/Lumenply-Linux-x86_64.tar.gz
+
+  publish:
+    name: Publish the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Lumenply ${{ github.ref_name }}
+          body_path: packaging/release-notes.md
+          files: dist/*

@@ -6,6 +6,9 @@
 //! cache; redraws are limited to the area a command reports as affected,
 //! which keeps brushing responsive.
 
+// A release build on Windows is a GUI app: no console window beside it.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;

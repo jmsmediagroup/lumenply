@@ -12,6 +12,10 @@ authors.workspace = true
 name = "lumenply-app"
 path = "src/main.rs"
 
+[build-dependencies]
+# Windows only: the .exe icon and version resource (build.rs).
+winresource = "0.1"
+
 [features]
 # Local AI selection and masking (ADR 0028), which links ONNX Runtime.
 # Build with --no-default-features to leave it out (the AI features then
