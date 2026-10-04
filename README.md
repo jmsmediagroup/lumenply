@@ -126,8 +126,8 @@ builds from source with one command.
 2. Clone and run:
 
 ```sh
-git clone https://github.com/jmsmediagroup/lumenply.git
-cd lumenply
+git clone https://github.com/jmsmediagroup/lumenply2.git
+cd lumenply2
 cargo run --release -p lumenply-app -- --demo        # opens the editor with a demo photo
 cargo run --release -p lumenply-app -- photo.psd     # or open your own PSD, image or .lumen
 ```
