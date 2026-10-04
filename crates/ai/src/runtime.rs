@@ -327,6 +327,7 @@ fn first_loading<T>(
 
 /// ONNX Runtime has the provider compiled in.
 fn available(p: Provider) -> bool {
+    #[cfg(any(target_os = "macos", windows, feature = "cuda"))]
     use ort::ep::ExecutionProvider;
     match p {
         Provider::Cpu => true,

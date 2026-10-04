@@ -4,7 +4,7 @@
 | --- | --- | --- |
 | **macOS** 11 or later, Apple Silicon and Intel | [Lumenply-macOS.dmg](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-macOS.dmg) | Open it and drag Lumenply to Applications |
 | **Windows** 10 and 11, 64-bit | [Lumenply-Windows-Setup.exe](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Windows-Setup.exe) | Installer with Start menu entry; or the portable [zip](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Windows-Portable.zip) |
-| **Linux** x86_64 | [Lumenply-Linux-x86_64.AppImage](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Linux-x86_64.AppImage) | Make it executable and run it; or the [tar.gz](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Linux-x86_64.tar.gz) |
+| **Linux** x86_64: Ubuntu 24.04, Fedora 40, Debian 13 or newer | [Lumenply-Linux-x86_64.AppImage](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Linux-x86_64.AppImage) | Make it executable and run it; or the [tar.gz](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Linux-x86_64.tar.gz) |
 
 ### First launch
 
@@ -18,3 +18,4 @@ system asks once before the first launch:
 
 The AI features (Select Subject, Object Selection, Remove Background) download
 their models the first time you use them, after asking; they then run offline.
+On macOS they need an Apple Silicon Mac; Intel Macs get everything else.

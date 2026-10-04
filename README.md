@@ -136,7 +136,7 @@ More screenshots are in [docs/screenshots](docs/screenshots).
 | --- | --- | --- |
 | **macOS** 11 or later (Apple Silicon and Intel) | [Lumenply-macOS.dmg](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-macOS.dmg) | Open the disk image and drag **Lumenply** to **Applications**. |
 | **Windows** 10 and 11 (64-bit) | [Lumenply-Windows-Setup.exe](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Windows-Setup.exe) | Run the installer; Lumenply appears in the Start menu. No admin rights needed. Prefer no install? Get the [portable zip](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Windows-Portable.zip). |
-| **Linux** x86_64 | [Lumenply-Linux-x86_64.AppImage](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Linux-x86_64.AppImage) | `chmod +x Lumenply-Linux-x86_64.AppImage`, then run it. Also as a [tar.gz](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Linux-x86_64.tar.gz). |
+| **Linux** x86_64: Ubuntu 24.04, Fedora 40, Debian 13 or newer | [Lumenply-Linux-x86_64.AppImage](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Linux-x86_64.AppImage) | `chmod +x Lumenply-Linux-x86_64.AppImage`, then run it. Also as a [tar.gz](https://github.com/jmsmediagroup/lumenply/releases/latest/download/Lumenply-Linux-x86_64.tar.gz). |
 
 **First launch.** The beta isn't signed with a paid developer certificate yet, so your system
 asks once:
@@ -146,7 +146,8 @@ asks once:
 - **Windows:** if SmartScreen says it protected your PC, click **More info ▸ Run anyway**.
 
 The AI tools download their models the first time you use them, after asking, and then work
-offline. AI runs on CoreML (macOS), DirectML (Windows) or the CPU, chosen automatically.
+offline. AI runs on CoreML (macOS), DirectML (Windows) or the CPU, chosen automatically; on
+macOS it needs Apple Silicon (Intel Macs get everything else).
 Lumenply is developed and tested on macOS; Windows and Linux builds are new in this beta, so
 please [report anything odd](https://github.com/jmsmediagroup/lumenply/issues).
 

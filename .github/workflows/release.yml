@@ -27,7 +27,9 @@ jobs:
       - name: Build both architectures
         run: |
           cargo build --release -p lumenply-app --target aarch64-apple-darwin
-          cargo build --release -p lumenply-app --target x86_64-apple-darwin
+          # ONNX Runtime has no prebuilt library for Intel Macs: the Intel
+          # half leaves the AI tools out (the app says so where they'd be).
+          cargo build --release -p lumenply-app --target x86_64-apple-darwin --no-default-features
           lipo -create -output lumenply-app-universal \
             target/aarch64-apple-darwin/release/lumenply-app \
             target/x86_64-apple-darwin/release/lumenply-app
@@ -79,13 +81,14 @@ jobs:
 
   linux:
     name: Linux (x86_64)
-    # The oldest supported runner: its glibc sets the oldest distro that runs it.
-    runs-on: ubuntu-22.04
+    # The prebuilt ONNX Runtime needs glibc 2.38 and GCC 13's libstdc++, so
+    # the build (and so the oldest distro that runs it) is Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libgl-dev libx11-dev libwayland-dev libfuse2
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libgl-dev libx11-dev libwayland-dev
       - run: cargo build --release -p lumenply-app
       - name: AppImage and tarball
         run: |
