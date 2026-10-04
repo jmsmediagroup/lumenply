@@ -148,7 +148,7 @@ impl App {
         self.open_in_new_tab(Editor::new(ed.doc().clone()), None);
         self.mark_imported(&st.path);
         self.recent = session::push_recent(&st.path);
-        self.status = format!("Opened {} ({w}×{h})", st.path);
+        self.status = format!("Opened {} ({w}×{h})", crate::dialogs::file_label(&st.path));
     }
 
     /// The workspace; replaces the editor UI while open.

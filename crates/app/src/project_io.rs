@@ -221,7 +221,7 @@ mod tests {
 
         let mut app = crate::a11y_tests::launch(&[]);
         app.open_path(&name);
-        assert_eq!(app.status, format!("Opened {name}"));
+        assert_eq!(app.status, "Opened poster.lumen");
         let adj = app.editor.doc().layers()[1].id;
         app.run(&SetOpacity {
             layer: adj,
@@ -252,7 +252,7 @@ mod tests {
         // Reopened elsewhere: the same document.
         let mut again = crate::a11y_tests::launch(&[]);
         again.open_path(&name);
-        assert_eq!(again.status, format!("Opened {name}"));
+        assert_eq!(again.status, "Opened poster.lumen");
         assert_eq!(again.editor.doc().layers()[1].opacity, 0.25);
         assert_eq!(lumenply_render::composite_raster(again.editor.doc()), shown);
         let _ = std::fs::remove_dir_all(&dir);

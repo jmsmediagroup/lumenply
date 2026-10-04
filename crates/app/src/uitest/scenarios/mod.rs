@@ -21,6 +21,7 @@ mod h_workspace;
 mod i_ai_actions;
 mod j_robustness;
 mod selection;
+mod showcase;
 
 /// Every area's scenarios, in the order `--uitest` runs them.
 pub(crate) const AREAS: &[&[Scenario]] = &[
@@ -37,4 +38,5 @@ pub(crate) const AREAS: &[&[Scenario]] = &[
     g_text_shapes::SCENARIOS,
     j_robustness::SCENARIOS,
     a_files::SCENARIOS,
+    showcase::SCENARIOS,
 ];

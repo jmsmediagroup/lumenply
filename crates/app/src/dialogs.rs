@@ -60,6 +60,13 @@ pub(crate) const IMAGE_EXT: &[&str] = &[
     "pbm", "pnm",
 ];
 
+/// A file as the status bar names it: its name, not its whole path.
+pub(crate) fn file_label(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned())
+}
+
 /// Where a file dialog starts: the live document's folder, else the folder
 /// of the most recently used file that still exists (None = the OS default).
 pub(crate) fn dialog_start_dir(doc_path: Option<&Path>, recent: &[String]) -> Option<PathBuf> {
@@ -295,9 +302,9 @@ impl App {
                     self.mark_imported(path);
                     self.recent = session::push_recent(path);
                     self.status = if n == 0 {
-                        format!("Imported {path}")
+                        format!("Imported {}", file_label(path))
                     } else {
-                        format!("Imported {path} ({})", rep.warnings.join("; "))
+                        format!("Imported {} ({})", file_label(path), rep.warnings.join("; "))
                     };
                 }
                 Err(e) => self.status = format!("Could not import {path}: {e}"),
@@ -312,10 +319,14 @@ impl App {
                     self.mark_imported(path);
                     self.recent = session::push_recent(path);
                     self.status = if n == 0 {
-                        format!("Imported {path}")
+                        format!("Imported {}", file_label(path))
                     } else {
                         let notes = if n == 1 { "1 note" } else { "notes" };
-                        format!("Imported {path} ({notes}: {})", rep.warnings.join("; "))
+                        format!(
+                            "Imported {} ({notes}: {})",
+                            file_label(path),
+                            rep.warnings.join("; ")
+                        )
                     };
                     // Photoshop type layers name their fonts too.
                     self.note_missing_fonts();
@@ -333,9 +344,9 @@ impl App {
                 self.open_in_new_tab(opened.editor, Some(PathBuf::from(path)));
                 self.recent = session::push_recent(path);
                 self.status = if opened.warnings.is_empty() {
-                    format!("Opened {path}")
+                    format!("Opened {}", file_label(path))
                 } else {
-                    format!("Opened {path} ({})", opened.warnings.join("; "))
+                    format!("Opened {} ({})", file_label(path), opened.warnings.join("; "))
                 };
                 self.note_missing_fonts();
             }
@@ -372,7 +383,7 @@ impl App {
                 self.open_in_new_tab(Editor::new(ed.doc().clone()), None);
                 self.mark_imported(path);
                 self.recent = session::push_recent(path);
-                self.status = format!("Opened {path} ({w}×{h})");
+                self.status = format!("Opened {} ({w}×{h})", file_label(path));
             }
             Err(e) => self.status = format!("Could not open {path}: {e}"),
         }
