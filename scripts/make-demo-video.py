@@ -23,7 +23,11 @@ FONT = os.path.join(ROOT, "crates", "render", "fonts", "IBMPlexSans-SemiBold.ttf
 MARK = "✦ "
 LEAD_IN = 0.4  # seconds kept before the first caption
 HOLD_END = 2.5  # seconds the last frame stays
-GIF_WIDTH, GIF_FPS = 960, 10
+GIF_WIDTH, GIF_FPS = 800, 8
+# The GIF stops where this caption would start and closes on the final
+# caption over the frozen frame: shorter, so the README loads fast.
+GIF_CUT = "Cmd+K"
+POSTER_AT = "Nothing is destroyed"  # the poster is the clean frame just before this caption
 
 
 def captions(session):
@@ -56,6 +60,22 @@ def caption_png(text, width, path):
     return img.size
 
 
+def build(video, vw, crop_h, caps, start, end, tmp, out):
+    """Crop, trim to [start, end], hold the last frame, overlay the captions."""
+    inputs = ["-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", video]
+    chain = [f"[0:v]crop={vw}:{crop_h}:0:0,tpad=stop_mode=clone:stop_duration={HOLD_END}[v0]"]
+    for i, (a, b, text) in enumerate(caps):
+        png = os.path.join(tmp, f"{os.path.basename(out)}-cap{i}.png")
+        _, ch = caption_png(text, vw, png)
+        inputs += ["-i", png]
+        y = crop_h - ch - round(crop_h * 0.035)
+        chain.append(
+            f"[v{i}][{i + 1}:v]overlay=0:{y}:enable='between(t,{a - start:.3f},{b - start:.3f})'[v{i + 1}]")
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", *inputs, "-filter_complex", ";".join(chain),
+                    "-map", f"[v{len(caps)}]", "-c:v", "libx264", "-crf", "16", "-preset", "slow",
+                    "-pix_fmt", "yuv420p", out], check=True)
+
+
 def main():
     if len(sys.argv) != 3:
         sys.exit(__doc__)
@@ -72,39 +92,36 @@ def main():
     crop_h = round(vw * win_h / win_w) // 2 * 2
     caps = captions(session)
     start = max(0.0, caps[0][0] - LEAD_IN)
+    end = float(session["video_seconds"])
     os.makedirs(out_dir, exist_ok=True)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        inputs, chain = ["-ss", f"{start:.3f}", "-i", video], []
-        prev = f"[0:v]crop={vw}:{crop_h}:0:0,tpad=stop_mode=clone:stop_duration={HOLD_END}[v0]"
-        chain.append(prev)
-        for i, (a, b, text) in enumerate(caps):
-            png = os.path.join(tmp, f"cap{i}.png")
-            _, ch = caption_png(text, vw, png)
-            inputs += ["-i", png]
-            y = crop_h - ch - round(crop_h * 0.035)
-            chain.append(
-                f"[v{i}][{i + 1}:v]overlay=0:{y}:enable='between(t,{a - start:.3f},{b - start:.3f})'[v{i + 1}]")
-        graph = ";".join(chain)
-        last = f"[v{len(caps)}]"
-        master = os.path.join(tmp, "master.mp4")
-        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", *inputs, "-filter_complex", graph,
-                        "-map", last, "-c:v", "libx264", "-crf", "16", "-preset", "slow",
-                        "-pix_fmt", "yuv420p", master], check=True)
+    # The GIF: up to the cut, then the final caption over the held frame.
+    cut = next((i for i, c in enumerate(caps) if c[2].startswith(GIF_CUT)), len(caps))
+    cut_t = caps[cut][0] if cut < len(caps) else end
+    short = [(a, min(b, cut_t), t) for a, b, t in caps[:cut]]
+    if cut < len(caps):
+        short.append((cut_t, cut_t + HOLD_END + 1, caps[-1][2]))
 
+    with tempfile.TemporaryDirectory() as tmp:
+        full = os.path.join(tmp, "full.mp4")
+        build(video, vw, crop_h, caps, start, end, tmp, full)
         mp4 = os.path.join(out_dir, "lumenply-demo.mp4")
-        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", master, "-vf", "scale=1440:-2:flags=lanczos",
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", full, "-vf", "scale=1440:-2:flags=lanczos",
                         "-c:v", "libx264", "-crf", "24", "-preset", "slow", "-pix_fmt", "yuv420p",
                         "-movflags", "+faststart", mp4], check=True)
+
+        brief = os.path.join(tmp, "brief.mp4")
+        build(video, vw, crop_h, short, start, cut_t, tmp, brief)
         gif = os.path.join(out_dir, "lumenply-demo.gif")
         scale = f"fps={GIF_FPS},scale={GIF_WIDTH}:-1:flags=lanczos"
-        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", master, "-filter_complex",
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", brief, "-filter_complex",
                         f"[0:v]{scale},split[a][b];[a]palettegen=max_colors=256:stats_mode=diff[p];"
                         f"[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle", gif], check=True)
+
         poster = os.path.join(out_dir, "lumenply-demo-poster.png")
-        last_t = caps[-1][0] - start + 0.3
-        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-ss", f"{last_t:.2f}", "-i", master,
-                        "-frames:v", "1", "-vf", "scale=1440:-2:flags=lanczos", poster], check=True)
+        at = next((c[0] for c in caps if c[2].startswith(POSTER_AT)), end) - 0.1
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-ss", f"{at:.2f}", "-i", video, "-frames:v", "1",
+                        "-vf", f"crop={vw}:{crop_h}:0:0,scale=1440:-2:flags=lanczos", poster], check=True)
     for f in (gif, mp4, poster):
         print(f"{f}: {os.path.getsize(f) / 1e6:.1f} MB")
 

@@ -16,11 +16,11 @@
 </p>
 
 <p align="center">
-  <img src="docs/media/lumenply-demo.gif" width="960"
-       alt="Lumenply photo editor demo: AI Select Subject on a portrait, a Black and White adjustment layer masked to the background for a colour pop, a Curves adjustment dragged on the line, a live text layer, toggling the adjustment off and on, and the Cmd+K command palette">
+  <img src="docs/media/lumenply-demo.gif" width="800"
+       alt="Lumenply photo editor demo: AI Select Subject on a portrait, a Black and White adjustment layer masked to the background for a colour pop, a Curves adjustment dragged on the line, a live text layer, and toggling the adjustment off and on">
   <br>
   <sub>A real, unedited session: one click selects the subject with on-device AI, then a masked
-  Black &amp; White layer, Curves, live type and the command palette.
+  Black &amp; White layer, Curves and live type.
   <a href="docs/media/lumenply-demo.mp4">Watch it in full quality (MP4)</a>.</sub>
 </p>
 
